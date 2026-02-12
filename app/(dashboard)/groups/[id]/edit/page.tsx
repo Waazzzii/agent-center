@@ -17,15 +17,8 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { ArrowLeft, Trash2, UserPlus, Cable } from 'lucide-react';
+import { RelationshipManager, type RelationshipItem } from '@/components/ui/relationship-manager';
+import { ArrowLeft, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function EditGroupPage({ params }: { params: Promise<{ id: string }> }) {
@@ -186,6 +179,19 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
     }
   };
 
+  const handleAddUsers = async (userIds: string[]) => {
+    if (!selectedOrgId) return;
+    try {
+      await Promise.all(userIds.map(userId => addUserToGroup(selectedOrgId, userId, groupId)));
+      toast.success(`${userIds.length} user${userIds.length !== 1 ? 's' : ''} added to group`);
+      await loadGroup();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to add users';
+      toast.error(errorMessage);
+      throw error;
+    }
+  };
+
   const handleRemoveMember = async (userId: string) => {
     if (!selectedOrgId) return;
     if (!confirm('Are you sure you want to remove this user from the group?')) return;
@@ -197,6 +203,27 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to remove user';
       toast.error(errorMessage);
+    }
+  };
+
+  const handleAddConnectors = async (connectorIds: string[]) => {
+    if (!selectedOrgId) return;
+    try {
+      await Promise.all(
+        connectorIds.map(connectorId =>
+          addConnectorToGroup(selectedOrgId, groupId, {
+            connector_id: connectorId,
+            authorized_endpoints: [],
+            is_enabled: true,
+          })
+        )
+      );
+      toast.success(`${connectorIds.length} connector${connectorIds.length !== 1 ? 's' : ''} added to group`);
+      await loadGroup();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to add connectors';
+      toast.error(errorMessage);
+      throw error;
     }
   };
 
@@ -343,65 +370,30 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
 
         {/* Members Tab */}
         <TabsContent value="members" className="mt-6">
-          <Card>
-            <CardHeader>
-              <CardTitle>Group Members</CardTitle>
-              <CardDescription>
-                {members.length} member{members.length !== 1 ? 's' : ''} in this group
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              {members.length === 0 ? (
-                <div className="py-12 text-center text-muted-foreground">
-                  No members in this group yet. Add members from the Details tab.
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>User</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {members.map((member) => (
-                      <TableRow key={member.id}>
-                        <TableCell>
-                          <div>
-                            <div className="font-medium">
-                              {member.display_name || `${member.first_name || ''} ${member.last_name || ''}`.trim() || member.email}
-                            </div>
-                            <div className="text-sm text-muted-foreground">{member.email}</div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {member.is_active ? (
-                            <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                              Active
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                              Inactive
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveMember(member.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
+          <RelationshipManager
+            title="Group Members"
+            description={`${members.length} member${members.length !== 1 ? 's' : ''} in this group`}
+            currentItems={members.map((member) => ({
+              id: member.id,
+              primaryLabel: member.display_name || `${member.first_name || ''} ${member.last_name || ''}`.trim() || member.email,
+              secondaryLabel: member.email,
+              status: {
+                label: member.is_active ? 'Active' : 'Inactive',
+                variant: member.is_active ? 'active' : 'inactive',
+              },
+            }))}
+            availableItems={allUsers.map((user) => ({
+              id: user.id,
+              primaryLabel: user.display_name || `${user.first_name || ''} ${user.last_name || ''}`.trim() || user.email,
+              secondaryLabel: user.email,
+            }))}
+            onAdd={handleAddUsers}
+            onRemove={handleRemoveMember}
+            searchPlaceholder="Search users by name or email..."
+            emptyCurrentMessage="No members in this group yet"
+            emptyAvailableMessage="No users available to add"
+            addButtonLabel="Add Users"
+          />
         </TabsContent>
 
         {/* Connectors Tab */}
