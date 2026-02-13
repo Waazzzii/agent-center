@@ -6,7 +6,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getConnector, deleteConnector } from '@/lib/api/connectors';
 import { getGroups } from '@/lib/api/groups';
 import { getGroupConnectors, removeConnectorFromGroup } from '@/lib/api/group-connectors';
-import type { Group } from '@/types/api.types';
+import type { Group, OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import {
@@ -19,23 +19,6 @@ import {
 } from '@/components/ui/table';
 import { ArrowLeft, Pencil, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
-
-interface OrganizationConnector {
-  id: string;
-  organization_id: string;
-  connector_id: string;
-  connector_key: string;
-  connector_name: string;
-  configuration: Record<string, any>;
-  secret_info: {
-    secret_id: string;
-    has_secrets: boolean;
-    last_updated?: string;
-  } | null;
-  is_enabled: boolean;
-  created_at: string;
-  updated_at: string;
-}
 
 interface GroupWithConnectorAccess extends Group {
   hasAccess: boolean;
@@ -185,7 +168,7 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
               </div>
               <div>
                 <div className="text-sm font-medium text-muted-foreground">Has Secrets</div>
-                <div className="mt-1">{connector.secret_info?.has_secrets ? 'Yes' : 'No'}</div>
+                <div className="mt-1">{connector.secret_info?.secret_fields && connector.secret_info.secret_fields.length > 0 ? 'Yes' : 'No'}</div>
               </div>
               <div>
                 <div className="text-sm font-medium text-muted-foreground">Created</div>
