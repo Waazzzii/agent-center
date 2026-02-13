@@ -153,7 +153,11 @@ export default function OAuthClientsPage() {
               </TableHeader>
               <TableBody>
                 {clients.map((client) => (
-                  <TableRow key={client.client_id}>
+                  <TableRow
+                    key={client.client_id}
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => router.push(`/oauth-clients/${client.client_id}/edit`)}
+                  >
                     <TableCell className="font-medium">{client.client_name}</TableCell>
                     <TableCell className="font-mono text-xs">{client.client_id}</TableCell>
                     <TableCell>
@@ -176,14 +180,20 @@ export default function OAuthClientsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => router.push(`/oauth-clients/${client.client_id}/edit`)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/oauth-clients/${client.client_id}/edit`);
+                          }}
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDelete(client.client_id, client.client_name)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(client.client_id, client.client_name);
+                          }}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>

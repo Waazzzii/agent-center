@@ -125,7 +125,6 @@ export default function ConnectorsPage() {
                     <TableRow>
                       <TableHead>Connector ID</TableHead>
                       <TableHead>Status</TableHead>
-                      <TableHead>Has Secrets</TableHead>
                       <TableHead>Created</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -145,13 +144,6 @@ export default function ConnectorsPage() {
                             <Badge variant="default">Enabled</Badge>
                           ) : (
                             <Badge variant="secondary">Disabled</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>
-                          {connector.secret_info?.has_secrets ? (
-                            <Badge variant="outline">Yes</Badge>
-                          ) : (
-                            <Badge variant="outline">No</Badge>
                           )}
                         </TableCell>
                         <TableCell>{new Date(connector.created_at).toLocaleDateString()}</TableCell>

@@ -6,8 +6,9 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getGroup, updateGroup, deleteGroup } from '@/lib/api/groups';
 import { getUsers } from '@/lib/api/users';
 import { getConnectors } from '@/lib/api/connectors';
+import { getConnector as getBaseConnector } from '@/lib/api/connectors-base';
 import { getGroupUsers, addUserToGroup, removeUserFromGroup } from '@/lib/api/user-groups';
-import { getGroupConnectors, addConnectorToGroup, removeConnectorFromGroup } from '@/lib/api/group-connectors';
+import { getGroupConnectors, addConnectorToGroup, removeConnectorFromGroup, updateGroupConnector } from '@/lib/api/group-connectors';
 import type { UpdateGroupDto, User, OrganizationConnector, Group } from '@/types/api.types';
 import type { UserMembership } from '@/lib/api/user-groups';
 import { Button } from '@/components/ui/button';
@@ -31,8 +32,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ArrowLeft, Trash2, Search, Plus, CheckSquare, Square } from 'lucide-react';
+import { ArrowLeft, Trash2, Search, Plus, CheckSquare, Square, Settings } from 'lucide-react';
 import { toast } from 'sonner';
+import { EndpointSelectionModal } from '@/components/endpoint-selection-modal';
 
 export default function EditGroupPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: groupId } = use(params);
@@ -65,6 +67,17 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
   const [addConnectorsDropdownOpen, setAddConnectorsDropdownOpen] = useState(false);
   const [connectorSearch, setConnectorSearch] = useState('');
   const [connectorMemberSearch, setConnectorMemberSearch] = useState('');
+
+  // Endpoint management state
+  const [connectorEndpoints, setConnectorEndpoints] = useState<Record<string, string[]>>({});
+  const [endpointModalOpen, setEndpointModalOpen] = useState(false);
+  const [currentConnectorForEndpoints, setCurrentConnectorForEndpoints] = useState<{
+    id: string;
+    name: string;
+    availableEndpoints: string[];
+  } | null>(null);
+  const [isAddingConnectors, setIsAddingConnectors] = useState(false);
+  const [pendingConnectorIds, setPendingConnectorIds] = useState<string[]>([]);
 
   const [activeTab, setActiveTab] = useState('details');
 
@@ -102,6 +115,13 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
       setAllConnectors(allConnectorsData.connectors);
       setMembers(groupUsersData.users);
       setConnectors(groupConnectorsData.connectors);
+
+      // Store authorized endpoints for each connector
+      const endpointsMap: Record<string, string[]> = {};
+      groupConnectorsData.connectors.forEach((connector: any) => {
+        endpointsMap[connector.connector_id] = connector.authorized_endpoints || [];
+      });
+      setConnectorEndpoints(endpointsMap);
     } catch (error: any) {
       toast.error(error.message || 'Failed to load group');
       router.push('/groups');
@@ -195,14 +215,14 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
     }
   };
 
-  const handleAddConnectors = async (connectorIds: string[]) => {
+  const handleAddConnectors = async (connectorIds: string[], authorizedEndpoints: string[]) => {
     if (!selectedOrgId) return;
     try {
       await Promise.all(
         connectorIds.map(connectorId =>
           addConnectorToGroup(selectedOrgId, groupId, {
             connector_id: connectorId,
-            authorized_endpoints: [],
+            authorized_endpoints: authorizedEndpoints,
             is_enabled: true,
           })
         )
@@ -376,13 +396,78 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
 
   const handleAddSelectedConnectors = async () => {
     if (selectedConnectorIds.length === 0) return;
+
     try {
-      await handleAddConnectors(selectedConnectorIds);
-      setSelectedConnectorIds([]);
-      setConnectorSearch('');
+      // Get the first connector's details for endpoint selection
+      const firstConnectorId = selectedConnectorIds[0];
+      const firstConnector = allConnectors.find(c => c.id === firstConnectorId);
+
+      if (!firstConnector) {
+        toast.error('Connector not found');
+        return;
+      }
+
+      // Fetch base connector details to get available endpoints
+      const baseConnector = await getBaseConnector(firstConnector.connector_id);
+
+      // Show endpoint modal
+      setIsAddingConnectors(true);
+      setPendingConnectorIds(selectedConnectorIds);
+      setCurrentConnectorForEndpoints({
+        id: firstConnector.id,
+        name: firstConnector.connector_name,
+        availableEndpoints: baseConnector.available_endpoints || [],
+      });
+      setEndpointModalOpen(true);
       setAddConnectorsDropdownOpen(false);
-    } catch {
-      // Error already handled by handleAddConnectors
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to load connector details');
+    }
+  };
+
+  const handleEndpointsConfirmed = async (authorizedEndpoints: string[]) => {
+    if (isAddingConnectors) {
+      // Adding new connectors
+      try {
+        await handleAddConnectors(pendingConnectorIds, authorizedEndpoints);
+        setSelectedConnectorIds([]);
+        setConnectorSearch('');
+        setPendingConnectorIds([]);
+        setIsAddingConnectors(false);
+      } catch {
+        // Error already handled by handleAddConnectors
+      }
+    } else if (currentConnectorForEndpoints) {
+      // Editing existing connector
+      await handleUpdateConnectorEndpoints(currentConnectorForEndpoints.id, authorizedEndpoints);
+    }
+  };
+
+  const handleEditConnectorEndpoints = (connectorId: string) => {
+    const connector = connectors.find(c => c.connector_id === connectorId);
+    if (!connector) return;
+
+    setIsAddingConnectors(false);
+    setCurrentConnectorForEndpoints({
+      id: connector.connector_id,
+      name: connector.connector_name || 'Unknown Connector',
+      availableEndpoints: connector.connector_available_endpoints || [],
+    });
+    setEndpointModalOpen(true);
+  };
+
+  const handleUpdateConnectorEndpoints = async (connectorId: string, authorizedEndpoints: string[]) => {
+    if (!selectedOrgId) return;
+
+    try {
+      await updateGroupConnector(selectedOrgId, groupId, connectorId, {
+        authorized_endpoints: authorizedEndpoints,
+      });
+      toast.success('Endpoints updated successfully');
+      await loadGroup();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to update endpoints';
+      toast.error(errorMessage);
     }
   };
 
@@ -896,47 +981,91 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
                     <TableRow>
                       <TableHead className="w-12"></TableHead>
                       <TableHead>Connector</TableHead>
+                      <TableHead>Authorized Endpoints</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredConnectors.map((connector) => (
-                      <TableRow key={connector.id}>
-                        <TableCell>
-                          <Checkbox
-                            checked={selectedConnectorMemberIds.includes(connector.connector_id)}
-                            onCheckedChange={() => handleToggleConnectorMember(connector.connector_id)}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <div>
-                            <div className="font-medium">{connector.connector_name}</div>
-                            <div className="text-sm text-muted-foreground">{connector.connector_key}</div>
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {connector.is_enabled ? (
-                            <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                              Enabled
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                              Disabled
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveConnector(connector.connector_id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {filteredConnectors.map((connector) => {
+                      const endpoints = connectorEndpoints[connector.connector_id] || [];
+                      const displayEndpoints = endpoints.slice(0, 2);
+                      const remainingCount = Math.max(0, endpoints.length - 2);
+
+                      return (
+                        <TableRow
+                          key={connector.id}
+                          className="cursor-pointer hover:bg-muted/50"
+                          onClick={() => handleEditConnectorEndpoints(connector.connector_id)}
+                        >
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={selectedConnectorMemberIds.includes(connector.connector_id)}
+                              onCheckedChange={() => handleToggleConnectorMember(connector.connector_id)}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <div>
+                              <div className="font-medium">{connector.connector_name}</div>
+                              <div className="text-sm text-muted-foreground">{connector.connector_key}</div>
+                            </div>
+                          </TableCell>
+                          <TableCell>
+                            {endpoints.length === 0 ? (
+                              <span className="text-xs text-muted-foreground italic">No endpoints</span>
+                            ) : (
+                              <div className="flex flex-wrap gap-1">
+                                {displayEndpoints.map((endpoint, idx) => (
+                                  <code key={idx} className="inline-block rounded bg-muted px-1.5 py-0.5 text-xs">
+                                    {endpoint}
+                                  </code>
+                                ))}
+                                {remainingCount > 0 && (
+                                  <span className="text-xs text-muted-foreground">
+                                    +{remainingCount} more
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {connector.is_enabled ? (
+                              <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
+                                Enabled
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
+                                Disabled
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right" onClick={(e) => e.stopPropagation()}>
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditConnectorEndpoints(connector.connector_id);
+                                }}
+                              >
+                                <Settings className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveConnector(connector.connector_id);
+                                }}
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}
@@ -944,6 +1073,31 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Endpoint Selection Modal */}
+      {currentConnectorForEndpoints && (
+        <EndpointSelectionModal
+          open={endpointModalOpen}
+          onOpenChange={setEndpointModalOpen}
+          availableEndpoints={currentConnectorForEndpoints.availableEndpoints}
+          initialSelected={
+            isAddingConnectors
+              ? currentConnectorForEndpoints.availableEndpoints
+              : connectorEndpoints[currentConnectorForEndpoints.id] || []
+          }
+          onConfirm={handleEndpointsConfirmed}
+          title={
+            isAddingConnectors
+              ? `Select Endpoints for ${currentConnectorForEndpoints.name}`
+              : `Edit Endpoints for ${currentConnectorForEndpoints.name}`
+          }
+          description={
+            isAddingConnectors
+              ? 'Select which endpoints this connector can access in this group. At least one endpoint must be selected.'
+              : 'Update which endpoints this connector can access in this group.'
+          }
+        />
+      )}
     </div>
   );
 }

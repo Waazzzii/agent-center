@@ -4,9 +4,12 @@ import { use, useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getConnector, updateConnector, deleteConnector } from '@/lib/api/connectors';
+import { getConnector as getBaseConnector } from '@/lib/api/connectors-base';
 import { getGroups } from '@/lib/api/groups';
-import { getGroupConnectors, addConnectorToGroup, removeConnectorFromGroup } from '@/lib/api/group-connectors';
-import type { UpdateConnectorConfigDto, Group } from '@/types/api.types';
+import { getGroupConnectors, addConnectorToGroup, updateGroupConnector, removeConnectorFromGroup } from '@/lib/api/group-connectors';
+import type { UpdateConnectorConfigDto, Group, Connector, OrganizationConnector } from '@/types/api.types';
+import { DynamicConnectorForm } from '@/components/dynamic-connector-form';
+import { EndpointSelectionModal } from '@/components/endpoint-selection-modal';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -28,7 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ArrowLeft, Trash2, Users, Search, Plus, CheckSquare, Square } from 'lucide-react';
+import { ArrowLeft, Trash2, Users, Search, Plus, CheckSquare, Square, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function EditConnectorPage({ params }: { params: Promise<{ id: string }> }) {
@@ -37,6 +40,8 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
+  const [connector, setConnector] = useState<OrganizationConnector | null>(null);
+  const [baseConnector, setBaseConnector] = useState<Connector | null>(null);
   const [connectorInfo, setConnectorInfo] = useState<{
     connector_name: string;
     connector_key: string;
@@ -49,6 +54,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   });
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [groupsWithAccess, setGroupsWithAccess] = useState<Group[]>([]);
+  const [groupEndpoints, setGroupEndpoints] = useState<Record<string, string[]>>({});
 
   // Groups tab state
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]); // For add dropdown
@@ -58,6 +64,12 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   const [memberSearch, setMemberSearch] = useState('');
 
   const [activeTab, setActiveTab] = useState('configuration');
+
+  // Endpoint selection modal state
+  const [showEndpointModal, setShowEndpointModal] = useState(false);
+  const [pendingGroupIds, setPendingGroupIds] = useState<string[]>([]);
+  const [editingGroupId, setEditingGroupId] = useState<string | null>(null);
+  const [editingGroupEndpoints, setEditingGroupEndpoints] = useState<string[]>([]);
 
   useEffect(() => {
     if (!isOrgAdminView() || !selectedOrgId) {
@@ -78,6 +90,18 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         getGroups(selectedOrgId),
       ]);
 
+      setConnector(connectorData);
+
+      // Fetch base connector to check for schema
+      let baseConnectorData: Connector | null = null;
+      try {
+        baseConnectorData = await getBaseConnector(connectorData.connector_id);
+        setBaseConnector(baseConnectorData);
+      } catch (error) {
+        console.error('Failed to load base connector:', error);
+        // Continue without schema if base connector fetch fails
+      }
+
       setConnectorInfo({
         connector_name: connectorData.connector_name,
         connector_key: connectorData.connector_key,
@@ -91,17 +115,21 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
 
       setAllGroups(allGroupsData.groups);
 
-      // Check which groups have access to this connector
+      // Check which groups have access to this connector and fetch their endpoints
       const groupAccessChecks = await Promise.all(
         allGroupsData.groups.map(async (group) => {
           try {
             const groupConnectorsData = await getGroupConnectors(selectedOrgId, group.id);
-            const hasAccess = groupConnectorsData.connectors.some(
+            const groupConnector = groupConnectorsData.connectors.find(
               (gc) => gc.connector_id === connectorId
             );
-            return { group, hasAccess };
+            return {
+              group,
+              hasAccess: !!groupConnector,
+              endpoints: groupConnector?.authorized_endpoints || [],
+            };
           } catch {
-            return { group, hasAccess: false };
+            return { group, hasAccess: false, endpoints: [] };
           }
         })
       );
@@ -110,6 +138,15 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         .filter((item) => item.hasAccess)
         .map((item) => item.group);
       setGroupsWithAccess(groupsWithAccessList);
+
+      // Store endpoints for each group
+      const endpointsMap: Record<string, string[]> = {};
+      groupAccessChecks.forEach((item) => {
+        if (item.hasAccess) {
+          endpointsMap[item.group.id] = item.endpoints;
+        }
+      });
+      setGroupEndpoints(endpointsMap);
     } catch (error: any) {
       toast.error(error.message || 'Failed to load connector');
       router.push('/connectors');
@@ -182,14 +219,14 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     }
   };
 
-  const handleAddGroups = async (groupIds: string[]) => {
+  const handleAddGroups = async (groupIds: string[], authorizedEndpoints: string[]) => {
     if (!selectedOrgId) return;
     try {
       await Promise.all(
         groupIds.map(groupId =>
           addConnectorToGroup(selectedOrgId, groupId, {
             connector_id: connectorId,
-            authorized_endpoints: [],
+            authorized_endpoints: authorizedEndpoints,
             is_enabled: true,
           })
         )
@@ -271,15 +308,64 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     setSelectedMemberIds([]);
   };
 
-  const handleAddSelectedGroups = async () => {
+  const handleAddSelectedGroups = () => {
     if (selectedGroupIds.length === 0) return;
+    // Show endpoint selection modal instead of immediately adding
+    setPendingGroupIds(selectedGroupIds);
+    setShowEndpointModal(true);
+  };
+
+  const handleEndpointsConfirmed = async (selectedEndpoints: string[]) => {
+    if (editingGroupId) {
+      // Editing existing group's endpoints
+      await handleUpdateGroupEndpoints(editingGroupId, selectedEndpoints);
+    } else {
+      // Adding new groups with endpoints
+      try {
+        await handleAddGroups(pendingGroupIds, selectedEndpoints);
+        setSelectedGroupIds([]);
+        setGroupSearch('');
+        setAddGroupsDropdownOpen(false);
+        setPendingGroupIds([]);
+      } catch {
+        // Error already handled by handleAddGroups
+      }
+    }
+    setEditingGroupId(null);
+    setEditingGroupEndpoints([]);
+  };
+
+  const handleEditGroupEndpoints = async (groupId: string) => {
+    if (!selectedOrgId) return;
+
+    // Fetch current endpoints for this group
     try {
-      await handleAddGroups(selectedGroupIds);
-      setSelectedGroupIds([]);
-      setGroupSearch('');
-      setAddGroupsDropdownOpen(false);
-    } catch {
-      // Error already handled by handleAddGroups
+      const groupConnectorsData = await getGroupConnectors(selectedOrgId, groupId);
+      const groupConnector = groupConnectorsData.connectors.find(
+        (gc) => gc.connector_id === connectorId
+      );
+
+      if (groupConnector) {
+        setEditingGroupId(groupId);
+        setEditingGroupEndpoints(groupConnector.authorized_endpoints || []);
+        setShowEndpointModal(true);
+      }
+    } catch (error: any) {
+      toast.error('Failed to load group endpoints');
+    }
+  };
+
+  const handleUpdateGroupEndpoints = async (groupId: string, authorizedEndpoints: string[]) => {
+    if (!selectedOrgId) return;
+    try {
+      await updateGroupConnector(selectedOrgId, groupId, connectorId, {
+        authorized_endpoints: authorizedEndpoints,
+      });
+      toast.success('Endpoints updated successfully');
+      await loadConnector();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to update endpoints';
+      toast.error(errorMessage);
     }
   };
 
@@ -347,59 +433,34 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
               </CardDescription>
             </CardHeader>
             <CardContent>
-              <form onSubmit={handleSubmit} className="space-y-6">
-                <div className="space-y-4">
-                  <div className="space-y-2">
-                    <Label htmlFor="configuration">Configuration (JSON)</Label>
-                    <Textarea
-                      id="configuration"
-                      value={formData.configuration}
-                      onChange={(e) => setFormData({ ...formData, configuration: e.target.value })}
-                      placeholder='{"api_url": "https://api.example.com", "timeout": 30}'
-                      rows={10}
-                      className="font-mono text-sm"
-                    />
-                    <p className="text-sm text-muted-foreground">
-                      Custom configuration as JSON object
-                    </p>
-                  </div>
-
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between mb-2">
-                      <Label htmlFor="secrets">Secrets (JSON)</Label>
-                      <div className="flex items-center gap-2">
-                        <Label htmlFor="updateSecrets" className="text-sm font-normal cursor-pointer">
-                          Update secrets
-                        </Label>
-                        <Switch
-                          id="updateSecrets"
-                          checked={formData.updateSecrets}
-                          onCheckedChange={(checked) => setFormData({ ...formData, updateSecrets: checked })}
-                        />
-                      </div>
-                    </div>
-                    {formData.updateSecrets ? (
-                      <>
-                        <Textarea
-                          id="secrets"
-                          value={formData.secrets}
-                          onChange={(e) => setFormData({ ...formData, secrets: e.target.value })}
-                          placeholder='{"api_key": "your-key", "api_secret": "your-secret"}'
-                          rows={8}
-                          className="font-mono text-sm"
-                        />
-                        <p className="text-sm text-muted-foreground">
-                          Enter new secrets as JSON object (will be encrypted)
-                        </p>
-                      </>
-                    ) : (
-                      <div className="rounded-lg border p-4 bg-muted/50">
-                        <p className="text-sm text-muted-foreground">
-                          Secrets are hidden for security. Toggle "Update secrets" to change them.
-                        </p>
-                      </div>
-                    )}
-                  </div>
+              {baseConnector?.configuration_schema && connector ? (
+                // Dynamic form based on schema
+                <div className="space-y-6">
+                  <DynamicConnectorForm
+                    key={`${connectorId}-${connector.updated_at}`}
+                    schema={baseConnector.configuration_schema}
+                    initialValues={connector.configuration}
+                    existingSecrets={connector.secret_info?.secret_fields || []}
+                    maskedSecrets={connector.secret_info?.masked_values || {}}
+                    onSubmit={async (config, secrets) => {
+                      if (!selectedOrgId) return;
+                      setLoading(true);
+                      try {
+                        await updateConnector(selectedOrgId, connectorId, {
+                          config,
+                          secrets: Object.keys(secrets).length > 0 ? secrets : undefined,
+                          is_enabled: connector.is_enabled,
+                        });
+                        toast.success('Connector updated successfully');
+                        await loadConnector();
+                      } catch (error: any) {
+                        toast.error(error.message || 'Failed to update connector');
+                      } finally {
+                        setLoading(false);
+                      }
+                    }}
+                    loading={loading}
+                  />
 
                   <div className="flex items-center justify-between rounded-lg border p-4">
                     <div className="space-y-0.5">
@@ -410,21 +471,103 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                     </div>
                     <Switch
                       id="is_enabled"
-                      checked={formData.is_enabled}
-                      onCheckedChange={(checked) => setFormData({ ...formData, is_enabled: checked })}
+                      checked={connector.is_enabled}
+                      onCheckedChange={async (checked) => {
+                        if (!selectedOrgId) return;
+                        try {
+                          await updateConnector(selectedOrgId, connectorId, {
+                            is_enabled: checked,
+                          });
+                          toast.success('Connector status updated');
+                          await loadConnector();
+                        } catch (error: any) {
+                          toast.error(error.message || 'Failed to update connector');
+                        }
+                      }}
                     />
                   </div>
                 </div>
+              ) : (
+                // Fallback to JSON textarea if no schema exists
+                <form onSubmit={handleSubmit} className="space-y-6">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="configuration">Configuration (JSON)</Label>
+                      <Textarea
+                        id="configuration"
+                        value={formData.configuration}
+                        onChange={(e) => setFormData({ ...formData, configuration: e.target.value })}
+                        placeholder='{"api_url": "https://api.example.com", "timeout": 30}'
+                        rows={10}
+                        className="font-mono text-sm"
+                      />
+                      <p className="text-sm text-muted-foreground">
+                        Custom configuration as JSON object
+                      </p>
+                    </div>
 
-                <div className="flex gap-4">
-                  <Button type="submit" disabled={loading}>
-                    {loading ? 'Saving...' : 'Save Changes'}
-                  </Button>
-                  <Button type="button" variant="outline" onClick={() => router.push('/connectors')}>
-                    Cancel
-                  </Button>
-                </div>
-              </form>
+                    <div className="space-y-2">
+                      <div className="flex items-center justify-between mb-2">
+                        <Label htmlFor="secrets">Secrets (JSON)</Label>
+                        <div className="flex items-center gap-2">
+                          <Label htmlFor="updateSecrets" className="text-sm font-normal cursor-pointer">
+                            Update secrets
+                          </Label>
+                          <Switch
+                            id="updateSecrets"
+                            checked={formData.updateSecrets}
+                            onCheckedChange={(checked) => setFormData({ ...formData, updateSecrets: checked })}
+                          />
+                        </div>
+                      </div>
+                      {formData.updateSecrets ? (
+                        <>
+                          <Textarea
+                            id="secrets"
+                            value={formData.secrets}
+                            onChange={(e) => setFormData({ ...formData, secrets: e.target.value })}
+                            placeholder='{"api_key": "your-key", "api_secret": "your-secret"}'
+                            rows={8}
+                            className="font-mono text-sm"
+                          />
+                          <p className="text-sm text-muted-foreground">
+                            Enter new secrets as JSON object (will be encrypted)
+                          </p>
+                        </>
+                      ) : (
+                        <div className="rounded-lg border p-4 bg-muted/50">
+                          <p className="text-sm text-muted-foreground">
+                            Secrets are hidden for security. Toggle "Update secrets" to change them.
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-lg border p-4">
+                      <div className="space-y-0.5">
+                        <Label htmlFor="is_enabled" className="text-base">Enable Connector</Label>
+                        <p className="text-sm text-muted-foreground">
+                          Connector will be active and ready to use
+                        </p>
+                      </div>
+                      <Switch
+                        id="is_enabled"
+                        checked={formData.is_enabled}
+                        onCheckedChange={(checked) => setFormData({ ...formData, is_enabled: checked })}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4">
+                    <Button type="submit" disabled={loading}>
+                      {loading ? 'Saving...' : 'Save Changes'}
+                    </Button>
+                    <Button type="button" variant="outline" onClick={() => router.push('/connectors')}>
+                      Cancel
+                    </Button>
+                  </div>
+                </form>
+              )}
             </CardContent>
           </Card>
         </TabsContent>
@@ -586,45 +729,94 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                       <TableHead className="w-12"></TableHead>
                       <TableHead>Group</TableHead>
                       <TableHead>Description</TableHead>
+                      <TableHead>Authorized Endpoints</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {filteredMembers.map((group) => (
-                      <TableRow key={group.id}>
-                        <TableCell>
-                          <Checkbox
-                            checked={selectedMemberIds.includes(group.id)}
-                            onCheckedChange={() => handleToggleMember(group.id)}
-                          />
-                        </TableCell>
-                        <TableCell className="font-medium">{group.name}</TableCell>
-                        <TableCell className="text-muted-foreground">
-                          {group.description || '—'}
-                        </TableCell>
-                        <TableCell>
-                          {group.is_active ? (
-                            <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                              Active
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                              Inactive
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveGroup(group.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {filteredMembers.map((group) => {
+                      const endpoints = groupEndpoints[group.id] || [];
+                      const displayEndpoints = endpoints.slice(0, 2);
+                      const remainingCount = endpoints.length - displayEndpoints.length;
+
+                      return (
+                        <TableRow
+                          key={group.id}
+                          className="cursor-pointer hover:bg-muted/50"
+                          onClick={() => handleEditGroupEndpoints(group.id)}
+                        >
+                          <TableCell onClick={(e) => e.stopPropagation()}>
+                            <Checkbox
+                              checked={selectedMemberIds.includes(group.id)}
+                              onCheckedChange={() => handleToggleMember(group.id)}
+                            />
+                          </TableCell>
+                          <TableCell className="font-medium">{group.name}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {group.description || '—'}
+                          </TableCell>
+                          <TableCell>
+                            {endpoints.length === 0 ? (
+                              <span className="text-xs text-muted-foreground italic">No endpoints</span>
+                            ) : (
+                              <div className="flex flex-wrap gap-1">
+                                {displayEndpoints.map((endpoint, idx) => (
+                                  <code
+                                    key={idx}
+                                    className="inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
+                                  >
+                                    {endpoint}
+                                  </code>
+                                ))}
+                                {remainingCount > 0 && (
+                                  <span className="text-xs text-muted-foreground self-center">
+                                    +{remainingCount} more
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            {group.is_active ? (
+                              <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
+                                Active
+                              </span>
+                            ) : (
+                              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
+                                Inactive
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right">
+                            <div className="flex items-center justify-end gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleEditGroupEndpoints(group.id);
+                                }}
+                                title="Edit Endpoints"
+                              >
+                                <Settings className="h-4 w-4" />
+                              </Button>
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleRemoveGroup(group.id);
+                                }}
+                                title="Remove Group"
+                              >
+                                <Trash2 className="h-4 w-4 text-destructive" />
+                              </Button>
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               )}
@@ -632,6 +824,21 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
           </Card>
         </TabsContent>
       </Tabs>
+
+      {/* Endpoint Selection Modal */}
+      <EndpointSelectionModal
+        open={showEndpointModal}
+        onOpenChange={setShowEndpointModal}
+        availableEndpoints={baseConnector?.available_endpoints || []}
+        initialSelected={editingGroupId ? editingGroupEndpoints : []}
+        onConfirm={handleEndpointsConfirmed}
+        title={editingGroupId ? 'Edit Endpoint Access' : 'Configure Endpoint Access'}
+        description={
+          editingGroupId
+            ? 'Select which endpoints this group can access. At least one endpoint must be selected.'
+            : `Select which endpoints the selected ${pendingGroupIds.length} group${pendingGroupIds.length !== 1 ? 's' : ''} can access. At least one endpoint must be selected.`
+        }
+      />
     </div>
   );
 }

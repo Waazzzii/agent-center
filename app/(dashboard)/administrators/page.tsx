@@ -121,7 +121,11 @@ export default function AdministratorsPage() {
               </TableHeader>
               <TableBody>
                 {administrators.map((adm) => (
-                  <TableRow key={adm.id}>
+                  <TableRow
+                    key={adm.id}
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => router.push(`/administrators/${adm.id}/edit`)}
+                  >
                     <TableCell className="font-medium">{adm.email}</TableCell>
                     <TableCell>
                       <span
@@ -155,14 +159,20 @@ export default function AdministratorsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => router.push(`/administrators/${adm.id}/edit`)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/administrators/${adm.id}/edit`);
+                          }}
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDelete(adm.id, adm.email)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(adm.id, adm.email);
+                          }}
                           disabled={adm.id === admin?.id}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />

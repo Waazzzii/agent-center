@@ -131,7 +131,11 @@ export default function ConnectorsCatalogPage() {
               </TableHeader>
               <TableBody>
                 {connectors.map((connector) => (
-                  <TableRow key={connector.id}>
+                  <TableRow
+                    key={connector.id}
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => router.push(`/connectors-catalog/${connector.id}/edit`)}
+                  >
                     <TableCell className="font-medium">{connector.name}</TableCell>
                     <TableCell>
                       <code className="rounded bg-muted px-2 py-0.5 text-xs">{connector.key}</code>
@@ -167,7 +171,10 @@ export default function ConnectorsCatalogPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            onClick={() => window.open(connector.documentation_url!, '_blank')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              window.open(connector.documentation_url!, '_blank');
+                            }}
                           >
                             <ExternalLink className="h-4 w-4" />
                           </Button>
@@ -175,14 +182,20 @@ export default function ConnectorsCatalogPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => router.push(`/connectors-catalog/${connector.id}/edit`)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/connectors-catalog/${connector.id}/edit`);
+                          }}
                         >
                           <Edit className="h-4 w-4" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleDelete(connector.id, connector.name)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(connector.id, connector.name);
+                          }}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>

@@ -38,6 +38,47 @@ export interface Organization {
   updated_at: string;
 }
 
+// Connector Configuration Schema Types
+export type FieldType =
+  | 'text'
+  | 'textarea'
+  | 'number'
+  | 'boolean'
+  | 'select'
+  | 'url'
+  | 'email'
+  | 'password';
+
+export interface ConnectorSchemaField {
+  key: string;                      // Field identifier (e.g., "api_key")
+  label: string;                    // Display label (e.g., "API Key")
+  type: FieldType;                  // Input type
+  required?: boolean;               // Is field required?
+  secret?: boolean;                 // Should be hidden (for passwords, API keys)
+  default?: string | number | boolean; // Default value
+  placeholder?: string;             // Input placeholder text
+  helpText?: string;                // Description/help text below field
+
+  // For 'select' type
+  options?: Array<{
+    value: string;
+    label: string;
+  }>;
+
+  // Validation rules
+  validation?: {
+    min?: number;                   // Min value (number) or length (text)
+    max?: number;                   // Max value (number) or length (text)
+    pattern?: string;               // Regex pattern for validation
+    customMessage?: string;         // Custom validation error message
+  };
+}
+
+export interface ConnectorConfigSchema {
+  fields: ConnectorSchemaField[];
+  version?: string; // For future schema versioning
+}
+
 // Base connector definition (catalog)
 export interface Connector {
   id: string;
@@ -47,6 +88,7 @@ export interface Connector {
   icon_url?: string;
   documentation_url?: string;
   available_endpoints: string[];
+  configuration_schema?: ConnectorConfigSchema;
   is_active: boolean;
   is_public: boolean;
   created_at: string;
@@ -62,8 +104,8 @@ export interface OrganizationConnector {
   connector_name: string;
   configuration: Record<string, any>;
   secret_info: {
-    secret_id: string;
-    has_secrets: boolean;
+    secret_fields: string[];  // Array of field keys that have secrets (e.g., ["api_key", "api_secret"])
+    masked_values?: Record<string, string>;  // Masked secret values (only present on single GET, not list)
     last_updated: string;
   } | null;
   is_enabled: boolean;
@@ -203,6 +245,7 @@ export interface CreateConnectorDto {
   icon_url?: string;
   documentation_url?: string;
   available_endpoints?: string[];
+  configuration_schema?: ConnectorConfigSchema;
   is_active?: boolean;
   is_public?: boolean;
 }
@@ -214,6 +257,7 @@ export interface UpdateConnectorDto {
   icon_url?: string;
   documentation_url?: string;
   available_endpoints?: string[];
+  configuration_schema?: ConnectorConfigSchema;
   is_active?: boolean;
   is_public?: boolean;
 }

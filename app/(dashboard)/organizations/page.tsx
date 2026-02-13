@@ -137,7 +137,17 @@ export default function OrganizationsPage() {
               </TableHeader>
               <TableBody>
                 {organizations.map((org) => (
-                  <TableRow key={org.id}>
+                  <TableRow
+                    key={org.id}
+                    className="cursor-pointer hover:bg-muted/50"
+                    onClick={() => {
+                      if (isSuperAdmin() && isSuperAdminView()) {
+                        router.push(`/organizations/${org.id}/edit`);
+                      } else {
+                        handleManageOrg(org);
+                      }
+                    }}
+                  >
                     <TableCell className="font-medium">{org.name}</TableCell>
                     <TableCell>
                       <code className="rounded bg-muted px-2 py-0.5 text-xs">{org.slug}</code>
@@ -170,7 +180,10 @@ export default function OrganizationsPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleManageOrg(org)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleManageOrg(org);
+                          }}
                         >
                           <Building2 className="mr-2 h-4 w-4" />
                           Manage
@@ -180,14 +193,20 @@ export default function OrganizationsPage() {
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => router.push(`/organizations/${org.id}/edit`)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                router.push(`/organizations/${org.id}/edit`);
+                              }}
                             >
                               <Edit className="h-4 w-4" />
                             </Button>
                             <Button
                               variant="ghost"
                               size="sm"
-                              onClick={() => handleDelete(org.id, org.name)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleDelete(org.id, org.name);
+                              }}
                             >
                               <Trash2 className="h-4 w-4 text-destructive" />
                             </Button>
