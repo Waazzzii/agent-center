@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getUser, updateUser, deleteUser } from '@/lib/api/users';
@@ -13,9 +13,22 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { RelationshipManager } from '@/components/ui/relationship-manager';
-import { ArrowLeft, Trash2 } from 'lucide-react';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table';
+import { ArrowLeft, Trash2, Search, Plus, CheckSquare, Square } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function EditUserPage({ params }: { params: Promise<{ id: string }> }) {
@@ -27,6 +40,12 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
   const [user, setUser] = useState<User | null>(null);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [userGroups, setUserGroups] = useState<GroupMembership[]>([]);
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]); // For add dropdown
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]); // For bulk remove
+  const [addDropdownOpen, setAddDropdownOpen] = useState(false);
+  const [groupSearch, setGroupSearch] = useState('');
+  const [memberSearch, setMemberSearch] = useState('');
+  const [activeTab, setActiveTab] = useState('details');
   const [formData, setFormData] = useState<UpdateUserDto & { email: string }>({
     email: '',
     first_name: '',
@@ -38,8 +57,6 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
 
   useEffect(() => {
     if (!isOrgAdminView() || !selectedOrgId) {
-      toast.error('Please select an organization first');
-      router.push('/users');
       return;
     }
 
@@ -155,6 +172,87 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
     }
   };
 
+  // Available groups (not currently members) for add dropdown
+  const availableGroups = useMemo(() => {
+    const userGroupIds = new Set(userGroups.map(g => g.id));
+    const query = groupSearch.toLowerCase().trim();
+
+    return allGroups
+      .filter(group => !userGroupIds.has(group.id))
+      .filter(group => {
+        if (!query) return true;
+        return group.name.toLowerCase().includes(query) || group.slug.toLowerCase().includes(query);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allGroups, userGroups, groupSearch]);
+
+  // Current members filtered by search
+  const filteredMembers = useMemo(() => {
+    const query = memberSearch.toLowerCase().trim();
+    return userGroups
+      .filter(group => {
+        if (!query) return true;
+        return group.name.toLowerCase().includes(query) || group.slug.toLowerCase().includes(query);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [userGroups, memberSearch]);
+
+  const handleToggleGroup = (groupId: string) => {
+    setSelectedGroupIds(prev =>
+      prev.includes(groupId) ? prev.filter(id => id !== groupId) : [...prev, groupId]
+    );
+  };
+
+  const handleToggleMember = (groupId: string) => {
+    setSelectedMemberIds(prev =>
+      prev.includes(groupId) ? prev.filter(id => id !== groupId) : [...prev, groupId]
+    );
+  };
+
+  const handleSelectAllAvailable = () => {
+    setSelectedGroupIds(availableGroups.map(g => g.id));
+  };
+
+  const handleDeselectAllAvailable = () => {
+    setSelectedGroupIds([]);
+  };
+
+  const handleSelectAllMembers = () => {
+    setSelectedMemberIds(filteredMembers.map(g => g.id));
+  };
+
+  const handleDeselectAllMembers = () => {
+    setSelectedMemberIds([]);
+  };
+
+  const handleAddSelected = async () => {
+    if (selectedGroupIds.length === 0) return;
+    try {
+      await handleAddGroups(selectedGroupIds);
+      setSelectedGroupIds([]);
+      setGroupSearch('');
+      setAddDropdownOpen(false);
+    } catch {
+      // Error already handled by handleAddGroups
+    }
+  };
+
+  const handleBulkRemove = async () => {
+    if (selectedMemberIds.length === 0) return;
+    if (!confirm(`Are you sure you want to remove this user from ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}?`)) return;
+
+    if (!selectedOrgId) return;
+    try {
+      await Promise.all(selectedMemberIds.map(groupId => removeUserFromGroup(selectedOrgId, userId, groupId)));
+      toast.success(`User removed from ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}`);
+      setSelectedMemberIds([]);
+      await loadData();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to remove from groups';
+      toast.error(errorMessage);
+    }
+  };
+
   if (initialLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -187,7 +285,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
         </Button>
       </div>
 
-      <Tabs defaultValue="details" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full max-w-md grid-cols-2">
           <TabsTrigger value="details">Details</TabsTrigger>
           <TabsTrigger value="groups">Groups ({userGroups.length})</TabsTrigger>
@@ -291,30 +389,199 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
 
         {/* Groups Tab */}
         <TabsContent value="groups" className="mt-6">
-          <RelationshipManager
-            title="Group Memberships"
-            description={`${userGroups.length} group${userGroups.length !== 1 ? 's' : ''} assigned to this user`}
-            currentItems={userGroups.map((group) => ({
-              id: group.id,
-              primaryLabel: group.name,
-              secondaryLabel: group.slug,
-              status: {
-                label: 'Member',
-                variant: 'active',
-              },
-            }))}
-            availableItems={allGroups.map((group) => ({
-              id: group.id,
-              primaryLabel: group.name,
-              secondaryLabel: group.slug,
-            }))}
-            onAdd={handleAddGroups}
-            onRemove={handleRemoveGroup}
-            searchPlaceholder="Search groups by name or slug..."
-            emptyCurrentMessage="User is not a member of any groups yet"
-            emptyAvailableMessage="No groups available to add"
-            addButtonLabel="Add to Groups"
-          />
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Group Memberships</CardTitle>
+                  <CardDescription>
+                    {userGroups.length} group{userGroups.length !== 1 ? 's' : ''} assigned to this user
+                  </CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  {selectedMemberIds.length > 0 && (
+                    <Button
+                      onClick={handleBulkRemove}
+                      variant="destructive"
+                      size="sm"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Remove Selected ({selectedMemberIds.length})
+                    </Button>
+                  )}
+                  <Popover open={addDropdownOpen} onOpenChange={setAddDropdownOpen}>
+                    <PopoverTrigger asChild>
+                      <Button size="sm">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Groups
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-96 p-0" align="end">
+                      <div className="flex flex-col max-h-[500px]">
+                        {/* Search and controls */}
+                        <div className="p-4 border-b space-y-3">
+                          <div className="relative">
+                            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              placeholder="Search groups..."
+                              value={groupSearch}
+                              onChange={(e) => setGroupSearch(e.target.value)}
+                              className="pl-9"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">
+                              {selectedGroupIds.length} selected
+                            </p>
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={handleSelectAllAvailable}
+                                disabled={availableGroups.length === 0}
+                              >
+                                <CheckSquare className="h-4 w-4 mr-1" />
+                                All
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={handleDeselectAllAvailable}
+                                disabled={selectedGroupIds.length === 0}
+                              >
+                                <Square className="h-4 w-4 mr-1" />
+                                None
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Available groups list */}
+                        <div className="flex-1 overflow-y-auto p-2">
+                          {availableGroups.length === 0 ? (
+                            <div className="py-8 text-center text-sm text-muted-foreground">
+                              {groupSearch ? 'No matching groups found' : 'All groups are already assigned'}
+                            </div>
+                          ) : (
+                            <div className="space-y-1">
+                              {availableGroups.map((group) => (
+                                <div
+                                  key={group.id}
+                                  className="flex items-center space-x-3 p-2 rounded-md hover:bg-muted/50 cursor-pointer"
+                                  onClick={() => handleToggleGroup(group.id)}
+                                >
+                                  <Checkbox
+                                    checked={selectedGroupIds.includes(group.id)}
+                                    onCheckedChange={() => handleToggleGroup(group.id)}
+                                    className="pointer-events-none"
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium truncate">{group.name}</div>
+                                    <div className="text-xs text-muted-foreground truncate">{group.slug}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Add button */}
+                        <div className="p-3 border-t">
+                          <Button
+                            onClick={handleAddSelected}
+                            disabled={selectedGroupIds.length === 0}
+                            className="w-full"
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add Selected ({selectedGroupIds.length})
+                          </Button>
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {/* Search current members */}
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Search assigned groups..."
+                    value={memberSearch}
+                    onChange={(e) => setMemberSearch(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSelectAllMembers}
+                    disabled={filteredMembers.length === 0}
+                  >
+                    <CheckSquare className="h-4 w-4 mr-1" />
+                    Select All
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDeselectAllMembers}
+                    disabled={selectedMemberIds.length === 0}
+                  >
+                    <Square className="h-4 w-4 mr-1" />
+                    Deselect All
+                  </Button>
+                </div>
+              </div>
+
+              {/* Current members table */}
+              {filteredMembers.length === 0 ? (
+                <div className="py-12 text-center text-muted-foreground">
+                  {memberSearch ? 'No matching groups found' : 'User is not a member of any groups yet'}
+                </div>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-12"></TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Slug</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {filteredMembers.map((group) => (
+                      <TableRow key={group.id}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedMemberIds.includes(group.id)}
+                            onCheckedChange={() => handleToggleMember(group.id)}
+                          />
+                        </TableCell>
+                        <TableCell className="font-medium">{group.name}</TableCell>
+                        <TableCell className="text-muted-foreground">{group.slug}</TableCell>
+                        <TableCell className="text-right">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => handleRemoveGroup(group.id)}
+                          >
+                            <Trash2 className="h-4 w-4 text-destructive" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </div>

@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getConnector, updateConnector, deleteConnector } from '@/lib/api/connectors';
@@ -9,10 +9,17 @@ import { getGroupConnectors, addConnectorToGroup, removeConnectorFromGroup } fro
 import type { UpdateConnectorConfigDto, Group } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import {
   Table,
   TableBody,
@@ -21,12 +28,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ArrowLeft, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, Trash2, Users, Search, Plus, CheckSquare, Square } from 'lucide-react';
 import { toast } from 'sonner';
-
-interface GroupWithConnectorAccess extends Group {
-  hasAccess: boolean;
-}
 
 export default function EditConnectorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: connectorId } = use(params);
@@ -45,14 +48,19 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     updateSecrets: false,
   });
   const [allGroups, setAllGroups] = useState<Group[]>([]);
-  const [groupsWithAccess, setGroupsWithAccess] = useState<GroupWithConnectorAccess[]>([]);
-  const [currentGroupIds, setCurrentGroupIds] = useState<string[]>([]);
-  const [selectedGroups, setSelectedGroups] = useState<string[]>([]);
+  const [groupsWithAccess, setGroupsWithAccess] = useState<Group[]>([]);
+
+  // Groups tab state
+  const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]); // For add dropdown
+  const [selectedMemberIds, setSelectedMemberIds] = useState<string[]>([]); // For bulk remove
+  const [addGroupsDropdownOpen, setAddGroupsDropdownOpen] = useState(false);
+  const [groupSearch, setGroupSearch] = useState('');
+  const [memberSearch, setMemberSearch] = useState('');
+
+  const [activeTab, setActiveTab] = useState('configuration');
 
   useEffect(() => {
     if (!isOrgAdminView() || !selectedOrgId) {
-      toast.error('Please select an organization first');
-      router.push('/connectors');
       return;
     }
 
@@ -91,17 +99,17 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
             const hasAccess = groupConnectorsData.connectors.some(
               (gc) => gc.connector_id === connectorId
             );
-            return { ...group, hasAccess };
+            return { group, hasAccess };
           } catch {
-            return { ...group, hasAccess: false };
+            return { group, hasAccess: false };
           }
         })
       );
 
-      setGroupsWithAccess(groupAccessChecks);
-      const groupIds = groupAccessChecks.filter((g) => g.hasAccess).map((g) => g.id);
-      setCurrentGroupIds(groupIds);
-      setSelectedGroups(groupIds);
+      const groupsWithAccessList = groupAccessChecks
+        .filter((item) => item.hasAccess)
+        .map((item) => item.group);
+      setGroupsWithAccess(groupsWithAccessList);
     } catch (error: any) {
       toast.error(error.message || 'Failed to load connector');
       router.push('/connectors');
@@ -144,28 +152,12 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     try {
       setLoading(true);
 
-      // Update connector configuration
+      // Update connector configuration only
       await updateConnector(selectedOrgId, connectorId, {
         config: parsedConfig,
         secrets: formData.updateSecrets ? parsedSecrets : undefined,
         is_enabled: formData.is_enabled,
       });
-
-      // Calculate group changes
-      const groupsToAdd = selectedGroups.filter(id => !currentGroupIds.includes(id));
-      const groupsToRemove = currentGroupIds.filter(id => !selectedGroups.includes(id));
-
-      // Apply group changes
-      await Promise.all([
-        ...groupsToAdd.map(groupId =>
-          addConnectorToGroup(selectedOrgId, groupId, {
-            connector_id: connectorId,
-            authorized_endpoints: [],
-            is_enabled: true,
-          })
-        ),
-        ...groupsToRemove.map(groupId => removeConnectorFromGroup(selectedOrgId, groupId, connectorId)),
-      ]);
 
       toast.success('Connector updated successfully');
       await loadConnector(); // Reload to refresh tabs
@@ -190,6 +182,27 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     }
   };
 
+  const handleAddGroups = async (groupIds: string[]) => {
+    if (!selectedOrgId) return;
+    try {
+      await Promise.all(
+        groupIds.map(groupId =>
+          addConnectorToGroup(selectedOrgId, groupId, {
+            connector_id: connectorId,
+            authorized_endpoints: [],
+            is_enabled: true,
+          })
+        )
+      );
+      toast.success(`${groupIds.length} group${groupIds.length !== 1 ? 's' : ''} added`);
+      await loadConnector();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to add groups';
+      toast.error(errorMessage);
+      throw error;
+    }
+  };
+
   const handleDeleteConnector = async () => {
     if (!selectedOrgId || !connectorInfo) return;
     if (!confirm(`Are you sure you want to delete this connector? This action cannot be undone.`)) return;
@@ -204,6 +217,88 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     }
   };
 
+  // Available groups (not currently assigned) for add dropdown
+  const availableGroups = useMemo(() => {
+    const accessGroupIds = new Set(groupsWithAccess.map(g => g.id));
+    const query = groupSearch.toLowerCase().trim();
+
+    return allGroups
+      .filter(group => !accessGroupIds.has(group.id))
+      .filter(group => {
+        if (!query) return true;
+        return group.name.toLowerCase().includes(query) || group.slug.toLowerCase().includes(query);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allGroups, groupsWithAccess, groupSearch]);
+
+  // Current groups filtered by search
+  const filteredMembers = useMemo(() => {
+    const query = memberSearch.toLowerCase().trim();
+    return groupsWithAccess
+      .filter(group => {
+        if (!query) return true;
+        return group.name.toLowerCase().includes(query) || group.slug.toLowerCase().includes(query);
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [groupsWithAccess, memberSearch]);
+
+  // Group handlers
+  const handleToggleGroup = (groupId: string) => {
+    setSelectedGroupIds(prev =>
+      prev.includes(groupId) ? prev.filter(id => id !== groupId) : [...prev, groupId]
+    );
+  };
+
+  const handleToggleMember = (groupId: string) => {
+    setSelectedMemberIds(prev =>
+      prev.includes(groupId) ? prev.filter(id => id !== groupId) : [...prev, groupId]
+    );
+  };
+
+  const handleSelectAllAvailableGroups = () => {
+    setSelectedGroupIds(availableGroups.map(g => g.id));
+  };
+
+  const handleDeselectAllAvailableGroups = () => {
+    setSelectedGroupIds([]);
+  };
+
+  const handleSelectAllMembers = () => {
+    setSelectedMemberIds(filteredMembers.map(g => g.id));
+  };
+
+  const handleDeselectAllMembers = () => {
+    setSelectedMemberIds([]);
+  };
+
+  const handleAddSelectedGroups = async () => {
+    if (selectedGroupIds.length === 0) return;
+    try {
+      await handleAddGroups(selectedGroupIds);
+      setSelectedGroupIds([]);
+      setGroupSearch('');
+      setAddGroupsDropdownOpen(false);
+    } catch {
+      // Error already handled by handleAddGroups
+    }
+  };
+
+  const handleBulkRemoveGroups = async () => {
+    if (selectedMemberIds.length === 0) return;
+    if (!confirm(`Are you sure you want to remove access for ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}?`)) return;
+
+    if (!selectedOrgId) return;
+    try {
+      await Promise.all(selectedMemberIds.map(groupId => removeConnectorFromGroup(selectedOrgId, groupId, connectorId)));
+      toast.success(`${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''} removed`);
+      setSelectedMemberIds([]);
+      await loadConnector();
+    } catch (error: any) {
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to remove groups';
+      toast.error(errorMessage);
+    }
+  };
+
   if (initialLoading) {
     return (
       <div className="flex h-screen items-center justify-center">
@@ -214,8 +309,6 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       </div>
     );
   }
-
-  const groupsWithAccessList = groupsWithAccess.filter(g => g.hasAccess);
 
   return (
     <div className="container mx-auto p-6">
@@ -238,10 +331,10 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         </Button>
       </div>
 
-      <Tabs defaultValue="configuration" className="w-full">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
         <TabsList className="grid w-full max-w-md grid-cols-2">
           <TabsTrigger value="configuration">Configuration</TabsTrigger>
-          <TabsTrigger value="groups">Groups ({groupsWithAccessList.length})</TabsTrigger>
+          <TabsTrigger value="groups">Groups ({groupsWithAccess.length})</TabsTrigger>
         </TabsList>
 
         {/* Configuration Tab */}
@@ -340,20 +433,157 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         <TabsContent value="groups" className="mt-6">
           <Card>
             <CardHeader>
-              <CardTitle>Groups with Access</CardTitle>
-              <CardDescription>
-                {groupsWithAccessList.length} group{groupsWithAccessList.length !== 1 ? 's' : ''} can access this connector
-              </CardDescription>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Groups with Access</CardTitle>
+                  <CardDescription>
+                    {groupsWithAccess.length} group{groupsWithAccess.length !== 1 ? 's' : ''} can access this connector
+                  </CardDescription>
+                </div>
+                <div className="flex gap-2">
+                  {selectedMemberIds.length > 0 && (
+                    <Button
+                      onClick={handleBulkRemoveGroups}
+                      variant="destructive"
+                      size="sm"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Remove Selected ({selectedMemberIds.length})
+                    </Button>
+                  )}
+                  <Popover open={addGroupsDropdownOpen} onOpenChange={setAddGroupsDropdownOpen}>
+                    <PopoverTrigger asChild>
+                      <Button size="sm">
+                        <Plus className="mr-2 h-4 w-4" />
+                        Add Groups
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-96 p-0" align="end">
+                      <div className="flex flex-col max-h-[500px]">
+                        <div className="p-4 border-b space-y-3">
+                          <div className="relative">
+                            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                            <Input
+                              placeholder="Search groups..."
+                              value={groupSearch}
+                              onChange={(e) => setGroupSearch(e.target.value)}
+                              className="pl-9"
+                            />
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-muted-foreground">
+                              {selectedGroupIds.length} selected
+                            </p>
+                            <div className="flex gap-2">
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={handleSelectAllAvailableGroups}
+                                disabled={availableGroups.length === 0}
+                              >
+                                <CheckSquare className="h-4 w-4 mr-1" />
+                                All
+                              </Button>
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                onClick={handleDeselectAllAvailableGroups}
+                                disabled={selectedGroupIds.length === 0}
+                              >
+                                <Square className="h-4 w-4 mr-1" />
+                                None
+                              </Button>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex-1 overflow-y-auto p-2">
+                          {availableGroups.length === 0 ? (
+                            <div className="py-8 text-center text-sm text-muted-foreground">
+                              {groupSearch ? 'No matching groups found' : 'All groups already have access'}
+                            </div>
+                          ) : (
+                            <div className="space-y-1">
+                              {availableGroups.map((group) => (
+                                <div
+                                  key={group.id}
+                                  className="flex items-center space-x-3 p-2 rounded-md hover:bg-muted/50 cursor-pointer"
+                                  onClick={() => handleToggleGroup(group.id)}
+                                >
+                                  <Checkbox
+                                    checked={selectedGroupIds.includes(group.id)}
+                                    onCheckedChange={() => handleToggleGroup(group.id)}
+                                    className="pointer-events-none"
+                                  />
+                                  <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-medium truncate">{group.name}</div>
+                                    <div className="text-xs text-muted-foreground truncate">{group.slug}</div>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                        <div className="p-3 border-t">
+                          <Button
+                            onClick={handleAddSelectedGroups}
+                            disabled={selectedGroupIds.length === 0}
+                            className="w-full"
+                          >
+                            <Plus className="mr-2 h-4 w-4" />
+                            Add Selected ({selectedGroupIds.length})
+                          </Button>
+                        </div>
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                </div>
+              </div>
             </CardHeader>
-            <CardContent>
-              {groupsWithAccessList.length === 0 ? (
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    placeholder="Search groups..."
+                    value={memberSearch}
+                    onChange={(e) => setMemberSearch(e.target.value)}
+                    className="pl-9"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleSelectAllMembers}
+                    disabled={filteredMembers.length === 0}
+                  >
+                    <CheckSquare className="h-4 w-4 mr-1" />
+                    Select All
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDeselectAllMembers}
+                    disabled={selectedMemberIds.length === 0}
+                  >
+                    <Square className="h-4 w-4 mr-1" />
+                    Deselect All
+                  </Button>
+                </div>
+              </div>
+              {filteredMembers.length === 0 ? (
                 <div className="py-12 text-center text-muted-foreground">
-                  No groups have access to this connector yet. Add groups from the Configuration tab.
+                  {memberSearch ? 'No matching groups found' : 'No groups have access to this connector yet'}
                 </div>
               ) : (
                 <Table>
                   <TableHeader>
                     <TableRow>
+                      <TableHead className="w-12"></TableHead>
                       <TableHead>Group</TableHead>
                       <TableHead>Description</TableHead>
                       <TableHead>Status</TableHead>
@@ -361,8 +591,14 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {groupsWithAccessList.map((group) => (
+                    {filteredMembers.map((group) => (
                       <TableRow key={group.id}>
+                        <TableCell>
+                          <Checkbox
+                            checked={selectedMemberIds.includes(group.id)}
+                            onCheckedChange={() => handleToggleMember(group.id)}
+                          />
+                        </TableCell>
                         <TableCell className="font-medium">{group.name}</TableCell>
                         <TableCell className="text-muted-foreground">
                           {group.description || '—'}

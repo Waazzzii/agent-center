@@ -71,7 +71,12 @@ function CallbackContent() {
         setAuth(admin, accessToken, refreshToken);
 
         addDebugStep('✓ Redirecting to dashboard');
-        router.push('/organizations');
+        // Super admins go to organizations page, regular admins go to users page
+        if (admin.role === 'super_admin') {
+          router.push('/organizations');
+        } else {
+          router.push('/users');
+        }
       } catch (err: any) {
         addDebugStep(`✗ Error: ${err.message}`);
         console.error('[CALLBACK] Error details:', err, err.response?.data);

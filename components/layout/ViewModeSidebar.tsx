@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -22,11 +23,19 @@ import {
   UsersRound,
   Link as LinkIcon,
   FileText,
+  ChevronDown,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { useUIStore } from '@/stores/ui.store';
 import { logout } from '@/lib/auth/oauth';
-import { OrganizationSelector } from './OrganizationSelector';
+import { getOrganizations } from '@/lib/api/organizations';
+import type { Organization } from '@/types/api.types';
 
 interface NavItem {
   label: string;
@@ -101,8 +110,33 @@ const orgAdminNavItems: NavItem[] = [
 export function ViewModeSidebar() {
   const pathname = usePathname();
   const { admin, isSuperAdmin, clearAuth } = useAuthStore();
-  const { viewMode, selectedOrgName } = useAdminViewStore();
+  const { viewMode, selectedOrgName, selectedOrgId, switchToOrgAdminView } = useAdminViewStore();
   const { sidebarOpen, toggleSidebar, theme, toggleTheme } = useUIStore();
+  const [organizations, setOrganizations] = useState<Organization[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // Load organizations when in org admin view
+  useEffect(() => {
+    if (viewMode === 'org_admin') {
+      loadOrganizations();
+    }
+  }, [viewMode]);
+
+  const loadOrganizations = async () => {
+    try {
+      setLoading(true);
+      const { organizations: orgs } = await getOrganizations();
+      setOrganizations(orgs);
+    } catch (error) {
+      console.error('Failed to load organizations:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSwitchOrganization = (org: Organization) => {
+    switchToOrgAdminView(org.id, org.name);
+  };
 
   const handleLogout = async () => {
     clearAuth();
@@ -148,7 +182,7 @@ export function ViewModeSidebar() {
       >
         <div className="flex h-full flex-col">
           {/* Header */}
-          <div className="flex h-16 items-center border-b px-6">
+          <div className="flex h-16 items-center justify-center border-b px-6">
             <div className="flex items-center gap-2">
               <div
                 className={cn(
@@ -162,43 +196,69 @@ export function ViewModeSidebar() {
                   <Building2 className="h-5 w-5" />
                 )}
               </div>
-              <div>
-                <h1 className="text-lg font-semibold">Wazzi Admin</h1>
-                {viewMode === 'org_admin' && selectedOrgName && (
-                  <p className="text-xs text-muted-foreground">{selectedOrgName}</p>
-                )}
+              <h1 className="text-lg font-semibold">Wazzi Admin</h1>
+            </div>
+          </div>
+
+          {/* Organization Selector - only in org admin view */}
+          {viewMode === 'org_admin' ? (
+            <div className="border-b px-4 py-3">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="w-full justify-between"
+                    disabled={loading}
+                  >
+                    <div className="flex items-center gap-2">
+                      <Building2 className="h-4 w-4 text-primary" />
+                      <span className="truncate text-sm font-medium">
+                        {selectedOrgName || 'Select Organization'}
+                      </span>
+                    </div>
+                    <ChevronDown className="h-4 w-4 opacity-50" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-[240px]">
+                  {loading ? (
+                    <div className="p-2 text-center text-sm text-muted-foreground">
+                      Loading...
+                    </div>
+                  ) : organizations.length === 0 ? (
+                    <div className="p-2 text-center text-sm text-muted-foreground">
+                      No organizations available
+                    </div>
+                  ) : (
+                    organizations.map((org) => (
+                      <DropdownMenuItem
+                        key={org.id}
+                        onClick={() => handleSwitchOrganization(org)}
+                        className="cursor-pointer"
+                        disabled={org.id === selectedOrgId}
+                      >
+                        <div className="flex items-center gap-2 w-full">
+                          <Building2 className="h-4 w-4 text-muted-foreground" />
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">{org.name}</div>
+                            <div className="text-xs text-muted-foreground truncate">{org.slug}</div>
+                          </div>
+                          {org.id === selectedOrgId && (
+                            <div className="h-2 w-2 rounded-full bg-primary flex-shrink-0" />
+                          )}
+                        </div>
+                      </DropdownMenuItem>
+                    ))
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </div>
+          ) : (
+            /* Super Admin View Badge */
+            <div className="border-b px-4 py-3">
+              <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium bg-primary/10 text-primary">
+                <Shield className="h-3 w-3" />
+                Super Admin View
               </div>
-            </div>
-          </div>
-
-          {/* View Mode Badge */}
-          <div className="border-b px-4 py-3">
-            <div
-              className={cn(
-                'inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium',
-                viewMode === 'super_admin'
-                  ? 'bg-primary/10 text-primary'
-                  : 'bg-secondary/10 text-secondary'
-              )}
-            >
-              {viewMode === 'super_admin' ? (
-                <>
-                  <Shield className="h-3 w-3" />
-                  Super Admin View
-                </>
-              ) : (
-                <>
-                  <Building2 className="h-3 w-3" />
-                  Org Admin View
-                </>
-              )}
-            </div>
-          </div>
-
-          {/* Organization Selector - only show in org admin view */}
-          {viewMode === 'org_admin' && (
-            <div className="border-b py-3">
-              <OrganizationSelector />
             </div>
           )}
 

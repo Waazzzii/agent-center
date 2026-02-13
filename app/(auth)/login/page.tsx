@@ -12,10 +12,15 @@ export default function LoginPage() {
   const { admin } = useAuthStore();
 
   useEffect(() => {
-    // If already authenticated, redirect to dashboard
+    // If already authenticated, redirect to appropriate page
     // Use replace to prevent adding to history
     if (admin) {
-      router.replace('/organizations');
+      // Super admins go to organizations, regular admins go to users
+      if (admin.role === 'super_admin') {
+        router.replace('/organizations');
+      } else {
+        router.replace('/users');
+      }
     }
   }, [admin, router]);
 

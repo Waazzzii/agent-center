@@ -34,13 +34,8 @@ export default function OrganizationsPage() {
       return;
     }
 
-    if (!isSuperAdmin() || !isSuperAdminView()) {
-      router.push('/users');
-      return;
-    }
-
     loadOrganizations();
-  }, [admin, router, isSuperAdmin, isSuperAdminView]);
+  }, [admin, router]);
 
   const loadOrganizations = async () => {
     try {
@@ -102,12 +97,18 @@ export default function OrganizationsPage() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-bold">Organizations</h1>
-          <p className="text-muted-foreground">Manage all organizations in the system</p>
+          <p className="text-muted-foreground">
+            {isSuperAdmin() && isSuperAdminView()
+              ? 'Manage all organizations in the system'
+              : 'Select an organization to manage'}
+          </p>
         </div>
-        <Button onClick={() => router.push('/organizations/create')}>
-          <Plus className="mr-2 h-4 w-4" />
-          Create Organization
-        </Button>
+        {isSuperAdmin() && isSuperAdminView() && (
+          <Button onClick={() => router.push('/organizations/create')}>
+            <Plus className="mr-2 h-4 w-4" />
+            Create Organization
+          </Button>
+        )}
       </div>
 
       <Card>
@@ -174,20 +175,24 @@ export default function OrganizationsPage() {
                           <Building2 className="mr-2 h-4 w-4" />
                           Manage
                         </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => router.push(`/organizations/${org.id}/edit`)}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => handleDelete(org.id, org.name)}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
+                        {isSuperAdmin() && isSuperAdminView() && (
+                          <>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => router.push(`/organizations/${org.id}/edit`)}
+                            >
+                              <Edit className="h-4 w-4" />
+                            </Button>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleDelete(org.id, org.name)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </>
+                        )}
                       </div>
                     </TableCell>
                   </TableRow>

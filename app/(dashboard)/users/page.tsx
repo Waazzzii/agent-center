@@ -17,6 +17,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Trash2, Plus, Pencil } from 'lucide-react';
+import { CreateUserModal } from '@/components/users/create-user-modal';
 
 export default function UsersPage() {
   const router = useRouter();
@@ -25,6 +26,7 @@ export default function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [createModalOpen, setCreateModalOpen] = useState(false);
 
   useEffect(() => {
     if (!admin) {
@@ -84,7 +86,7 @@ export default function UsersPage() {
           <h1 className="text-3xl font-bold">Users</h1>
           <p className="text-muted-foreground">Manage users within organizations</p>
         </div>
-        <Button disabled={!selectedOrgId} onClick={() => router.push('/users/create')}>
+        <Button disabled={!selectedOrgId} onClick={() => setCreateModalOpen(true)}>
           <Plus className="mr-2 h-4 w-4" />
           Add User
         </Button>
@@ -138,7 +140,11 @@ export default function UsersPage() {
                           : user.email);
 
                       return (
-                        <TableRow key={user.id}>
+                        <TableRow
+                          key={user.id}
+                          className="cursor-pointer hover:bg-muted/50"
+                          onClick={() => router.push(`/users/${user.id}/edit`)}
+                        >
                           <TableCell className="font-medium">{displayName}</TableCell>
                           <TableCell>{user.email}</TableCell>
                           <TableCell className="text-muted-foreground">
@@ -161,14 +167,20 @@ export default function UsersPage() {
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => router.push(`/users/${user.id}/edit`)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  router.push(`/users/${user.id}/edit`);
+                                }}
                               >
                                 <Pencil className="h-4 w-4" />
                               </Button>
                               <Button
                                 variant="ghost"
                                 size="sm"
-                                onClick={() => handleDelete(user.id)}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleDelete(user.id);
+                                }}
                               >
                                 <Trash2 className="h-4 w-4 text-destructive" />
                               </Button>
@@ -183,6 +195,14 @@ export default function UsersPage() {
             </CardContent>
           </Card>
         </>
+      )}
+
+      {selectedOrgId && (
+        <CreateUserModal
+          open={createModalOpen}
+          onOpenChange={setCreateModalOpen}
+          organizationId={selectedOrgId}
+        />
       )}
     </div>
   );
