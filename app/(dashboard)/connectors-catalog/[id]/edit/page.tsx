@@ -13,6 +13,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ConnectorSchemaBuilder } from '@/components/connector-schema-builder';
+import { EndpointManager } from '@/components/endpoint-manager';
 import { ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -23,7 +24,6 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [formData, setFormData] = useState<Partial<Connector>>({});
-  const [endpointsText, setEndpointsText] = useState('');
 
   useEffect(() => {
     if (!admin || !isSuperAdmin()) {
@@ -40,7 +40,6 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       setInitialLoading(true);
       const data = await getConnector(connectorId);
       setFormData(data);
-      setEndpointsText((data.available_endpoints || []).join('\n'));
     } catch (error: any) {
       toast.error(error.message || 'Failed to load connector');
       router.push('/connectors-catalog');
@@ -57,14 +56,9 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       return;
     }
 
-    const endpoints = endpointsText
-      .split('\n')
-      .map(e => e.trim())
-      .filter(e => e.length > 0);
-
     try {
       setLoading(true);
-      await updateConnector(connectorId, { ...formData, available_endpoints: endpoints });
+      await updateConnector(connectorId, formData);
       toast.success('Connector updated successfully');
       router.push('/connectors-catalog');
     } catch (error: any) {
@@ -171,13 +165,11 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="endpoints">Available Endpoints (one per line)</Label>
-                    <Textarea
-                      id="endpoints"
-                      value={endpointsText}
-                      onChange={(e) => setEndpointsText(e.target.value)}
-                      placeholder="/files/list&#10;/files/upload&#10;/files/download"
-                      rows={5}
+                    <Label>Available Endpoints</Label>
+                    <EndpointManager
+                      endpoints={formData.available_endpoints || []}
+                      onChange={(endpoints) => setFormData({ ...formData, available_endpoints: endpoints })}
+                      placeholder="/files/list"
                     />
                   </div>
 

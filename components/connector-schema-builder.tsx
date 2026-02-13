@@ -22,6 +22,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Plus, Trash2, ChevronUp, ChevronDown, Eye } from 'lucide-react';
 import { DynamicConnectorForm } from './dynamic-connector-form';
+import { toast } from 'sonner';
 
 interface SchemaBuilderProps {
   initialSchema?: ConnectorConfigSchema;
@@ -297,9 +298,14 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                       <Label htmlFor="field-type">Type</Label>
                       <Select
                         value={selectedField.type}
-                        onValueChange={(value: FieldType) =>
-                          updateField(selectedFieldIndex, { type: value })
-                        }
+                        onValueChange={(value: FieldType) => {
+                          // Validate: if field is secret, only allow text type
+                          if (selectedField.secret && value !== 'text') {
+                            toast.error('Secret fields can only be of type "Text"');
+                            return;
+                          }
+                          updateField(selectedFieldIndex, { type: value });
+                        }}
                       >
                         <SelectTrigger id="field-type">
                           <SelectValue />
@@ -333,9 +339,14 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                       <Switch
                         id="field-secret"
                         checked={selectedField.secret || false}
-                        onCheckedChange={(checked) =>
-                          updateField(selectedFieldIndex, { secret: checked })
-                        }
+                        onCheckedChange={(checked) => {
+                          // Validate: only text fields can be secrets
+                          if (checked && selectedField.type !== 'text') {
+                            toast.error('Only "Text" type fields can be marked as secret');
+                            return;
+                          }
+                          updateField(selectedFieldIndex, { secret: checked });
+                        }}
                       />
                       <Label htmlFor="field-secret" className="cursor-pointer">
                         Secret field (hidden after entry)

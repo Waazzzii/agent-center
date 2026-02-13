@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ConnectorSchemaBuilder } from '@/components/connector-schema-builder';
+import { EndpointManager } from '@/components/endpoint-manager';
 import { ConnectorConfigSchema } from '@/types/api.types';
 import { ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
@@ -31,7 +32,6 @@ export default function CreateConnectorPage() {
     is_active: true,
     is_public: false,
   });
-  const [endpointsText, setEndpointsText] = useState('');
 
   if (!admin || !isSuperAdmin()) {
     router.push('/users');
@@ -46,14 +46,9 @@ export default function CreateConnectorPage() {
       return;
     }
 
-    const endpoints = endpointsText
-      .split('\n')
-      .map(e => e.trim())
-      .filter(e => e.length > 0);
-
     try {
       setLoading(true);
-      await createConnector({ ...formData, available_endpoints: endpoints });
+      await createConnector(formData);
       toast.success('Connector created successfully');
       router.push('/connectors-catalog');
     } catch (error: any) {
@@ -149,13 +144,11 @@ export default function CreateConnectorPage() {
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="endpoints">Available Endpoints (one per line)</Label>
-                    <Textarea
-                      id="endpoints"
-                      value={endpointsText}
-                      onChange={(e) => setEndpointsText(e.target.value)}
-                      placeholder="/files/list&#10;/files/upload&#10;/files/download"
-                      rows={5}
+                    <Label>Available Endpoints</Label>
+                    <EndpointManager
+                      endpoints={formData.available_endpoints}
+                      onChange={(endpoints) => setFormData({ ...formData, available_endpoints: endpoints })}
+                      placeholder="/files/list"
                     />
                   </div>
 

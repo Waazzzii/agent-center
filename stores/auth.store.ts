@@ -34,7 +34,10 @@ export const useAuthStore = create<AuthState>()(
       },
 
       clearAuth: () => {
-        localStorage.clear();
+        // Only remove auth-related items, preserve UI settings like theme
+        localStorage.removeItem('access_token');
+        localStorage.removeItem('refresh_token');
+        localStorage.removeItem('auth-storage');
         sessionStorage.clear();
         set({ admin: null, accessToken: null, refreshToken: null });
       },
