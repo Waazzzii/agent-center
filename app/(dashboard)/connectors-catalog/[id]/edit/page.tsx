@@ -169,7 +169,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                     <EndpointManager
                       endpoints={formData.available_endpoints || []}
                       onChange={(endpoints) => setFormData({ ...formData, available_endpoints: endpoints })}
-                      placeholder="/files/list"
+                      placeholder="get_reservations"
                     />
                   </div>
 

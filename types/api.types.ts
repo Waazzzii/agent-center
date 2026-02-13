@@ -33,7 +33,6 @@ export interface Organization {
   postal_code?: string;
   country?: string;
   is_active: boolean;
-  groups_enabled: boolean;
   created_at: string;
   updated_at: string;
 }

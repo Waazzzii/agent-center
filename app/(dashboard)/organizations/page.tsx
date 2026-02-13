@@ -130,7 +130,6 @@ export default function OrganizationsPage() {
                   <TableHead>Name</TableHead>
                   <TableHead>Slug</TableHead>
                   <TableHead>Status</TableHead>
-                  <TableHead>Groups</TableHead>
                   <TableHead>Created</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -160,17 +159,6 @@ export default function OrganizationsPage() {
                       ) : (
                         <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
                           Inactive
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {org.groups_enabled ? (
-                        <span className="inline-flex items-center rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">
-                          Enabled
-                        </span>
-                      ) : (
-                        <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-600">
-                          Disabled
                         </span>
                       )}
                     </TableCell>

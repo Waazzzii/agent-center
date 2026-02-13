@@ -148,7 +148,7 @@ export default function CreateConnectorPage() {
                     <EndpointManager
                       endpoints={formData.available_endpoints}
                       onChange={(endpoints) => setFormData({ ...formData, available_endpoints: endpoints })}
-                      placeholder="/files/list"
+                      placeholder="get_reservations"
                     />
                   </div>
 

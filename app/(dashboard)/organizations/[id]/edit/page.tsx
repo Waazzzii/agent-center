@@ -224,20 +224,6 @@ export default function EditOrganizationPage({ params }: { params: Promise<{ id:
                   onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
                 />
               </div>
-
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div className="space-y-0.5">
-                  <Label htmlFor="groups_enabled">Groups Enabled</Label>
-                  <div className="text-sm text-muted-foreground">
-                    Allow group management for this organization
-                  </div>
-                </div>
-                <Switch
-                  id="groups_enabled"
-                  checked={formData.groups_enabled || false}
-                  onCheckedChange={(checked) => setFormData({ ...formData, groups_enabled: checked })}
-                />
-              </div>
             </div>
 
             <div className="flex gap-4">

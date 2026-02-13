@@ -12,15 +12,15 @@ interface EndpointManagerProps {
   placeholder?: string;
 }
 
-export function EndpointManager({ endpoints, onChange, placeholder = '/api/endpoint' }: EndpointManagerProps) {
+export function EndpointManager({ endpoints, onChange, placeholder = 'get_data' }: EndpointManagerProps) {
   const [inputValue, setInputValue] = useState('');
 
   const addEndpoint = () => {
     const trimmed = inputValue.trim();
     if (!trimmed) return;
 
-    // Ensure it starts with /
-    const endpoint = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    // MCP tool names - no "/" prefix needed
+    const endpoint = trimmed;
 
     // Avoid duplicates
     if (endpoints.includes(endpoint)) {
@@ -85,7 +85,7 @@ export function EndpointManager({ endpoints, onChange, placeholder = '/api/endpo
       )}
 
       <p className="text-xs text-muted-foreground">
-        Enter endpoint paths (e.g., /files/list, /files/upload). The "/" prefix will be added automatically if omitted.
+        Enter MCP tool names (e.g., get_reservations, get_property_list). Tool names should not include the "/" prefix.
       </p>
     </div>
   );

@@ -24,6 +24,7 @@ import {
   Link as LinkIcon,
   FileText,
   ChevronDown,
+  Settings,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
@@ -103,6 +104,12 @@ const orgAdminNavItems: NavItem[] = [
     label: 'Connectors',
     href: '/connectors',
     icon: Plug,
+    orgAdminOnly: true,
+  },
+  {
+    label: 'Settings',
+    href: '/settings',
+    icon: Settings,
     orgAdminOnly: true,
   },
 ];
