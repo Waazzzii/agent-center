@@ -119,7 +119,7 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
       // Store authorized endpoints for each connector
       const endpointsMap: Record<string, string[]> = {};
       groupConnectorsData.connectors.forEach((connector: any) => {
-        endpointsMap[connector.connector_id] = connector.authorized_endpoints || [];
+        endpointsMap[connector.organization_connector_id] = connector.authorized_endpoints || [];
       });
       setConnectorEndpoints(endpointsMap);
     } catch (error: any) {
@@ -215,19 +215,19 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
     }
   };
 
-  const handleAddConnectors = async (connectorIds: string[], authorizedEndpoints: string[]) => {
+  const handleAddConnectors = async (orgConnectorIds: string[], authorizedEndpoints: string[]) => {
     if (!selectedOrgId) return;
     try {
       await Promise.all(
-        connectorIds.map(connectorId =>
+        orgConnectorIds.map(orgConnectorId =>
           addConnectorToGroup(selectedOrgId, groupId, {
-            connector_id: connectorId,
+            organization_connector_id: orgConnectorId,
             authorized_endpoints: authorizedEndpoints,
             is_enabled: true,
           })
         )
       );
-      toast.success(`${connectorIds.length} connector${connectorIds.length !== 1 ? 's' : ''} added to group`);
+      toast.success(`${orgConnectorIds.length} connector${orgConnectorIds.length !== 1 ? 's' : ''} added to group`);
       await loadGroup();
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to add connectors';
@@ -283,11 +283,11 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
 
   // Available connectors (not currently assigned) for add dropdown
   const availableConnectors = useMemo(() => {
-    const connectorIds = new Set(connectors.map(c => c.connector_id));
+    const orgConnectorIds = new Set(connectors.map(c => c.organization_connector_id));
     const query = connectorSearch.toLowerCase().trim();
 
     return allConnectors
-      .filter(conn => !connectorIds.has(conn.id))
+      .filter(conn => !orgConnectorIds.has(conn.id))
       .filter(conn => {
         if (!query) return true;
         return conn.connector_name.toLowerCase().includes(query) ||
@@ -387,7 +387,7 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
   };
 
   const handleSelectAllConnectorMembers = () => {
-    setSelectedConnectorMemberIds(filteredConnectors.map(c => c.connector_id));
+    setSelectedConnectorMemberIds(filteredConnectors.map(c => c.organization_connector_id));
   };
 
   const handleDeselectAllConnectorMembers = () => {
@@ -443,13 +443,13 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
     }
   };
 
-  const handleEditConnectorEndpoints = (connectorId: string) => {
-    const connector = connectors.find(c => c.connector_id === connectorId);
+  const handleEditConnectorEndpoints = (orgConnectorId: string) => {
+    const connector = connectors.find(c => c.organization_connector_id === orgConnectorId);
     if (!connector) return;
 
     setIsAddingConnectors(false);
     setCurrentConnectorForEndpoints({
-      id: connector.connector_id,
+      id: connector.organization_connector_id,
       name: connector.connector_name || 'Unknown Connector',
       availableEndpoints: connector.connector_available_endpoints || [],
     });
@@ -988,7 +988,7 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
                   </TableHeader>
                   <TableBody>
                     {filteredConnectors.map((connector) => {
-                      const endpoints = connectorEndpoints[connector.connector_id] || [];
+                      const endpoints = connectorEndpoints[connector.organization_connector_id] || [];
                       const displayEndpoints = endpoints.slice(0, 2);
                       const remainingCount = Math.max(0, endpoints.length - 2);
 
@@ -1000,8 +1000,8 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
                         >
                           <TableCell onClick={(e) => e.stopPropagation()}>
                             <Checkbox
-                              checked={selectedConnectorMemberIds.includes(connector.connector_id)}
-                              onCheckedChange={() => handleToggleConnectorMember(connector.connector_id)}
+                              checked={selectedConnectorMemberIds.includes(connector.organization_connector_id)}
+                              onCheckedChange={() => handleToggleConnectorMember(connector.organization_connector_id)}
                             />
                           </TableCell>
                           <TableCell>
@@ -1046,7 +1046,7 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
                                 size="sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleEditConnectorEndpoints(connector.connector_id);
+                                  handleEditConnectorEndpoints(connector.organization_connector_id);
                                 }}
                               >
                                 <Settings className="h-4 w-4" />
@@ -1056,7 +1056,7 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
                                 size="sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
-                                  handleRemoveConnector(connector.connector_id);
+                                  handleRemoveConnector(connector.organization_connector_id);
                                 }}
                               >
                                 <Trash2 className="h-4 w-4 text-destructive" />

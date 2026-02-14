@@ -182,11 +182,12 @@ export interface UserGroup {
   group_name?: string;
 }
 
-// Group Connectors
+// Group Organization Connectors
+// Links groups to organization-specific connector instances
 export interface GroupConnector {
   id: string;
   group_id: string;
-  connector_id: string;
+  organization_connector_id: string; // References organization_connectors.id
   authorized_endpoints: string[];
   is_enabled: boolean;
   created_at: string;
@@ -271,7 +272,7 @@ export interface UpdateUserGroupRoleDto {
 }
 
 export interface CreateGroupConnectorDto {
-  connector_id: string;
+  organization_connector_id: string; // ID of the organization connector
   authorized_endpoints?: string[];
   is_enabled?: boolean;
 }

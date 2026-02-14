@@ -121,7 +121,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
           try {
             const groupConnectorsData = await getGroupConnectors(selectedOrgId, group.id);
             const groupConnector = groupConnectorsData.connectors.find(
-              (gc) => gc.connector_id === connectorId
+              (gc) => gc.organization_connector_id === connectorId
             );
             return {
               group,
@@ -225,7 +225,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       await Promise.all(
         groupIds.map(groupId =>
           addConnectorToGroup(selectedOrgId, groupId, {
-            connector_id: connectorId,
+            organization_connector_id: connectorId,
             authorized_endpoints: authorizedEndpoints,
             is_enabled: true,
           })
@@ -342,7 +342,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     try {
       const groupConnectorsData = await getGroupConnectors(selectedOrgId, groupId);
       const groupConnector = groupConnectorsData.connectors.find(
-        (gc) => gc.connector_id === connectorId
+        (gc) => gc.organization_connector_id === connectorId
       );
 
       if (groupConnector) {

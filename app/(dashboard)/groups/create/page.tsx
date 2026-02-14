@@ -130,7 +130,7 @@ export default function CreateGroupPage() {
         await Promise.all(
           selectedConnectors.map(connectorId =>
             addConnectorToGroup(selectedOrgId, group.id, {
-              connector_id: connectorId,
+              organization_connector_id: connectorId,
               authorized_endpoints: [],
               is_enabled: true,
             })

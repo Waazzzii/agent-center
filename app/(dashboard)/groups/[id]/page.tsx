@@ -171,7 +171,11 @@ export default function GroupDetailPage({ params }: { params: Promise<{ id: stri
                 </TableHeader>
                 <TableBody>
                   {members.map((member) => (
-                    <TableRow key={member.id}>
+                    <TableRow
+                      key={member.id}
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => router.push(`/users/${member.id}`)}
+                    >
                       <TableCell>
                         <div>
                           <div className="font-medium">
@@ -184,7 +188,10 @@ export default function GroupDetailPage({ params }: { params: Promise<{ id: stri
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleRemoveMember(member.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveMember(member.id);
+                          }}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
@@ -229,7 +236,11 @@ export default function GroupDetailPage({ params }: { params: Promise<{ id: stri
                 </TableHeader>
                 <TableBody>
                   {connectors.map((connector) => (
-                    <TableRow key={connector.id}>
+                    <TableRow
+                      key={connector.id}
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => router.push(`/connectors/${connector.organization_connector_id}/edit`)}
+                    >
                       <TableCell className="font-medium">{connector.connector_name}</TableCell>
                       <TableCell>
                         {connector.is_enabled ? (
@@ -246,7 +257,10 @@ export default function GroupDetailPage({ params }: { params: Promise<{ id: stri
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleRemoveConnector(connector.connector_id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveConnector(connector.organization_connector_id);
+                          }}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>

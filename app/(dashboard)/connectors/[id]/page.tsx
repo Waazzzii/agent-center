@@ -58,7 +58,7 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
           try {
             const groupConnectorsData = await getGroupConnectors(selectedOrgId, group.id);
             const hasAccess = groupConnectorsData.connectors.some(
-              (gc) => gc.connector_id === connectorId
+              (gc) => gc.organization_connector_id === connectorId
             );
             return { ...group, hasAccess };
           } catch (error) {
@@ -215,7 +215,11 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
                 </TableHeader>
                 <TableBody>
                   {groupsWithAccess.map((group) => (
-                    <TableRow key={group.id}>
+                    <TableRow
+                      key={group.id}
+                      className="cursor-pointer hover:bg-muted/50"
+                      onClick={() => router.push(`/connectors/${connectorId}/edit`)}
+                    >
                       <TableCell className="font-medium">{group.name}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {group.description || '—'}
@@ -235,7 +239,10 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleRemoveGroup(group.id)}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleRemoveGroup(group.id);
+                          }}
                         >
                           <Trash2 className="h-4 w-4 text-destructive" />
                         </Button>
