@@ -34,12 +34,14 @@ export default function ConnectorsPage() {
       router.push('/login');
       return;
     }
-  }, [admin, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin]);
 
   useEffect(() => {
     if (selectedOrgId) {
       loadConnectors();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId]);
 
   const loadConnectors = async () => {

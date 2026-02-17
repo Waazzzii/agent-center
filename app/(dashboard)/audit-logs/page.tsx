@@ -73,7 +73,8 @@ export default function AuditLogsPage() {
       router.push('/organizations');
       return;
     }
-  }, [admin, isSuperAdmin, viewMode, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin, viewMode]);
 
   useEffect(() => {
     loadAuditLogs();

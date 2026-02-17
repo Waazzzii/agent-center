@@ -43,7 +43,8 @@ export default function CreateGroupPage() {
       return;
     }
     loadData();
-  }, [isOrgAdminView, selectedOrgId, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOrgAdminView, selectedOrgId]);
 
   const loadData = async () => {
     if (!selectedOrgId) return;

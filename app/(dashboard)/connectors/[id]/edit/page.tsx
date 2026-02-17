@@ -3,10 +3,10 @@
 import { use, useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { getConnector, updateConnector, deleteConnector } from '@/lib/api/connectors';
+import { getConnector, updateConnector, deleteConnector, getConnectorGroups } from '@/lib/api/connectors';
 import { getConnector as getBaseConnector } from '@/lib/api/connectors-base';
 import { getGroups } from '@/lib/api/groups';
-import { getGroupConnectors, addConnectorToGroup, updateGroupConnector, removeConnectorFromGroup } from '@/lib/api/group-connectors';
+import { addConnectorToGroup, updateGroupConnector, removeConnectorFromGroup } from '@/lib/api/group-connectors';
 import type { UpdateConnectorConfigDto, Group, Connector, OrganizationConnector } from '@/types/api.types';
 import { DynamicConnectorForm } from '@/components/dynamic-connector-form';
 import { EndpointSelectionModal } from '@/components/endpoint-selection-modal';
@@ -117,37 +117,22 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
 
       setAllGroups(allGroupsData.groups);
 
-      // Check which groups have access to this connector and fetch their endpoints
-      const groupAccessChecks = await Promise.all(
-        allGroupsData.groups.map(async (group) => {
-          try {
-            const groupConnectorsData = await getGroupConnectors(selectedOrgId, group.id);
-            const groupConnector = groupConnectorsData.connectors.find(
-              (gc) => gc.organization_connector_id === connectorId
-            );
-            return {
-              group,
-              hasAccess: !!groupConnector,
-              endpoints: groupConnector?.authorized_endpoints || [],
-            };
-          } catch {
-            return { group, hasAccess: false, endpoints: [] };
-          }
-        })
-      );
+      // Efficiently get groups with access to this connector (single API call)
+      const groupsWithAccessData = await getConnectorGroups(selectedOrgId, connectorId);
 
-      const groupsWithAccessList = groupAccessChecks
-        .filter((item) => item.hasAccess)
-        .map((item) => item.group);
-      setGroupsWithAccess(groupsWithAccessList);
-
-      // Store endpoints for each group
+      // Convert to Group format and store endpoints
+      const groupsWithAccessList: Group[] = [];
       const endpointsMap: Record<string, string[]> = {};
-      groupAccessChecks.forEach((item) => {
-        if (item.hasAccess) {
-          endpointsMap[item.group.id] = item.endpoints;
+
+      groupsWithAccessData.groups.forEach((groupData: any) => {
+        const fullGroup = allGroupsData.groups.find(g => g.id === groupData.id);
+        if (fullGroup) {
+          groupsWithAccessList.push(fullGroup);
+          endpointsMap[groupData.id] = groupData.authorized_endpoints || [];
         }
       });
+
+      setGroupsWithAccess(groupsWithAccessList);
       setGroupEndpoints(endpointsMap);
     } catch (error: any) {
       toast.error(error.message || 'Failed to load connector');
@@ -356,23 +341,11 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   };
 
   const handleEditGroupEndpoints = async (groupId: string) => {
-    if (!selectedOrgId) return;
-
-    // Fetch current endpoints for this group
-    try {
-      const groupConnectorsData = await getGroupConnectors(selectedOrgId, groupId);
-      const groupConnector = groupConnectorsData.connectors.find(
-        (gc) => gc.organization_connector_id === connectorId
-      );
-
-      if (groupConnector) {
-        setEditingGroupId(groupId);
-        setEditingGroupEndpoints(groupConnector.authorized_endpoints || []);
-        setShowEndpointModal(true);
-      }
-    } catch (error: any) {
-      toast.error('Failed to load group endpoints');
-    }
+    // Use cached endpoints data instead of making another API call
+    const endpoints = groupEndpoints[groupId] || [];
+    setEditingGroupId(groupId);
+    setEditingGroupEndpoints(endpoints);
+    setShowEndpointModal(true);
   };
 
   const handleUpdateGroupEndpoints = async (groupId: string, authorizedEndpoints: string[]) => {
@@ -470,7 +443,15 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                     schema={baseConnector.configuration_schema}
                     initialValues={connector.configuration}
                     existingSecrets={connector.secret_info?.secret_fields || []}
-                    maskedSecrets={connector.secret_info?.masked_values || {}}
+                    maskedSecrets={
+                      // Extract masked values from configuration based on secret fields
+                      connector.secret_info?.secret_fields.reduce((acc, fieldKey) => {
+                        if (connector.configuration[fieldKey]) {
+                          acc[fieldKey] = connector.configuration[fieldKey];
+                        }
+                        return acc;
+                      }, {} as Record<string, string>) || {}
+                    }
                     onSubmit={async (config, secrets) => {
                       if (!selectedOrgId) return;
                       setLoading(true);

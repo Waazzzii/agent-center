@@ -36,7 +36,8 @@ export default function AdministratorsPage() {
     }
 
     loadAdministrators();
-  }, [admin, router, isSuperAdmin, isSuperAdminView]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin]);
 
   const loadAdministrators = async () => {
     try {

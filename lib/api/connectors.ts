@@ -50,3 +50,10 @@ export async function updateConnector(
 export async function deleteConnector(orgId: string, connectorId: string) {
   await apiClient.delete(`/admin/organizations/${orgId}/connectors/${connectorId}`);
 }
+
+export async function getConnectorGroups(orgId: string, connectorId: string) {
+  const response = await apiClient.get<{ groups: any[]; total: number }>(
+    `/admin/organizations/${orgId}/connectors/${connectorId}/groups`
+  );
+  return response.data;
+}

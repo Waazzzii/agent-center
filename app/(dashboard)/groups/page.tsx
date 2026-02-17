@@ -35,7 +35,8 @@ export default function GroupsPage() {
       router.push('/login');
       return;
     }
-  }, [admin, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin]);
 
   useEffect(() => {
     if (selectedOrgId) {

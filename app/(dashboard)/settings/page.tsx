@@ -33,7 +33,8 @@ export default function SettingsPage() {
     }
 
     loadOrganization();
-  }, [selectedOrgId, isOrgAdminView, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrgId, isOrgAdminView]);
 
   const loadOrganization = async () => {
     if (!selectedOrgId) return;

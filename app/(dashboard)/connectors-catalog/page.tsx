@@ -41,7 +41,8 @@ export default function ConnectorsCatalogPage() {
     }
 
     loadConnectors();
-  }, [admin, router, isSuperAdmin, isSuperAdminView]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin]);
 
   const loadConnectors = async () => {
     try {

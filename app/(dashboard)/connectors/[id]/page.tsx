@@ -3,9 +3,8 @@
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { getConnector, deleteConnector } from '@/lib/api/connectors';
-import { getGroups } from '@/lib/api/groups';
-import { getGroupConnectors, removeConnectorFromGroup } from '@/lib/api/group-connectors';
+import { getConnector, deleteConnector, getConnectorGroups } from '@/lib/api/connectors';
+import { removeConnectorFromGroup } from '@/lib/api/group-connectors';
 import type { Group, OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,8 +20,15 @@ import { ArrowLeft, Pencil, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
-interface GroupWithConnectorAccess extends Group {
-  hasAccess: boolean;
+interface GroupWithConnectorAccess {
+  id: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  authorized_endpoints: string[];
+  connector_enabled: boolean;
 }
 
 export default function ConnectorDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -49,27 +55,14 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
     try {
       setLoading(true);
 
-      // Load connector details
-      const connectorData = await getConnector(selectedOrgId, connectorId);
+      // Load connector details and groups with access in parallel
+      const [connectorData, groupsData] = await Promise.all([
+        getConnector(selectedOrgId, connectorId),
+        getConnectorGroups(selectedOrgId, connectorId),
+      ]);
+
       setConnector(connectorData);
-
-      // Load all groups and check which have access to this connector
-      const groupsData = await getGroups(selectedOrgId);
-      const groupsWithAccess: GroupWithConnectorAccess[] = await Promise.all(
-        groupsData.groups.map(async (group) => {
-          try {
-            const groupConnectorsData = await getGroupConnectors(selectedOrgId, group.id);
-            const hasAccess = groupConnectorsData.connectors.some(
-              (gc) => gc.organization_connector_id === connectorId
-            );
-            return { ...group, hasAccess };
-          } catch (error) {
-            return { ...group, hasAccess: false };
-          }
-        })
-      );
-
-      setGroups(groupsWithAccess);
+      setGroups(groupsData.groups);
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to load connector details';
       toast.error(errorMessage);
@@ -136,7 +129,7 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
     );
   }
 
-  const groupsWithAccess = groups.filter(g => g.hasAccess);
+  const groupsWithAccess = groups; // All groups returned from API already have access
 
   return (
     <div className="container mx-auto p-6">
@@ -238,7 +231,7 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
                     <TableRow
                       key={group.id}
                       className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => router.push(`/connectors/${connectorId}/edit`)}
+                      onClick={() => router.push(`/groups/${group.id}`)}
                     >
                       <TableCell className="font-medium">{group.name}</TableCell>
                       <TableCell className="text-muted-foreground">

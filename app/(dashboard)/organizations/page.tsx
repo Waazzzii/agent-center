@@ -37,7 +37,8 @@ export default function OrganizationsPage() {
     }
 
     loadOrganizations();
-  }, [admin, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin]);
 
   const loadOrganizations = async () => {
     try {

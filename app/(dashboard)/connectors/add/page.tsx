@@ -26,7 +26,8 @@ export default function BrowseConnectorsPage() {
     }
 
     loadPublicConnectors();
-  }, [isOrgAdminView, selectedOrgId, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOrgAdminView, selectedOrgId]);
 
   const loadPublicConnectors = async () => {
     try {

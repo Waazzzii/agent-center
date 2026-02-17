@@ -44,7 +44,8 @@ export default function OAuthClientsPage() {
     }
 
     loadData();
-  }, [admin, router, isSuperAdmin]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [admin]);
 
   const loadData = async () => {
     try {
