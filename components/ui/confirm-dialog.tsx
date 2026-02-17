@@ -92,7 +92,7 @@ const ConfirmDialogContext = React.createContext<ConfirmDialogContextValue | nul
 export function ConfirmDialogProvider({ children }: { children: React.ReactNode }) {
   const [open, setOpen] = React.useState(false);
   const [options, setOptions] = React.useState<UseConfirmDialogOptions>({});
-  const resolveRef = React.useRef<(value: boolean) => void>();
+  const resolveRef = React.useRef<((value: boolean) => void) | null>(null);
 
   const confirm = React.useCallback((opts: UseConfirmDialogOptions = {}) => {
     setOptions(opts);
