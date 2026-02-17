@@ -18,11 +18,13 @@ import {
 } from '@/components/ui/table';
 import { Trash2, Plus, Pencil } from 'lucide-react';
 import { CreateUserModal } from '@/components/users/create-user-modal';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function UsersPage() {
   const router = useRouter();
   const { admin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +60,16 @@ export default function UsersPage() {
 
   const handleDelete = async (userId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to delete this user?')) return;
+
+    const confirmed = await confirm({
+      title: 'Delete User',
+      description: 'Are you sure you want to delete this user? This action cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteUser(selectedOrgId, userId);

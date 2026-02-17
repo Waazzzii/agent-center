@@ -37,6 +37,7 @@ import { useUIStore } from '@/stores/ui.store';
 import { logout } from '@/lib/auth/oauth';
 import { getOrganizations } from '@/lib/api/organizations';
 import type { Organization } from '@/types/api.types';
+import { Logo } from '@/components/ui/logo';
 
 interface NavItem {
   label: string;
@@ -190,20 +191,9 @@ export function ViewModeSidebar() {
         <div className="flex h-full flex-col">
           {/* Header */}
           <div className="flex h-16 items-center justify-center border-b px-6">
-            <div className="flex items-center gap-2">
-              <div
-                className={cn(
-                  'flex h-8 w-8 items-center justify-center rounded-lg text-primary-foreground',
-                  viewMode === 'super_admin' ? 'bg-primary' : 'bg-secondary'
-                )}
-              >
-                {viewMode === 'super_admin' ? (
-                  <Shield className="h-5 w-5" />
-                ) : (
-                  <Building2 className="h-5 w-5" />
-                )}
-              </div>
-              <h1 className="text-lg font-semibold">Wazzi Admin</h1>
+            <div className="flex items-center gap-3">
+              <Logo size="md" />
+              <h1 className="text-lg font-semibold">Wazzi</h1>
             </div>
           </div>
 

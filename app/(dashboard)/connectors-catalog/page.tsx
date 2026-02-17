@@ -18,11 +18,13 @@ import {
 } from '@/components/ui/table';
 import { Plus, Edit, Trash2, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function ConnectorsCatalogPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
   const { isSuperAdminView } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [connectors, setConnectors] = useState<Connector[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,9 +57,15 @@ export default function ConnectorsCatalogPage() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete "${name}"? This action cannot be undone.`)) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: 'Delete Connector',
+      description: `Are you sure you want to delete "${name}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteConnector(id);

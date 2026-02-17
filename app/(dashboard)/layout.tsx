@@ -8,6 +8,7 @@ import { AdminRole } from '@/types/api.types';
 import { ViewModeSidebar } from '@/components/layout/ViewModeSidebar';
 import { ViewSwitcher } from '@/components/layout/ViewSwitcher';
 import { getOrganizations } from '@/lib/api/organizations';
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 
 export default function DashboardLayout({
   children,
@@ -68,14 +69,16 @@ export default function DashboardLayout({
   }
 
   return (
-    <div className="flex h-screen overflow-hidden">
-      <ViewModeSidebar />
-      <div className="flex-1 flex flex-col overflow-hidden md:ml-64">
-        <ViewSwitcher />
-        <main className="flex-1 overflow-y-auto bg-background p-6">
-          {children}
-        </main>
+    <ConfirmDialogProvider>
+      <div className="flex h-screen overflow-hidden">
+        <ViewModeSidebar />
+        <div className="flex-1 flex flex-col overflow-hidden md:ml-64">
+          <ViewSwitcher />
+          <main className="flex-1 overflow-y-auto bg-background p-6">
+            {children}
+          </main>
+        </div>
       </div>
-    </div>
+    </ConfirmDialogProvider>
   );
 }

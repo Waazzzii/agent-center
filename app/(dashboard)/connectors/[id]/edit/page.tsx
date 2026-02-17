@@ -33,11 +33,13 @@ import {
 } from '@/components/ui/table';
 import { ArrowLeft, Trash2, Users, Search, Plus, CheckSquare, Square, Settings } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function EditConnectorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: connectorId } = use(params);
   const router = useRouter();
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [connector, setConnector] = useState<OrganizationConnector | null>(null);
@@ -207,7 +209,16 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
 
   const handleRemoveGroup = async (groupId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to remove this group\'s access to the connector?')) return;
+
+    const confirmed = await confirm({
+      title: 'Remove Group Access',
+      description: 'Are you sure you want to remove this group\'s access to the connector?',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await removeConnectorFromGroup(selectedOrgId, groupId, connectorId);
@@ -242,7 +253,16 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
 
   const handleDeleteConnector = async () => {
     if (!selectedOrgId || !connectorInfo) return;
-    if (!confirm(`Are you sure you want to delete this connector? This action cannot be undone.`)) return;
+
+    const confirmed = await confirm({
+      title: 'Delete Connector',
+      description: 'Are you sure you want to delete this connector? This action cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteConnector(selectedOrgId, connectorId);
@@ -371,7 +391,16 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
 
   const handleBulkRemoveGroups = async () => {
     if (selectedMemberIds.length === 0) return;
-    if (!confirm(`Are you sure you want to remove access for ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}?`)) return;
+
+    const confirmed = await confirm({
+      title: 'Remove Group Access',
+      description: `Are you sure you want to remove access for ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}?`,
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     if (!selectedOrgId) return;
     try {

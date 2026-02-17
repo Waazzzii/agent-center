@@ -30,11 +30,13 @@ import {
 } from '@/components/ui/table';
 import { ArrowLeft, Trash2, Search, Plus, CheckSquare, Square } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function EditUserPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: userId } = use(params);
   const router = useRouter();
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
@@ -146,7 +148,16 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
 
   const handleRemoveGroup = async (groupId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to remove this user from the group?')) return;
+
+    const confirmed = await confirm({
+      title: 'Remove from Group',
+      description: 'Are you sure you want to remove this user from the group?',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await removeUserFromGroup(selectedOrgId, userId, groupId);
@@ -160,7 +171,16 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
 
   const handleDeleteUser = async () => {
     if (!selectedOrgId || !user) return;
-    if (!confirm(`Are you sure you want to delete user "${user.email}"? This action cannot be undone.`)) return;
+
+    const confirmed = await confirm({
+      title: 'Delete User',
+      description: `Are you sure you want to delete user "${user.email}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteUser(selectedOrgId, userId);
@@ -239,7 +259,16 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
 
   const handleBulkRemove = async () => {
     if (selectedMemberIds.length === 0) return;
-    if (!confirm(`Are you sure you want to remove this user from ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}?`)) return;
+
+    const confirmed = await confirm({
+      title: 'Remove from Groups',
+      description: `Are you sure you want to remove this user from ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}?`,
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     if (!selectedOrgId) return;
     try {

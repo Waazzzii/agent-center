@@ -20,11 +20,13 @@ import {
 } from '@/components/ui/table';
 import { ArrowLeft, Pencil, Trash2, UserPlus, Cable } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function GroupDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: groupId } = use(params);
   const router = useRouter();
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [group, setGroup] = useState<Group | null>(null);
   const [members, setMembers] = useState<UserMembership[]>([]);
   const [connectors, setConnectors] = useState<GroupConnector[]>([]);
@@ -63,7 +65,16 @@ export default function GroupDetailPage({ params }: { params: Promise<{ id: stri
 
   const handleRemoveMember = async (userId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to remove this user from the group?')) return;
+
+    const confirmed = await confirm({
+      title: 'Remove User',
+      description: 'Are you sure you want to remove this user from the group?',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await removeUserFromGroup(selectedOrgId, userId, groupId);
@@ -77,7 +88,16 @@ export default function GroupDetailPage({ params }: { params: Promise<{ id: stri
 
   const handleRemoveConnector = async (connectorId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to remove this connector from the group?')) return;
+
+    const confirmed = await confirm({
+      title: 'Remove Connector',
+      description: 'Are you sure you want to remove this connector from the group?',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await removeConnectorFromGroup(selectedOrgId, groupId, connectorId);
@@ -91,7 +111,16 @@ export default function GroupDetailPage({ params }: { params: Promise<{ id: stri
 
   const handleDeleteGroup = async () => {
     if (!selectedOrgId) return;
-    if (!confirm(`Are you sure you want to delete the group "${group?.name}"? This action cannot be undone.`)) return;
+
+    const confirmed = await confirm({
+      title: 'Delete Group',
+      description: `Are you sure you want to delete the group "${group?.name}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteGroup(selectedOrgId, groupId);

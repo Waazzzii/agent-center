@@ -19,11 +19,13 @@ import {
 import { Building2, Plus, Settings, Edit, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { deleteOrganization } from '@/lib/api/organizations';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function OrganizationsPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
   const { switchToOrgAdminView, isSuperAdminView } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -55,9 +57,15 @@ export default function OrganizationsPage() {
   };
 
   const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete "${name}"? This action cannot be undone.`)) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: 'Delete Organization',
+      description: `Are you sure you want to delete "${name}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteOrganization(id);

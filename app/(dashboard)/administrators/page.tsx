@@ -18,11 +18,13 @@ import {
 } from '@/components/ui/table';
 import { Plus, Shield, Trash2, Edit } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function AdministratorsPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
   const { isSuperAdminView } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [administrators, setAdministrators] = useState<Administrator[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -51,7 +53,15 @@ export default function AdministratorsPage() {
   };
 
   const handleDelete = async (adminId: string, email: string) => {
-    if (!confirm(`Are you sure you want to delete administrator "${email}"? This action cannot be undone.`)) return;
+    const confirmed = await confirm({
+      title: 'Delete Administrator',
+      description: `Are you sure you want to delete administrator "${email}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteAdministrator(adminId);

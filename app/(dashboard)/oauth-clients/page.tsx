@@ -20,10 +20,12 @@ import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Trash2, Plus, Edit, Info } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function OAuthClientsPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
+  const { confirm } = useConfirmDialog();
   const [clients, setClients] = useState<OAuthClient[]>([]);
   const [organizations, setOrganizations] = useState<Map<string, Organization>>(new Map());
   const [loading, setLoading] = useState(true);
@@ -71,7 +73,15 @@ export default function OAuthClientsPage() {
   };
 
   const handleDelete = async (clientId: string, name: string) => {
-    if (!confirm(`Are you sure you want to delete the OAuth client "${name}"? This action cannot be undone.`)) return;
+    const confirmed = await confirm({
+      title: 'Delete OAuth Client',
+      description: `Are you sure you want to delete the OAuth client "${name}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteOAuthClient(clientId);

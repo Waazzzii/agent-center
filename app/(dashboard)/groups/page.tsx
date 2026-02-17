@@ -18,11 +18,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { Trash2, Plus, Pencil } from 'lucide-react';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function GroupsPage() {
   const router = useRouter();
   const { admin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [groups, setGroups] = useState<Group[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +60,16 @@ export default function GroupsPage() {
 
   const handleDelete = async (groupId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to delete this group?')) return;
+
+    const confirmed = await confirm({
+      title: 'Delete Group',
+      description: 'Are you sure you want to delete this group? This action cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteGroup(selectedOrgId, groupId);

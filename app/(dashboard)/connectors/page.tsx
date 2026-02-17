@@ -18,11 +18,13 @@ import {
 } from '@/components/ui/table';
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus, Pencil } from 'lucide-react';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function ConnectorsPage() {
   const router = useRouter();
   const { admin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [connectors, setConnectors] = useState<OrganizationConnector[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -57,7 +59,16 @@ export default function ConnectorsPage() {
 
   const handleDelete = async (connectorId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to delete this connector?')) return;
+
+    const confirmed = await confirm({
+      title: 'Delete Connector',
+      description: 'Are you sure you want to delete this connector? This action cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteConnector(selectedOrgId, connectorId);

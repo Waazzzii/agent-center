@@ -14,8 +14,19 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Wazzi Admin Dashboard",
-  description: "Manage organizations, connectors, users, and OAuth clients",
+  title: {
+    default: "Wazzi",
+    template: "%s | Wazzi",
+  },
+  description: "Wazzi Admin Dashboard - Manage organizations, connectors, users, and OAuth clients",
+  applicationName: "Wazzi",
+  icons: {
+    icon: [
+      { url: '/favicon.svg', type: 'image/svg+xml' },
+      { url: '/favicon.ico', sizes: '32x32' },
+    ],
+    apple: '/apple-icon',
+  },
 };
 
 export default function RootLayout({

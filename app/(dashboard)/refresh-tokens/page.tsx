@@ -28,10 +28,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Badge } from '@/components/ui/badge';
 import { Trash2, RefreshCw, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function RefreshTokensPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
+  const { confirm } = useConfirmDialog();
   const [tokens, setTokens] = useState<RefreshToken[]>([]);
   const [stats, setStats] = useState<RefreshTokenStats | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,9 +91,15 @@ export default function RefreshTokensPage() {
   };
 
   const handleRevoke = async (id: string, userEmail: string) => {
-    if (!confirm(`Are you sure you want to revoke this refresh token for ${userEmail}?`)) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: 'Revoke Refresh Token',
+      description: `Are you sure you want to revoke this refresh token for ${userEmail}?`,
+      confirmText: 'Revoke',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await revokeRefreshToken(id, { reason: 'Manually revoked by admin' });
@@ -103,9 +111,15 @@ export default function RefreshTokensPage() {
   };
 
   const handleRevokeAllUser = async (userEmail: string) => {
-    if (!confirm(`Are you sure you want to revoke ALL tokens for ${userEmail}? This will log them out of all sessions.`)) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: 'Revoke All User Tokens',
+      description: `Are you sure you want to revoke ALL tokens for ${userEmail}? This will log them out of all sessions.`,
+      confirmText: 'Revoke All',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       const result = await revokeAllUserTokens(userEmail, { reason: 'All tokens revoked by admin' });
@@ -117,9 +131,15 @@ export default function RefreshTokensPage() {
   };
 
   const handleCleanupExpired = async () => {
-    if (!confirm('Are you sure you want to cleanup all expired tokens? This action cannot be undone.')) {
-      return;
-    }
+    const confirmed = await confirm({
+      title: 'Cleanup Expired Tokens',
+      description: 'Are you sure you want to cleanup all expired tokens? This action cannot be undone.',
+      confirmText: 'Cleanup',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       const result = await cleanupExpiredTokens();

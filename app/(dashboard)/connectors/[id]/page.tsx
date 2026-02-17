@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/table';
 import { ArrowLeft, Pencil, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 interface GroupWithConnectorAccess extends Group {
   hasAccess: boolean;
@@ -28,6 +29,7 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
   const { id: connectorId } = use(params);
   const router = useRouter();
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [connector, setConnector] = useState<OrganizationConnector | null>(null);
   const [groups, setGroups] = useState<GroupWithConnectorAccess[]>([]);
   const [loading, setLoading] = useState(true);
@@ -79,7 +81,16 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
 
   const handleRemoveGroup = async (groupId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to remove this group\'s access to the connector?')) return;
+
+    const confirmed = await confirm({
+      title: 'Remove Group Access',
+      description: 'Are you sure you want to remove this group\'s access to the connector?',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await removeConnectorFromGroup(selectedOrgId, groupId, connectorId);
@@ -93,7 +104,16 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
 
   const handleDeleteConnector = async () => {
     if (!selectedOrgId) return;
-    if (!confirm(`Are you sure you want to delete this connector? This action cannot be undone.`)) return;
+
+    const confirmed = await confirm({
+      title: 'Delete Connector',
+      description: 'Are you sure you want to delete this connector? This action cannot be undone.',
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteConnector(selectedOrgId, connectorId);

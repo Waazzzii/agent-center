@@ -35,11 +35,13 @@ import {
 import { ArrowLeft, Trash2, Search, Plus, CheckSquare, Square, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import { EndpointSelectionModal } from '@/components/endpoint-selection-modal';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 export default function EditGroupPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: groupId } = use(params);
   const router = useRouter();
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [group, setGroup] = useState<Group | null>(null);
@@ -203,7 +205,16 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
 
   const handleRemoveMember = async (userId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to remove this user from the group?')) return;
+
+    const confirmed = await confirm({
+      title: 'Remove User',
+      description: 'Are you sure you want to remove this user from the group?',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await removeUserFromGroup(selectedOrgId, userId, groupId);
@@ -238,7 +249,16 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
 
   const handleRemoveConnector = async (connectorId: string) => {
     if (!selectedOrgId) return;
-    if (!confirm('Are you sure you want to remove this connector from the group?')) return;
+
+    const confirmed = await confirm({
+      title: 'Remove Connector',
+      description: 'Are you sure you want to remove this connector from the group?',
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await removeConnectorFromGroup(selectedOrgId, groupId, connectorId);
@@ -351,7 +371,16 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
 
   const handleBulkRemoveMembers = async () => {
     if (selectedMemberIds.length === 0) return;
-    if (!confirm(`Are you sure you want to remove ${selectedMemberIds.length} user${selectedMemberIds.length !== 1 ? 's' : ''} from this group?`)) return;
+
+    const confirmed = await confirm({
+      title: 'Remove Users',
+      description: `Are you sure you want to remove ${selectedMemberIds.length} user${selectedMemberIds.length !== 1 ? 's' : ''} from this group?`,
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     if (!selectedOrgId) return;
     try {
@@ -473,7 +502,16 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
 
   const handleBulkRemoveConnectors = async () => {
     if (selectedConnectorMemberIds.length === 0) return;
-    if (!confirm(`Are you sure you want to remove ${selectedConnectorMemberIds.length} connector${selectedConnectorMemberIds.length !== 1 ? 's' : ''} from this group?`)) return;
+
+    const confirmed = await confirm({
+      title: 'Remove Connectors',
+      description: `Are you sure you want to remove ${selectedConnectorMemberIds.length} connector${selectedConnectorMemberIds.length !== 1 ? 's' : ''} from this group?`,
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     if (!selectedOrgId) return;
     try {
@@ -489,7 +527,16 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
 
   const handleDeleteGroup = async () => {
     if (!selectedOrgId || !group) return;
-    if (!confirm(`Are you sure you want to delete the group "${group.name}"? This action cannot be undone.`)) return;
+
+    const confirmed = await confirm({
+      title: 'Delete Group',
+      description: `Are you sure you want to delete the group "${group.name}"? This action cannot be undone.`,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+
+    if (!confirmed) return;
 
     try {
       await deleteGroup(selectedOrgId, groupId);
@@ -996,7 +1043,7 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
                         <TableRow
                           key={connector.id}
                           className="cursor-pointer hover:bg-muted/50"
-                          onClick={() => handleEditConnectorEndpoints(connector.connector_id)}
+                          onClick={() => handleEditConnectorEndpoints(connector.organization_connector_id)}
                         >
                           <TableCell onClick={(e) => e.stopPropagation()}>
                             <Checkbox
