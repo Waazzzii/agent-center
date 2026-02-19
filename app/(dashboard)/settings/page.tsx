@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Settings as SettingsIcon, Building2, CreditCard, BarChart3, AlertCircle } from 'lucide-react';
+import { Building2, CreditCard, BarChart3, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -147,7 +147,7 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue="organization" className="w-full">
-        <TabsList className="grid w-full max-w-md grid-cols-3">
+        <TabsList className="grid w-full max-w-2xl grid-cols-3">
           <TabsTrigger value="organization">
             <Building2 className="h-4 w-4 mr-2" />
             Organization

@@ -335,3 +335,79 @@ export interface APIError {
   message: string;
   details?: any;
 }
+
+// ============================================================================
+// Knowledge Base settings — mirrors the `kb` table (one instance per org)
+// ============================================================================
+
+export type DomainProvisioningStatus = 'verifying' | 'active' | 'failed';
+
+/** Provider-agnostic provisioning config stored in kb.auto_domain_config / custom_domain_config */
+export interface DomainConfig {
+  status?: DomainProvisioningStatus;
+  status_updated_at?: string;
+  vercel?: {
+    registered: boolean;
+    registered_at?: string;
+    data?: Record<string, unknown>;
+  };
+  dns?: {
+    provider: 'cloudflare' | 'manual';
+    record_id?: string;
+    cname_active: boolean;
+    provisioned_at?: string;
+  };
+}
+
+export interface KbOrgSettings {
+  id: string;
+  organization_id: string;
+  is_enabled: boolean;
+  /** Auto-generated: "{org_slug}-kb.wazzi.io" — always available, never removed */
+  auto_domain: string;
+  /** Optional custom domain entered by the org admin */
+  custom_domain: string | null;
+  /** Provisioning state for the auto-assigned domain */
+  auto_domain_config: DomainConfig;
+  /** Provisioning state for the custom domain (DNS is user-managed) */
+  custom_domain_config: DomainConfig;
+  /** Which of the 4 standard portals are enabled for this KB instance */
+  vendor_enabled: boolean;
+  internal_enabled: boolean;
+  owner_enabled: boolean;
+  guest_enabled: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/** Shape returned by POST /provision-domain */
+export interface ProvisionDomainResult {
+  domain: string;
+  domain_type: 'wazzi' | 'custom';
+  cname_target: string;
+  dns_instructions: {
+    type: 'CNAME';
+    name: string;
+    value: string;
+    auto_provisioned: boolean;
+    note: string;
+  };
+  provisioning: {
+    vercel: { registered: boolean; error?: string };
+    dns?: { cname_active: boolean; record_id?: string; error?: string };
+  };
+  vercel_status: Record<string, unknown> | null;
+  settings: KbOrgSettings;
+}
+
+/** Live Vercel domain verification status (returned alongside settings) */
+export interface VercelDomainStatus {
+  name: string;
+  verified: boolean;
+  verification?: Array<{
+    type: string;
+    domain: string;
+    value: string;
+    reason: string;
+  }>;
+}
