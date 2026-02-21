@@ -500,72 +500,82 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
               ) : (
                 // Fallback to JSON textarea if no schema exists
                 <form onSubmit={handleSubmit} className="space-y-6">
-                  <div className="space-y-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="configuration">Configuration (JSON)</Label>
-                      <Textarea
-                        id="configuration"
-                        value={formData.configuration}
-                        onChange={(e) => setFormData({ ...formData, configuration: e.target.value })}
-                        placeholder='{"api_url": "https://api.example.com", "timeout": 30}'
-                        rows={10}
-                        className="font-mono text-sm"
-                      />
+                  {(() => {
+                    const hasExistingConfig = Object.keys(connector?.configuration || {}).length > 0;
+                    const hasExistingSecrets = (connector?.secret_info?.secret_fields || []).length > 0;
+                    return (
+                      <div className="space-y-4">
+                        {hasExistingConfig && (
+                          <div className="space-y-2">
+                            <Label htmlFor="configuration">Configuration (JSON)</Label>
+                            <Textarea
+                              id="configuration"
+                              value={formData.configuration}
+                              onChange={(e) => setFormData({ ...formData, configuration: e.target.value })}
+                              placeholder='{"api_url": "https://api.example.com", "timeout": 30}'
+                              rows={10}
+                              className="font-mono text-sm"
+                            />
+                            <p className="text-sm text-muted-foreground">
+                              Custom configuration as JSON object
+                            </p>
+                          </div>
+                        )}
+
+                        {hasExistingSecrets && (
+                          <div className="space-y-2">
+                            <div className="flex items-center justify-between mb-2">
+                              <Label htmlFor="secrets">Secrets (JSON)</Label>
+                              <div className="flex items-center gap-2">
+                                <Label htmlFor="updateSecrets" className="text-sm font-normal cursor-pointer">
+                                  Update secrets
+                                </Label>
+                                <Switch
+                                  id="updateSecrets"
+                                  checked={formData.updateSecrets}
+                                  onCheckedChange={(checked) => setFormData({ ...formData, updateSecrets: checked })}
+                                />
+                              </div>
+                            </div>
+                            {formData.updateSecrets ? (
+                              <>
+                                <Textarea
+                                  id="secrets"
+                                  value={formData.secrets}
+                                  onChange={(e) => setFormData({ ...formData, secrets: e.target.value })}
+                                  placeholder='{"api_key": "your-key", "api_secret": "your-secret"}'
+                                  rows={8}
+                                  className="font-mono text-sm"
+                                />
+                                <p className="text-sm text-muted-foreground">
+                                  Enter new secrets as JSON object (will be encrypted)
+                                </p>
+                              </>
+                            ) : (
+                              <div className="rounded-lg border p-4 bg-muted/50">
+                                <p className="text-sm text-muted-foreground">
+                                  Secrets are hidden for security. Toggle "Update secrets" to change them.
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  <div className="flex items-center justify-between rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                      <Label htmlFor="is_enabled" className="text-base">Enable Connector</Label>
                       <p className="text-sm text-muted-foreground">
-                        Custom configuration as JSON object
+                        Connector will be active and ready to use
                       </p>
                     </div>
-
-                    <div className="space-y-2">
-                      <div className="flex items-center justify-between mb-2">
-                        <Label htmlFor="secrets">Secrets (JSON)</Label>
-                        <div className="flex items-center gap-2">
-                          <Label htmlFor="updateSecrets" className="text-sm font-normal cursor-pointer">
-                            Update secrets
-                          </Label>
-                          <Switch
-                            id="updateSecrets"
-                            checked={formData.updateSecrets}
-                            onCheckedChange={(checked) => setFormData({ ...formData, updateSecrets: checked })}
-                          />
-                        </div>
-                      </div>
-                      {formData.updateSecrets ? (
-                        <>
-                          <Textarea
-                            id="secrets"
-                            value={formData.secrets}
-                            onChange={(e) => setFormData({ ...formData, secrets: e.target.value })}
-                            placeholder='{"api_key": "your-key", "api_secret": "your-secret"}'
-                            rows={8}
-                            className="font-mono text-sm"
-                          />
-                          <p className="text-sm text-muted-foreground">
-                            Enter new secrets as JSON object (will be encrypted)
-                          </p>
-                        </>
-                      ) : (
-                        <div className="rounded-lg border p-4 bg-muted/50">
-                          <p className="text-sm text-muted-foreground">
-                            Secrets are hidden for security. Toggle "Update secrets" to change them.
-                          </p>
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="flex items-center justify-between rounded-lg border p-4">
-                      <div className="space-y-0.5">
-                        <Label htmlFor="is_enabled" className="text-base">Enable Connector</Label>
-                        <p className="text-sm text-muted-foreground">
-                          Connector will be active and ready to use
-                        </p>
-                      </div>
-                      <Switch
-                        id="is_enabled"
-                        checked={formData.is_enabled}
-                        onCheckedChange={(checked) => setFormData({ ...formData, is_enabled: checked })}
-                      />
-                    </div>
+                    <Switch
+                      id="is_enabled"
+                      checked={formData.is_enabled}
+                      onCheckedChange={(checked) => setFormData({ ...formData, is_enabled: checked })}
+                    />
                   </div>
 
                   <div className="flex gap-4">

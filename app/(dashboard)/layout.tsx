@@ -24,7 +24,10 @@ export default function DashboardLayout({
   useEffect(() => {
     // Check auth on mount
     if (!admin) {
-      // Use replace to prevent adding to history stack
+      // Persist the intended destination so the callback can redirect there after login
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('post_login_redirect', pathname);
+      }
       router.replace('/login');
       return;
     }
@@ -33,15 +36,17 @@ export default function DashboardLayout({
     const autoSelectOrganization = async () => {
       // Only auto-select if user is NOT a super admin and no organization is currently selected
       if (!isSuperAdmin() && !selectedOrgId) {
+        setIsChecking(true); // Prevent org-scoped pages from rendering during auto-select
         try {
           const { organizations } = await getOrganizations();
           if (organizations.length > 0) {
             const firstOrg = organizations[0];
             switchToOrgAdminView(firstOrg.id, firstOrg.name);
-            // Always redirect regular admins to /users page
+            // If the user is on a super-admin-only or root page, redirect to the org default
             if (pathname === '/organizations' || pathname === '/') {
               router.replace('/users');
             }
+            // Otherwise leave them on their intended page
           } else {
             // No organizations assigned - stay on current page but show message
             console.warn('No organizations assigned to this administrator');

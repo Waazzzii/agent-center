@@ -18,7 +18,8 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BookOpen, Copy, Check, Globe, ExternalLink, AlertCircle, Settings, Palette, Upload } from 'lucide-react';
+import { BookOpen, Copy, Check, Globe, ExternalLink, AlertCircle, Settings, Palette, Upload, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -26,6 +27,32 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 
 const POLL_INTERVAL_MS = 30_000;      // 30 seconds between reachability checks
 const MAX_VERIFY_MS    = 30 * 60_000; // 30 minutes before declaring failure
+
+const KB_CSS_VARIABLES = [
+  { name: '--background',       description: 'Page background' },
+  { name: '--foreground',       description: 'Primary text' },
+  { name: '--card',             description: 'Card surfaces' },
+  { name: '--primary',          description: 'Brand / links' },
+  { name: '--primary-foreground', description: 'Text on primary' },
+  { name: '--secondary',        description: 'Secondary surfaces' },
+  { name: '--muted',            description: 'Subtle backgrounds' },
+  { name: '--muted-foreground', description: 'Subdued text' },
+  { name: '--accent',           description: 'Accent / highlights' },
+  { name: '--border',           description: 'Borders & dividers' },
+  { name: '--radius',           description: 'Corner radius' },
+] as const;
+
+const KB_THEME_EXAMPLE = `:root {
+  --primary: #7c3aed;
+  --primary-foreground: #ffffff;
+  --accent: #f59e0b;
+  --radius: 0.75rem;
+}
+
+.dark {
+  --primary: #a78bfa;
+  --primary-foreground: #0d0d0d;
+}`;
 
 // ── Domain status badge ───────────────────────────────────────────────────────
 
@@ -70,8 +97,11 @@ export default function KnowledgeBasePage() {
   const [copiedDomain, setCopiedDomain]           = useState<string | null>(null);
 
   // Theme tab state
-  const [kbNameInput, setKbNameInput]   = useState('');
-  const [kbNameSaving, setKbNameSaving] = useState(false);
+  const [kbNameInput, setKbNameInput]       = useState('');
+  const [customThemeInput, setCustomThemeInput] = useState('');
+  const [themeTabSaving, setThemeTabSaving] = useState(false);
+  const [themeTabSaved, setThemeTabSaved]   = useState(false);
+  const [showVarsRef, setShowVarsRef]       = useState(false);
 
   // Local domain status — "issuing" exists only in-flight and is never persisted
   const [autoDomainStatus, setAutoDomainStatus]     = useState<DomainProvisioningStatus | 'issuing' | null>(null);
@@ -143,6 +173,7 @@ export default function KnowledgeBasePage() {
       setKbSettings(data.settings);
       setCustomDomainInput(data.settings.custom_domain || '');
       setKbNameInput(data.settings.name || '');
+      setCustomThemeInput(data.settings.custom_theme || '');
 
       const autoStatus   = data.settings.auto_domain_config?.status   ?? null;
       const customStatus = data.settings.custom_domain_config?.status  ?? null;
@@ -195,7 +226,10 @@ export default function KnowledgeBasePage() {
 
       const data = await updateKbSettings(selectedOrgId, enablePayload);
       setKbSettings(data.settings);
-      if (enabled && data.settings.name) setKbNameInput(data.settings.name);
+      if (enabled && data.settings.name) {
+        setKbNameInput(data.settings.name);
+        setCustomThemeInput(data.settings.custom_theme || '');
+      }
 
       if (enabled) {
         const currentStatus = data.settings.auto_domain_config?.status;
@@ -284,17 +318,23 @@ export default function KnowledgeBasePage() {
     } catch { setAutoDomainStatus('failed'); }
   };
 
-  const handleSaveName = async () => {
+  const handleSaveThemeTab = async () => {
     if (!selectedOrgId) return;
     try {
-      setKbNameSaving(true);
-      const data = await updateKbSettings(selectedOrgId, { name: kbNameInput.trim() || null });
+      setThemeTabSaving(true);
+      setThemeTabSaved(false);
+      const data = await updateKbSettings(selectedOrgId, {
+        name: kbNameInput.trim() || null,
+        custom_theme: customThemeInput.trim() || null,
+      });
       setKbSettings(data.settings);
-      toast.success('Knowledge Base name saved');
+      setThemeTabSaved(true);
+      toast.success('Theme settings saved');
+      setTimeout(() => setThemeTabSaved(false), 3000);
     } catch (error: any) {
-      toast.error(error.response?.data?.message || error.message || 'Failed to save name');
+      toast.error(error.response?.data?.message || error.message || 'Failed to save theme settings');
     } finally {
-      setKbNameSaving(false);
+      setThemeTabSaving(false);
     }
   };
 
@@ -564,23 +604,15 @@ export default function KnowledgeBasePage() {
                   Set a display name shown to visitors of your Knowledge Base portal.
                 </CardDescription>
               </CardHeader>
-              <CardContent className="space-y-4">
+              <CardContent>
                 <div className="space-y-2">
                   <Label htmlFor="kb-name">Name</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      id="kb-name"
-                      placeholder={selectedOrgName || 'Knowledge Base'}
-                      value={kbNameInput}
-                      onChange={(e) => setKbNameInput(e.target.value)}
-                    />
-                    <Button
-                      onClick={handleSaveName}
-                      disabled={kbNameSaving || kbNameInput === (kbSettings?.name ?? '')}
-                    >
-                      {kbNameSaving ? 'Saving…' : 'Save'}
-                    </Button>
-                  </div>
+                  <Input
+                    id="kb-name"
+                    placeholder={selectedOrgName || 'Knowledge Base'}
+                    value={kbNameInput}
+                    onChange={(e) => setKbNameInput(e.target.value)}
+                  />
                   <p className="text-xs text-muted-foreground">
                     Defaults to your organization name if not set.
                   </p>
@@ -608,24 +640,84 @@ export default function KnowledgeBasePage() {
               </CardContent>
             </Card>
 
-            {/* Styling */}
+            {/* Custom Theme CSS */}
             <Card>
               <CardHeader>
-                <CardTitle>Styling</CardTitle>
+                <CardTitle>Custom Theme CSS</CardTitle>
                 <CardDescription>
-                  Customize the look and feel of your Knowledge Base.
+                  Override CSS variables to brand the public portal. Changes apply globally across all portal pages.
                 </CardDescription>
               </CardHeader>
-              <CardContent>
-                <div className="flex flex-col items-center justify-center py-12 text-center">
-                  <Palette className="h-12 w-12 text-muted-foreground mb-3" />
-                  <h3 className="text-base font-semibold">Coming soon</h3>
-                  <p className="text-sm text-muted-foreground mt-1 max-w-sm">
-                    Custom colors, fonts, and layout options will be available here.
-                  </p>
+              <CardContent className="space-y-4">
+                {/* Variable reference toggle */}
+                <button
+                  type="button"
+                  onClick={() => setShowVarsRef((v) => !v)}
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  {showVarsRef ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                  Available CSS variables
+                </button>
+
+                {showVarsRef && (
+                  <div className="rounded-lg border bg-muted/50 p-3">
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3">
+                      {KB_CSS_VARIABLES.map(({ name, description }) => (
+                        <div key={name} className="flex items-baseline gap-2 min-w-0">
+                          <code className="shrink-0 text-xs font-mono text-primary">{name}</code>
+                          <span className="truncate text-xs text-muted-foreground">{description}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Code editor */}
+                <div className="rounded-lg overflow-hidden border">
+                  <div className="flex items-center gap-1.5 bg-[#1a2332] border-b border-[#2a3a4e] px-3 py-2">
+                    <div className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
+                    <div className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
+                    <span className="ml-2 text-xs text-[#8a9bb0] font-mono">custom-theme.css</span>
+                  </div>
+                  <textarea
+                    value={customThemeInput}
+                    onChange={(e) => setCustomThemeInput(e.target.value)}
+                    placeholder={KB_THEME_EXAMPLE}
+                    spellCheck={false}
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    rows={14}
+                    className={cn(
+                      'w-full resize-none bg-[#0f1419] px-4 py-3 font-mono text-sm text-[#e8e8e8]',
+                      'placeholder:text-[#4a5a6e] focus:outline-none',
+                      'leading-relaxed tracking-wide'
+                    )}
+                  />
                 </div>
+
+                <p className="text-xs text-muted-foreground">
+                  Leave empty to use the default theme.
+                </p>
               </CardContent>
             </Card>
+
+            {/* Combined save */}
+            <div className="flex justify-end">
+              <Button
+                onClick={handleSaveThemeTab}
+                disabled={themeTabSaving}
+                className="gap-2 min-w-[140px]"
+              >
+                {themeTabSaving ? (
+                  <><Loader2 className="h-4 w-4 animate-spin" />Saving…</>
+                ) : themeTabSaved ? (
+                  <><Check className="h-4 w-4" />Saved</>
+                ) : (
+                  'Save Theme Settings'
+                )}
+              </Button>
+            </div>
 
           </TabsContent>
         </Tabs>
