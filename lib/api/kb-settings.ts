@@ -22,6 +22,7 @@ export async function updateKbSettings(
   orgId: string,
   data: {
     is_enabled?: boolean;
+    name?: string | null;
     custom_domain?: string | null;
     vendor_enabled?: boolean;
     internal_enabled?: boolean;

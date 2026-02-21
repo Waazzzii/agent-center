@@ -363,6 +363,8 @@ export interface KbOrgSettings {
   id: string;
   organization_id: string;
   is_enabled: boolean;
+  /** Display name shown to visitors — falls back to org name if not set */
+  name: string | null;
   /** Auto-generated: "{org_slug}-kb.wazzi.io" — always available, never removed */
   auto_domain: string;
   /** Optional custom domain entered by the org admin */
