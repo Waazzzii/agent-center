@@ -17,7 +17,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { BookOpen, Copy, Check, Globe, ExternalLink, AlertCircle } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { BookOpen, Copy, Check, Globe, ExternalLink, AlertCircle, Settings, Palette, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 
@@ -68,9 +69,13 @@ export default function KnowledgeBasePage() {
   const [customDomainInput, setCustomDomainInput] = useState('');
   const [copiedDomain, setCopiedDomain]           = useState<string | null>(null);
 
+  // Theme tab state
+  const [kbNameInput, setKbNameInput]   = useState('');
+  const [kbNameSaving, setKbNameSaving] = useState(false);
+
   // Local domain status — "issuing" exists only in-flight and is never persisted
-  const [autoDomainStatus, setAutoDomainStatus]         = useState<DomainProvisioningStatus | 'issuing' | null>(null);
-  const [customDomainStatus, setCustomDomainStatus]     = useState<DomainProvisioningStatus | 'issuing' | null>(null);
+  const [autoDomainStatus, setAutoDomainStatus]     = useState<DomainProvisioningStatus | 'issuing' | null>(null);
+  const [customDomainStatus, setCustomDomainStatus] = useState<DomainProvisioningStatus | 'issuing' | null>(null);
 
   // Last provision result — holds dns_instructions so the UI can display them
   const [lastProvision, setLastProvision] = useState<ProvisionDomainResult | null>(null);
@@ -137,6 +142,7 @@ export default function KnowledgeBasePage() {
       const data = await getKbSettings(selectedOrgId);
       setKbSettings(data.settings);
       setCustomDomainInput(data.settings.custom_domain || '');
+      setKbNameInput(data.settings.name || '');
 
       const autoStatus   = data.settings.auto_domain_config?.status   ?? null;
       const customStatus = data.settings.custom_domain_config?.status  ?? null;
@@ -176,8 +182,20 @@ export default function KnowledgeBasePage() {
     if (!selectedOrgId) return;
     try {
       setKbSaving(true);
-      const data = await updateKbSettings(selectedOrgId, { is_enabled: enabled });
+      const enablePayload = enabled ? {
+        is_enabled: true,
+        // Default name to the org name on first enable if not already set
+        ...(!kbSettings?.name && selectedOrgName ? { name: selectedOrgName } : {}),
+        // Default all portals on
+        vendor_enabled: true,
+        internal_enabled: true,
+        owner_enabled: true,
+        guest_enabled: true,
+      } : { is_enabled: false };
+
+      const data = await updateKbSettings(selectedOrgId, enablePayload);
       setKbSettings(data.settings);
+      if (enabled && data.settings.name) setKbNameInput(data.settings.name);
 
       if (enabled) {
         const currentStatus = data.settings.auto_domain_config?.status;
@@ -266,6 +284,20 @@ export default function KnowledgeBasePage() {
     } catch { setAutoDomainStatus('failed'); }
   };
 
+  const handleSaveName = async () => {
+    if (!selectedOrgId) return;
+    try {
+      setKbNameSaving(true);
+      const data = await updateKbSettings(selectedOrgId, { name: kbNameInput.trim() || null });
+      setKbSettings(data.settings);
+      toast.success('Knowledge Base name saved');
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || error.message || 'Failed to save name');
+    } finally {
+      setKbNameSaving(false);
+    }
+  };
+
   const copyToClipboard = async (text: string) => {
     await navigator.clipboard.writeText(text);
     setCopiedDomain(text);
@@ -274,12 +306,14 @@ export default function KnowledgeBasePage() {
 
   // ── Derived values ─────────────────────────────────────────────────────────
 
-  const isKbLive = kbSettings?.is_enabled && autoDomainStatus === 'active';
+  const isKbEnabled = kbSettings?.is_enabled ?? false;
+  const isKbLive    = isKbEnabled && autoDomainStatus === 'active';
+  const displayName = kbSettings?.name || selectedOrgName;
 
   const cnameTarget =
     lastProvision?.cname_target ??
     kbSettings?.auto_domain_config?.dns?.provisioned_at
-      ? kbSettings?.auto_domain_config?.dns?.record_id  // not the target — but we store the real cname_target in the provision result
+      ? kbSettings?.auto_domain_config?.dns?.record_id
       : null;
 
   const customDnsInstructions =
@@ -291,64 +325,79 @@ export default function KnowledgeBasePage() {
     <div className="container mx-auto p-6">
       <div className="mb-6">
         <h1 className="text-3xl font-bold">Knowledge Base</h1>
-        <p className="text-muted-foreground">Manage Knowledge Base settings for {selectedOrgName}</p>
+        <p className="text-muted-foreground">Manage Knowledge Base settings for {displayName}</p>
       </div>
 
       {kbLoading ? (
         <div className="flex items-center justify-center py-12">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
         </div>
+      ) : !isKbEnabled ? (
+
+        /* ── Disabled state ───────────────────────────────────────────────── */
+        <Card>
+          <CardContent className="flex flex-col items-center justify-center py-16 text-center">
+            <BookOpen className="h-12 w-12 text-muted-foreground mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Knowledge Base is disabled</h3>
+            <p className="text-sm text-muted-foreground mb-6 max-w-sm">
+              Enable the Knowledge Base to provision a self-service portal for {selectedOrgName}.
+            </p>
+            <Button onClick={() => handleKbToggle(true)} disabled={kbSaving}>
+              {kbSaving ? 'Enabling…' : 'Enable Knowledge Base'}
+            </Button>
+          </CardContent>
+        </Card>
+
       ) : (
-        <div className="space-y-6">
 
-          {/* ── Enable / Disable ─────────────────────────────────────────── */}
-          <Card>
-            <CardHeader>
-              <CardTitle>Knowledge Base</CardTitle>
-              <CardDescription>
-                Enable a self-service Knowledge Base portal for {selectedOrgName}.
-                When enabled, a portal is automatically provisioned at your assigned domain.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div className="space-y-0.5">
-                  <Label className="text-base font-medium">Enable Knowledge Base</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Activates the portal and registers your assigned domain with the hosting provider.
-                  </p>
-                </div>
-                <Switch
-                  checked={kbSettings?.is_enabled ?? false}
-                  onCheckedChange={handleKbToggle}
-                  disabled={kbSaving}
-                />
-              </div>
+        /* ── Enabled state ────────────────────────────────────────────────── */
+        <Tabs defaultValue="settings" className="w-full">
+          <div className="flex items-center justify-between">
+            <TabsList className="grid w-full max-w-xs grid-cols-2">
+              <TabsTrigger value="settings">
+                <Settings className="h-4 w-4 mr-2" />
+                Settings
+              </TabsTrigger>
+              <TabsTrigger value="theme">
+                <Palette className="h-4 w-4 mr-2" />
+                Theme
+              </TabsTrigger>
+            </TabsList>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => handleKbToggle(false)}
+              disabled={kbSaving}
+            >
+              Disable
+            </Button>
+          </div>
 
-              {isKbLive && kbSettings && (
-                <Alert>
-                  <BookOpen className="h-4 w-4" />
-                  <AlertDescription className="flex flex-wrap items-center gap-x-1">
-                    Your Knowledge Base is live at{' '}
-                    <a href={`https://${kbSettings.auto_domain}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">
-                      {kbSettings.auto_domain}
-                    </a>
-                    {customDomainStatus === 'active' && kbSettings.custom_domain && (
-                      <>
-                        {' '}and{' '}
-                        <a href={`https://${kbSettings.custom_domain}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">
-                          {kbSettings.custom_domain}
-                        </a>
-                      </>
-                    )}
-                  </AlertDescription>
-                </Alert>
-              )}
-            </CardContent>
-          </Card>
+          {/* ── Settings Tab ─────────────────────────────────────────────── */}
+          <TabsContent value="settings" className="mt-6 space-y-6">
 
-          {/* ── Portals ──────────────────────────────────────────────────── */}
-          {kbSettings?.is_enabled && (
+            {/* Live status alert */}
+            {isKbLive && kbSettings && (
+              <Alert>
+                <BookOpen className="h-4 w-4" />
+                <AlertDescription className="flex flex-wrap items-center gap-x-1">
+                  Your Knowledge Base is live at{' '}
+                  <a href={`https://${kbSettings.auto_domain}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">
+                    {kbSettings.auto_domain}
+                  </a>
+                  {customDomainStatus === 'active' && kbSettings.custom_domain && (
+                    <>
+                      {' '}and{' '}
+                      <a href={`https://${kbSettings.custom_domain}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">
+                        {kbSettings.custom_domain}
+                      </a>
+                    </>
+                  )}
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {/* Portals */}
             <Card>
               <CardHeader>
                 <CardTitle>Portals</CardTitle>
@@ -356,7 +405,7 @@ export default function KnowledgeBasePage() {
               </CardHeader>
               <CardContent className="space-y-3">
                 {([
-                  { key: 'vendor_enabled'   as const, label: 'Vendor Portal',  description: 'For vendors and suppliers (public, no-index)' },
+                  { key: 'vendor_enabled'   as const, label: 'Vendor',         description: 'For vendors and suppliers (public, no-index)' },
                   { key: 'internal_enabled' as const, label: 'Internal',       description: 'For internal staff only (authenticated)' },
                   { key: 'owner_enabled'    as const, label: 'Owner Partners', description: 'For owner/partner access (public, no-index)' },
                   { key: 'guest_enabled'    as const, label: 'Guest',          description: 'For public visitors (indexed by search engines)' },
@@ -375,7 +424,6 @@ export default function KnowledgeBasePage() {
                           setKbSaving(true);
                           const data = await updateKbSettings(selectedOrgId, { [key]: enabled });
                           setKbSettings(data.settings);
-                          toast.success(`${label} ${enabled ? 'enabled' : 'disabled'}`);
                         } catch (error: any) {
                           toast.error(error.response?.data?.message || error.message || 'Failed to update portal');
                         } finally { setKbSaving(false); }
@@ -385,16 +433,13 @@ export default function KnowledgeBasePage() {
                 ))}
               </CardContent>
             </Card>
-          )}
 
-          {/* ── Domain Configuration ─────────────────────────────────────── */}
-          {kbSettings?.is_enabled && (
+            {/* Domain Configuration */}
             <Card>
               <CardHeader>
                 <CardTitle>Domain Configuration</CardTitle>
                 <CardDescription>
-                  Your assigned domain is always available. Optionally add a custom domain —
-                  both will be served simultaneously.
+                  Your assigned domain is always available. Optionally add a custom domain — both will be served simultaneously.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -408,20 +453,22 @@ export default function KnowledgeBasePage() {
                   <p className="text-xs text-muted-foreground">
                     Auto-generated from your organization slug. Always available — cannot be removed.
                   </p>
-                  <div className="flex items-center gap-2">
-                    <div className="flex flex-1 items-center rounded-md border bg-muted px-3 py-2 text-sm font-mono">
-                      <Globe className="mr-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                      {kbSettings.auto_domain}
+                  {kbSettings && (
+                    <div className="flex items-center gap-2">
+                      <div className="flex flex-1 items-center rounded-md border bg-muted px-3 py-2 text-sm font-mono">
+                        <Globe className="mr-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        {kbSettings.auto_domain}
+                      </div>
+                      <Button variant="outline" size="sm" onClick={() => copyToClipboard(kbSettings.auto_domain)}>
+                        {copiedDomain === kbSettings.auto_domain ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                      </Button>
+                      <Button variant="outline" size="sm" asChild>
+                        <a href={`https://${kbSettings.auto_domain}`} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      </Button>
                     </div>
-                    <Button variant="outline" size="sm" onClick={() => copyToClipboard(kbSettings.auto_domain)}>
-                      {copiedDomain === kbSettings.auto_domain ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
-                    </Button>
-                    <Button variant="outline" size="sm" asChild>
-                      <a href={`https://${kbSettings.auto_domain}`} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="h-4 w-4" />
-                      </a>
-                    </Button>
-                  </div>
+                  )}
 
                   {autoDomainStatus === 'verifying' && (
                     <p className="text-xs text-muted-foreground">
@@ -435,7 +482,7 @@ export default function KnowledgeBasePage() {
                       <button className="underline" onClick={handleRetryAutoDomain}>try again</button>.
                     </p>
                   )}
-                  {cnameTarget && autoDomainStatus !== 'active' && (
+                  {cnameTarget && autoDomainStatus !== 'active' && kbSettings && (
                     <div className="rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">
                       CNAME: {kbSettings.auto_domain} → {cnameTarget}
                     </div>
@@ -460,11 +507,11 @@ export default function KnowledgeBasePage() {
                     />
                     <Button
                       onClick={handleSaveCustomDomain}
-                      disabled={kbSaving || !customDomainInput.trim() || customDomainInput.trim() === kbSettings.custom_domain}
+                      disabled={kbSaving || !customDomainInput.trim() || customDomainInput.trim() === kbSettings?.custom_domain}
                     >
-                      {kbSaving ? 'Saving…' : kbSettings.custom_domain ? 'Update' : 'Save'}
+                      {kbSaving ? 'Saving…' : kbSettings?.custom_domain ? 'Update' : 'Save'}
                     </Button>
-                    {kbSettings.custom_domain && (
+                    {kbSettings?.custom_domain && (
                       <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={kbSaving}>
                         Remove
                       </Button>
@@ -472,7 +519,7 @@ export default function KnowledgeBasePage() {
                   </div>
 
                   {/* DNS record instructions */}
-                  {kbSettings.custom_domain && customDnsInstructions && (
+                  {kbSettings?.custom_domain && customDnsInstructions && (
                     <div className="rounded-md bg-muted p-3 text-xs space-y-1.5">
                       <p className="font-medium">Add this DNS record at your provider:</p>
                       <div className="font-mono space-y-0.5">
@@ -504,8 +551,85 @@ export default function KnowledgeBasePage() {
 
               </CardContent>
             </Card>
-          )}
-        </div>
+          </TabsContent>
+
+          {/* ── Theme Tab ────────────────────────────────────────────────── */}
+          <TabsContent value="theme" className="mt-6 space-y-6">
+
+            {/* KB Name */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Knowledge Base Name</CardTitle>
+                <CardDescription>
+                  Set a display name shown to visitors of your Knowledge Base portal.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="kb-name">Name</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="kb-name"
+                      placeholder={selectedOrgName || 'Knowledge Base'}
+                      value={kbNameInput}
+                      onChange={(e) => setKbNameInput(e.target.value)}
+                    />
+                    <Button
+                      onClick={handleSaveName}
+                      disabled={kbNameSaving || kbNameInput === (kbSettings?.name ?? '')}
+                    >
+                      {kbNameSaving ? 'Saving…' : 'Save'}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Defaults to your organization name if not set.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Logo */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Logo</CardTitle>
+                <CardDescription>
+                  Upload a logo to display on your Knowledge Base portal.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center">
+                  <Upload className="h-8 w-8 text-muted-foreground mb-2" />
+                  <p className="text-sm font-medium">Upload logo</p>
+                  <p className="text-xs text-muted-foreground mt-1">PNG, JPG or SVG — max 2 MB</p>
+                  <Button variant="outline" size="sm" className="mt-4" disabled>
+                    Choose file
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Styling */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Styling</CardTitle>
+                <CardDescription>
+                  Customize the look and feel of your Knowledge Base.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-col items-center justify-center py-12 text-center">
+                  <Palette className="h-12 w-12 text-muted-foreground mb-3" />
+                  <h3 className="text-base font-semibold">Coming soon</h3>
+                  <p className="text-sm text-muted-foreground mt-1 max-w-sm">
+                    Custom colors, fonts, and layout options will be available here.
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
+          </TabsContent>
+        </Tabs>
+
       )}
     </div>
   );
