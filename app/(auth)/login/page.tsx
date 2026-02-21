@@ -15,6 +15,15 @@ export default function LoginPage() {
     // If already authenticated, redirect to appropriate page
     // Use replace to prevent adding to history
     if (admin) {
+      // Honor any stored destination (e.g. user was redirected here from a deep link)
+      const intendedPath = typeof window !== 'undefined'
+        ? sessionStorage.getItem('post_login_redirect')
+        : null;
+      if (intendedPath && intendedPath !== '/login') {
+        sessionStorage.removeItem('post_login_redirect');
+        router.replace(intendedPath);
+        return;
+      }
       // Super admins go to organizations, regular admins go to users
       if (admin.role === 'super_admin') {
         router.replace('/organizations');

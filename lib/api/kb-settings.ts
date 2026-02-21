@@ -28,6 +28,7 @@ export async function updateKbSettings(
     internal_enabled?: boolean;
     owner_enabled?: boolean;
     guest_enabled?: boolean;
+    custom_theme?: string | null;
   }
 ): Promise<KbSettingsResponse> {
   const response = await apiClient.put<KbSettingsResponse>(

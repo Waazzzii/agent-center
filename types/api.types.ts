@@ -378,6 +378,8 @@ export interface KbOrgSettings {
   internal_enabled: boolean;
   owner_enabled: boolean;
   guest_enabled: boolean;
+  /** Custom CSS injected into the portal <head> to override CSS variables */
+  custom_theme: string | null;
   created_at: string;
   updated_at: string;
 }

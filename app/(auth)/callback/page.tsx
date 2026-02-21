@@ -65,8 +65,12 @@ function CallbackContent() {
         setAuth(admin, accessToken, refreshToken);
 
         console.log('[AUTH] ✓ Redirecting to dashboard');
-        // Super admins go to organizations page, regular admins go to users page
-        if (admin.role === 'super_admin') {
+        // Honour any stored post-login destination (e.g. deep-linked from wazzi-kb)
+        const intendedPath = sessionStorage.getItem('post_login_redirect');
+        sessionStorage.removeItem('post_login_redirect');
+        if (intendedPath && intendedPath !== '/login') {
+          router.push(intendedPath);
+        } else if (admin.role === 'super_admin') {
           router.push('/organizations');
         } else {
           router.push('/users');
