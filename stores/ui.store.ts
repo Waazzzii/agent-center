@@ -24,18 +24,23 @@ export const useUIStore = create<UIState>()(
       toggleTheme: () =>
         set((state) => {
           const newTheme = state.theme === 'light' ? 'dark' : 'light';
-          // Update document class for Tailwind dark mode
           if (typeof document !== 'undefined') {
             document.documentElement.classList.toggle('dark', newTheme === 'dark');
+          }
+          // Sync with next-themes so its inline script applies the correct class on every page load
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('theme', newTheme);
           }
           return { theme: newTheme };
         }),
 
       setTheme: (theme) =>
         set(() => {
-          // Update document class for Tailwind dark mode
           if (typeof document !== 'undefined') {
             document.documentElement.classList.toggle('dark', theme === 'dark');
+          }
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem('theme', theme);
           }
           return { theme };
         }),
@@ -47,9 +52,12 @@ export const useUIStore = create<UIState>()(
     {
       name: 'ui-storage',
       onRehydrateStorage: () => (state) => {
-        // Apply theme on rehydration
         if (state && typeof document !== 'undefined') {
           document.documentElement.classList.toggle('dark', state.theme === 'dark');
+        }
+        // Keep next-themes in sync so its inline script is correct on next page load
+        if (state && typeof localStorage !== 'undefined') {
+          localStorage.setItem('theme', state.theme);
         }
       },
     }

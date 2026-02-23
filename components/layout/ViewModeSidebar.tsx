@@ -27,6 +27,7 @@ import {
   Settings,
   BookOpen,
 } from 'lucide-react';
+import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -38,7 +39,6 @@ import { useUIStore } from '@/stores/ui.store';
 import { logout } from '@/lib/auth/oauth';
 import { getOrganizations } from '@/lib/api/organizations';
 import type { Organization } from '@/types/api.types';
-import { Logo } from '@/components/ui/logo';
 
 interface NavItem {
   label: string;
@@ -197,10 +197,29 @@ export function ViewModeSidebar() {
       >
         <div className="flex h-full flex-col">
           {/* Header */}
-          <div className="flex h-16 items-center justify-center border-b px-6">
-            <div className="flex items-center gap-3">
-              <Logo size="md" />
-              <h1 className="text-lg font-semibold">Wazzi</h1>
+          <div className="flex h-16 items-center border-b px-4">
+            <div className="flex items-center gap-2.5">
+              <Image
+                src="/logo.png"
+                alt=""
+                width={80}
+                height={80}
+                className="h-11 w-auto"
+              />
+              <Image
+                src="/wazzi_light.png"
+                alt="wazzi.io"
+                width={120}
+                height={40}
+                className="h-3 w-auto dark:hidden"
+              />
+              <Image
+                src="/wazzi_dark.png"
+                alt="wazzi.io"
+                width={120}
+                height={40}
+                className="h-3 w-auto hidden dark:block"
+              />
             </div>
           </div>
 

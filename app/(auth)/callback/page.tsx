@@ -4,6 +4,7 @@ import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { exchangeCodeForTokens } from '@/lib/auth/oauth';
 import { useAuthStore } from '@/stores/auth.store';
+import { useUIStore } from '@/stores/ui.store';
 import apiClient from '@/lib/api/client';
 import { AdminUser } from '@/types/api.types';
 
@@ -12,6 +13,7 @@ function CallbackContent() {
   const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const { setAuth } = useAuthStore();
+  useUIStore(); // ensures the store initialises and applies the correct dark/light class
 
   useEffect(() => {
     const handleCallback = async () => {
