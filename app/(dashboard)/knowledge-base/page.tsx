@@ -47,16 +47,78 @@ const KB_CSS_VARIABLES = [
   { name: '--radius',           description: 'Corner radius' },
 ] as const;
 
-const KB_THEME_EXAMPLE = `:root {
-  --primary: #7c3aed;
-  --primary-foreground: #ffffff;
-  --accent: #f59e0b;
-  --radius: 0.75rem;
+const KB_THEME_DEFAULTS = `/*
+ * ─── Custom Theme CSS — Wazzi Defaults Reference ─────────────────────────
+ *
+ * All values below are the current Wazzi defaults — change only what you
+ * need. Any token not listed falls back to the Wazzi default automatically.
+ *
+ * Colour format options (all are valid CSS):
+ *   hex:    #a855f7
+ *   rgb:    rgb(168, 85, 247)
+ *   hsl:    hsl(270, 91%, 65%)
+ *   oklch:  oklch(0.7 0.24 295)    ← perceptually uniform, recommended
+ * ─────────────────────────────────────────────────────────────────────────
+ */
+
+:root {
+  /* ── Primary brand colour ────────────────────────────────────────────── */
+  --primary: oklch(0.7 0.24 295);           /* Buttons, links, active nav items, badges */
+  --primary-foreground: oklch(1 0 0);       /* Text/icons placed on primary-coloured surfaces */
+
+  /* ── Accent colour ───────────────────────────────────────────────────── */
+  --accent: oklch(0.7 0.2 35);             /* Highlight badges, notification chips, callouts */
+  --accent-foreground: oklch(1 0 0);        /* Text/icons placed on accent-coloured surfaces */
+
+  /* ── Focus ring ──────────────────────────────────────────────────────── */
+  --ring: oklch(0.7 0.24 295);             /* Keyboard focus outline — usually matches primary */
+
+  /* ── Admin sidebar (light mode) ─────────────────────────────────────── */
+  --sidebar: oklch(0.98 0.01 295);              /* Sidebar background colour */
+  --sidebar-foreground: oklch(0.145 0 0);       /* Sidebar text and icon colour */
+  --sidebar-primary: oklch(0.7 0.24 295);       /* Active nav item highlight background */
+  --sidebar-primary-foreground: oklch(1 0 0);   /* Text on active nav item */
+  --sidebar-accent: oklch(0.95 0.02 295);       /* Hovered nav item background */
+  --sidebar-accent-foreground: oklch(0.145 0 0); /* Text on hovered nav item */
+  --sidebar-border: oklch(0.9 0.02 295);        /* Dividers between sidebar sections */
+  --sidebar-ring: oklch(0.7 0.24 295);          /* Focus ring inside the sidebar */
+
+  /* ── Charts ──────────────────────────────────────────────────────────── */
+  --chart-1: oklch(0.7 0.24 295);          /* Primary chart series — bar fill, line colour */
+  --chart-2: oklch(0.6 0.22 250);          /* Secondary chart series */
+  --chart-3: oklch(0.7 0.2 35);            /* Tertiary chart series */
+  --chart-4: oklch(0.75 0.2 280);          /* Fourth chart series */
+  --chart-5: oklch(0.65 0.18 260);         /* Fifth chart series */
 }
 
 .dark {
-  --primary: #a78bfa;
-  --primary-foreground: #0d0d0d;
+  /* ── Primary brand colour (dark mode) ───────────────────────────────── */
+  --primary: oklch(0.78 0.2 295);          /* Lightened for legibility on dark backgrounds */
+  --primary-foreground: oklch(0.145 0 0);  /* Dark text on the lighter primary surface */
+
+  /* ── Accent colour (dark mode) ───────────────────────────────────────── */
+  --accent: oklch(0.75 0.16 35);           /* Lightened accent for dark mode */
+  --accent-foreground: oklch(0.145 0 0);   /* Dark text on the lighter accent surface */
+
+  /* ── Focus ring (dark mode) ──────────────────────────────────────────── */
+  --ring: oklch(0.78 0.2 295);             /* Lighter focus ring for dark backgrounds */
+
+  /* ── Admin sidebar (dark mode) ───────────────────────────────────────── */
+  --sidebar: oklch(0.18 0 0);                    /* Sidebar background — neutral dark gray */
+  --sidebar-foreground: oklch(0.985 0 0);        /* Light text on dark sidebar */
+  --sidebar-primary: oklch(0.32 0.06 295);       /* Brand icon box bg — dark muted purple */
+  --sidebar-primary-foreground: oklch(0.985 0 0); /* Icon colour on brand icon bg */
+  --sidebar-accent: oklch(0.25 0 0);             /* Hovered nav item background */
+  --sidebar-accent-foreground: oklch(0.985 0 0); /* Text on hovered nav item */
+  --sidebar-border: oklch(1 0 0 / 10%);          /* Subtle sidebar dividers */
+  --sidebar-ring: oklch(0.78 0.2 295);
+
+  /* ── Charts (dark mode) ──────────────────────────────────────────────── */
+  --chart-1: oklch(0.78 0.2 295);          /* Lightened for visibility on dark backgrounds */
+  --chart-2: oklch(0.7 0.18 250);
+  --chart-3: oklch(0.75 0.16 35);
+  --chart-4: oklch(0.82 0.16 280);
+  --chart-5: oklch(0.75 0.14 260);
 }`;
 
 // ── Domain status badge ───────────────────────────────────────────────────────
@@ -767,23 +829,30 @@ export default function KnowledgeBasePage() {
 
                 {/* Code editor */}
                 <div className="rounded-lg overflow-hidden border">
-                  <div className="flex items-center gap-1.5 bg-[#1a2332] border-b border-[#2a3a4e] px-3 py-2">
+                  <div className="flex items-center gap-1.5 bg-slate-100 dark:bg-[#1a2332] border-b border-slate-200 dark:border-[#2a3a4e] px-3 py-2">
                     <div className="h-2.5 w-2.5 rounded-full bg-[#ff5f57]" />
                     <div className="h-2.5 w-2.5 rounded-full bg-[#febc2e]" />
                     <div className="h-2.5 w-2.5 rounded-full bg-[#28c840]" />
-                    <span className="ml-2 text-xs text-[#8a9bb0] font-mono">custom-theme.css</span>
+                    <span className="ml-2 text-xs text-slate-400 dark:text-[#8a9bb0] font-mono">custom-theme.css</span>
+                    <button
+                      type="button"
+                      onClick={() => setCustomThemeInput(KB_THEME_DEFAULTS)}
+                      className="ml-auto text-xs text-slate-400 dark:text-[#8a9bb0] hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                    >
+                      Load defaults
+                    </button>
                   </div>
                   <textarea
                     value={customThemeInput}
                     onChange={(e) => setCustomThemeInput(e.target.value)}
-                    placeholder={KB_THEME_EXAMPLE}
+                    placeholder="/* Paste custom CSS here, or click 'Load defaults' to start from the Wazzi defaults */"
                     spellCheck={false}
                     autoCorrect="off"
                     autoCapitalize="off"
                     rows={14}
                     className={cn(
-                      'w-full resize-none bg-[#0f1419] px-4 py-3 font-mono text-sm text-[#e8e8e8]',
-                      'placeholder:text-[#4a5a6e] focus:outline-none',
+                      'w-full resize-none bg-slate-50 dark:bg-[#0f1419] px-4 py-3 font-mono text-sm text-slate-900 dark:text-[#e8e8e8]',
+                      'placeholder:text-slate-300 dark:placeholder:text-[#4a5a6e] focus:outline-none',
                       'leading-relaxed tracking-wide'
                     )}
                   />
