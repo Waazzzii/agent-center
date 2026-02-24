@@ -60,7 +60,7 @@ export default function DashboardLayout({
 
     autoSelectOrganization();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [admin, isSuperAdmin, selectedOrgId, pathname]);
+  }, [admin, selectedOrgId]);
 
   // Show loading only during initial check
   if (!admin || isChecking) {
