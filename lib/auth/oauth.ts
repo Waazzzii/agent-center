@@ -143,7 +143,10 @@ export async function exchangeCodeForTokens(code: string): Promise<{
 /**
  * Refresh access token using refresh token
  */
-export async function refreshAccessToken(refreshToken: string): Promise<{
+export async function refreshAccessToken(
+  refreshToken: string,
+  signal?: AbortSignal,
+): Promise<{
   accessToken: string;
   refreshToken: string;
   expiresIn: number;
@@ -161,6 +164,7 @@ export async function refreshAccessToken(refreshToken: string): Promise<{
       refresh_token: refreshToken,
       client_id: clientId,
     }),
+    signal,
   });
 
   if (!response.ok) {

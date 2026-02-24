@@ -14,6 +14,7 @@ interface AuthState {
   setAuth: (admin: AdminUser, accessToken: string, refreshToken: string) => void;
   clearAuth: () => void;
   updateAdmin: (admin: Partial<AdminUser>) => void;
+  updateTokens: (accessToken: string, refreshToken: string) => void;
   isSuperAdmin: () => boolean;
   hasOrgAccess: (orgId: string) => boolean;
 }
@@ -40,6 +41,12 @@ export const useAuthStore = create<AuthState>()(
         localStorage.removeItem('auth-storage');
         sessionStorage.clear();
         set({ admin: null, accessToken: null, refreshToken: null });
+      },
+
+      updateTokens: (accessToken, refreshToken) => {
+        localStorage.setItem('access_token', accessToken);
+        localStorage.setItem('refresh_token', refreshToken);
+        set({ accessToken, refreshToken });
       },
 
       updateAdmin: (updates) => {

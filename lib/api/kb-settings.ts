@@ -9,6 +9,7 @@ import type {
 export interface KbSettingsResponse {
   settings: KbOrgSettings;
   custom_domain_status: VercelDomainStatus | null;
+  logo_url: string | null;
 }
 
 export async function getKbSettings(orgId: string): Promise<KbSettingsResponse> {

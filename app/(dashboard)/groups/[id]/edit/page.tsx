@@ -397,7 +397,7 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
   // Connector handlers
   const handleToggleConnector = (connectorId: string) => {
     setSelectedConnectorIds(prev =>
-      prev.includes(connectorId) ? prev.filter(id => id !== connectorId) : [...prev, connectorId]
+      prev.includes(connectorId) ? [] : [connectorId]
     );
   };
 
@@ -915,30 +915,18 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
                           </div>
                           <div className="flex items-center justify-between">
                             <p className="text-sm text-muted-foreground">
-                              {selectedConnectorIds.length} selected
+                              {selectedConnectorIds.length === 1 ? '1 selected' : 'Select one connector'}
                             </p>
-                            <div className="flex gap-2">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleSelectAllAvailableConnectors}
-                                disabled={availableConnectors.length === 0}
-                              >
-                                <CheckSquare className="h-4 w-4 mr-1" />
-                                All
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleDeselectAllAvailableConnectors}
-                                disabled={selectedConnectorIds.length === 0}
-                              >
-                                <Square className="h-4 w-4 mr-1" />
-                                None
-                              </Button>
-                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="sm"
+                              onClick={handleDeselectAllAvailableConnectors}
+                              disabled={selectedConnectorIds.length === 0}
+                            >
+                              <Square className="h-4 w-4 mr-1" />
+                              Clear
+                            </Button>
                           </div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-2">
@@ -975,7 +963,7 @@ export default function EditGroupPage({ params }: { params: Promise<{ id: string
                             className="w-full"
                           >
                             <Plus className="mr-2 h-4 w-4" />
-                            Add Selected ({selectedConnectorIds.length})
+                            Add Connector
                           </Button>
                         </div>
                       </div>

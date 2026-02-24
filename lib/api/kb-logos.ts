@@ -1,31 +1,24 @@
 import apiClient from './client';
 
-function kbHeaders(kbDomain: string) {
-  return { 'X-KB-Domain': kbDomain };
-}
-
-export async function fetchKbLogoBlob(kbDomain: string, storagePath: string): Promise<string> {
-  const response = await apiClient.get<Blob>(`/kb/logo/content?v=${encodeURIComponent(storagePath)}`, {
-    headers: kbHeaders(kbDomain),
-    responseType: 'blob',
-  });
+export async function fetchKbLogoBlob(orgId: string): Promise<string> {
+  const response = await apiClient.get<Blob>(
+    `/admin/organizations/${orgId}/kb-settings/logo`,
+    { responseType: 'blob' }
+  );
   return URL.createObjectURL(response.data);
 }
 
-export async function uploadKbLogo(kbDomain: string, file: File): Promise<{ storage_path: string }> {
+export async function uploadKbLogo(orgId: string, file: File): Promise<{ logo_url: string }> {
   const formData = new FormData();
   formData.append('file', file);
-  const response = await apiClient.post<{ storage_path: string }>('/kb/logo', formData, {
-    headers: {
-      ...kbHeaders(kbDomain),
-      'Content-Type': 'multipart/form-data',
-    },
-  });
+  const response = await apiClient.post<{ logo_url: string }>(
+    `/admin/organizations/${orgId}/kb-settings/logo`,
+    formData,
+    { headers: { 'Content-Type': 'multipart/form-data' } }
+  );
   return response.data;
 }
 
-export async function deleteKbLogo(kbDomain: string): Promise<void> {
-  await apiClient.delete('/kb/logo', {
-    headers: kbHeaders(kbDomain),
-  });
+export async function deleteKbLogo(orgId: string): Promise<void> {
+  await apiClient.delete(`/admin/organizations/${orgId}/kb-settings/logo`);
 }

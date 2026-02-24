@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "sonner";
 import { ThemeProvider } from "next-themes";
+import { TokenRefreshProvider } from "@/components/auth/TokenRefreshProvider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -41,6 +42,7 @@ export default function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <TokenRefreshProvider />
           {children}
           <Toaster position="top-right" richColors />
         </ThemeProvider>

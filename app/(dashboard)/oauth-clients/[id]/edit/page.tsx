@@ -10,10 +10,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
-import { ArrowLeft } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { ArrowLeft, Layout, Plug } from 'lucide-react';
 import { toast } from 'sonner';
+
+function ttlLabel(seconds: number): string {
+  if (seconds >= 86400 && seconds % 86400 === 0) return `${seconds / 86400}d`;
+  if (seconds >= 3600 && seconds % 3600 === 0) return `${seconds / 3600}h`;
+  return `${seconds}s`;
+}
 
 export default function EditOAuthClientPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: clientId } = use(params);
@@ -22,15 +30,22 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [formData, setFormData] = useState<Partial<OAuthClient>>({});
-  const [redirectUriText, setRedirectUriText] = useState('');
+  const [client, setClient] = useState<OAuthClient | null>(null);
+
+  const [formData, setFormData] = useState({
+    client_name: '',
+    organization_id: '',
+    redirect_uri: '',
+    description: '',
+    refresh_token_expiry_seconds: '86400',
+    is_active: true,
+  });
 
   useEffect(() => {
     if (!admin || !isSuperAdmin()) {
       router.push('/users');
       return;
     }
-
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [admin, clientId]);
@@ -42,8 +57,15 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
         getOAuthClient(clientId),
         getOrganizations(),
       ]);
-      setFormData(clientData);
-      setRedirectUriText(clientData.redirect_uri || '');
+      setClient(clientData);
+      setFormData({
+        client_name: clientData.client_name || '',
+        organization_id: clientData.organization_id || '',
+        redirect_uri: clientData.redirect_uri || '',
+        description: clientData.description || '',
+        refresh_token_expiry_seconds: String(clientData.refresh_token_expiry_seconds ?? 86400),
+        is_active: clientData.is_active,
+      });
       setOrganizations(orgsData.organizations);
     } catch (error: any) {
       toast.error(error.message || 'Failed to load OAuth client');
@@ -55,16 +77,14 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-
-    if (!formData.client_name || !formData.organization_id) {
-      toast.error('Name and organization are required');
+    if (!formData.client_name) {
+      toast.error('Name is required');
       return;
     }
 
-    const redirectUri = redirectUriText.trim();
-
-    if (!redirectUri) {
-      toast.error('Redirect URI is required');
+    const ttl = parseInt(formData.refresh_token_expiry_seconds, 10);
+    if (isNaN(ttl) || ttl <= 0) {
+      toast.error('Refresh token TTL must be a positive number');
       return;
     }
 
@@ -72,8 +92,10 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
       setLoading(true);
       await updateOAuthClient(clientId, {
         client_name: formData.client_name,
-        organization_id: formData.organization_id,
-        redirect_uri: redirectUri,
+        organization_id: formData.organization_id || undefined,
+        redirect_uri: formData.redirect_uri || undefined,
+        description: formData.description || undefined,
+        refresh_token_expiry_seconds: ttl,
         is_active: formData.is_active,
       });
       toast.success('OAuth client updated successfully');
@@ -89,12 +111,14 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
-          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-          <p className="text-muted-foreground">Loading...</p>
+          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <p className="text-muted-foreground">Loading…</p>
         </div>
       </div>
     );
   }
+
+  const isConnector = !client?.is_public;
 
   return (
     <div className="container mx-auto p-6">
@@ -111,93 +135,132 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
 
       <Card className="max-w-2xl">
         <CardHeader>
-          <CardTitle>OAuth Client Details</CardTitle>
-          <CardDescription>Update the information for this OAuth client</CardDescription>
+          <div className="flex items-center gap-3">
+            <CardTitle>OAuth Client Details</CardTitle>
+            {isConnector ? (
+              <Badge variant="outline" className="flex items-center gap-1">
+                <Plug className="h-3 w-3" /> Connector
+              </Badge>
+            ) : (
+              <Badge variant="secondary" className="flex items-center gap-1">
+                <Layout className="h-3 w-3" /> Platform
+              </Badge>
+            )}
+          </div>
+          <CardDescription>
+            {isConnector
+              ? 'Confidential client with secret + PKCE — used for Claude / MCP integrations.'
+              : 'Public client (PKCE only) — used for Admin UI, KB Portal, or internal tools.'}
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-6">
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <Label htmlFor="client_id">Client ID</Label>
-                <Input
-                  id="client_id"
-                  value={formData.client_id || ''}
-                  disabled
-                  className="bg-muted"
-                />
-                <p className="text-sm text-muted-foreground">
-                  Client ID cannot be changed
-                </p>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="client_id">Client ID</Label>
+              <Input id="client_id" value={client?.client_id || ''} disabled className="bg-muted font-mono text-sm" />
+              <p className="text-xs text-muted-foreground">Client ID cannot be changed</p>
+            </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="client_name">Name *</Label>
-                <Input
-                  id="client_name"
-                  value={formData.client_name || ''}
-                  onChange={(e) => setFormData({ ...formData, client_name: e.target.value })}
-                  required
-                  placeholder="My Application"
-                />
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="client_name">Name *</Label>
+              <Input
+                id="client_name"
+                value={formData.client_name}
+                onChange={(e) => setFormData((f) => ({ ...f, client_name: e.target.value }))}
+                required
+              />
+            </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="organization_id">Organization *</Label>
-                <Select
-                  value={formData.organization_id || ''}
-                  onValueChange={(value) =>
-                    setFormData({ ...formData, organization_id: value })
-                  }
-                  required
-                >
-                  <SelectTrigger id="organization_id">
-                    <SelectValue placeholder="Select organization" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {organizations.map((org) => (
-                      <SelectItem key={org.id} value={org.id}>
-                        {org.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-sm text-muted-foreground">
-                  Select an organization for this OAuth client
-                </p>
-              </div>
+            <div className="space-y-2">
+              <Label htmlFor="description">Description</Label>
+              <Textarea
+                id="description"
+                value={formData.description}
+                onChange={(e) => setFormData((f) => ({ ...f, description: e.target.value }))}
+                placeholder="What is this client used for?"
+                rows={2}
+              />
+            </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="redirect_uri">Redirect URI *</Label>
-                <Input
-                  id="redirect_uri"
-                  value={redirectUriText}
-                  onChange={(e) => setRedirectUriText(e.target.value)}
-                  placeholder="https://example.com/callback"
-                  required
-                />
-                <p className="text-sm text-muted-foreground">
-                  The allowed callback URL for OAuth flow
-                </p>
-              </div>
-
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div className="space-y-0.5">
-                  <Label htmlFor="is_active">Active</Label>
-                  <div className="text-sm text-muted-foreground">
-                    Enable this OAuth client
-                  </div>
+            {isConnector && (
+              <>
+                <div className="space-y-2">
+                  <Label htmlFor="organization_id">Organization *</Label>
+                  <Select
+                    value={formData.organization_id}
+                    onValueChange={(v) => setFormData((f) => ({ ...f, organization_id: v }))}
+                  >
+                    <SelectTrigger id="organization_id">
+                      <SelectValue placeholder="Select organization" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {organizations.map((org) => (
+                        <SelectItem key={org.id} value={org.id}>
+                          {org.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <Switch
-                  id="is_active"
-                  checked={formData.is_active || false}
-                  onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
-                />
+
+                <div className="space-y-2">
+                  <Label htmlFor="redirect_uri">Redirect URI</Label>
+                  <Input
+                    id="redirect_uri"
+                    value={formData.redirect_uri}
+                    onChange={(e) => setFormData((f) => ({ ...f, redirect_uri: e.target.value }))}
+                    placeholder="https://claude.ai/api/mcp/auth_callback"
+                  />
+                </div>
+              </>
+            )}
+
+            {!isConnector && (
+              <div className="rounded-lg border border-muted bg-muted/50 p-3 text-sm text-muted-foreground">
+                Platform clients use <strong>dynamic redirect URI validation</strong> —{' '}
+                <code>*.wazzi.io/callback</code> and localhost are accepted automatically.
               </div>
+            )}
+
+            <div className="space-y-2">
+              <Label htmlFor="refresh_ttl">Refresh Token TTL (seconds)</Label>
+              <Input
+                id="refresh_ttl"
+                type="number"
+                min={60}
+                value={formData.refresh_token_expiry_seconds}
+                onChange={(e) =>
+                  setFormData((f) => ({ ...f, refresh_token_expiry_seconds: e.target.value }))
+                }
+              />
+              <p className="text-xs text-muted-foreground">
+                {(() => {
+                  const v = parseInt(formData.refresh_token_expiry_seconds, 10);
+                  if (isNaN(v) || v <= 0) return 'Enter a positive number of seconds.';
+                  return `Currently: ${ttlLabel(v)} — ${
+                    isConnector
+                      ? 'recommended 604800 (7 days) for MCP/Claude clients'
+                      : 'recommended 86400 (24 hours) for platform clients'
+                  }`;
+                })()}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-between rounded-lg border p-4">
+              <div className="space-y-0.5">
+                <Label htmlFor="is_active">Active</Label>
+                <div className="text-sm text-muted-foreground">Enable or disable this client</div>
+              </div>
+              <Switch
+                id="is_active"
+                checked={formData.is_active}
+                onCheckedChange={(checked) => setFormData((f) => ({ ...f, is_active: checked }))}
+              />
             </div>
 
             <div className="flex gap-4">
               <Button type="submit" disabled={loading}>
-                {loading ? 'Saving...' : 'Save Changes'}
+                {loading ? 'Saving…' : 'Save Changes'}
               </Button>
               <Button type="button" variant="outline" onClick={() => router.back()}>
                 Cancel

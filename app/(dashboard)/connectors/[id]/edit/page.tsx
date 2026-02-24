@@ -856,7 +856,9 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         description={
           editingGroupId
             ? 'Select which endpoints this group can access. At least one endpoint must be selected.'
-            : `Select which endpoints the selected ${pendingGroupIds.length} group${pendingGroupIds.length !== 1 ? 's' : ''} can access. At least one endpoint must be selected.`
+            : pendingGroupIds.length > 1
+              ? `All ${pendingGroupIds.length} selected groups will receive the same endpoint access. You should manage their permissions independently after initial setup.`
+              : 'Select which endpoints this group can access. At least one endpoint must be selected.'
         }
       />
     </div>

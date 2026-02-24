@@ -22,6 +22,15 @@ import { Trash2, Plus, Edit, Info } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
+const DEFAULT_REFRESH_EXPIRY_SECONDS = 86400; // 24h server default
+
+function formatRefreshTTL(seconds: number | null): string {
+  const s = seconds ?? DEFAULT_REFRESH_EXPIRY_SECONDS;
+  if (s >= 86400 && s % 86400 === 0) return `${s / 86400}d`;
+  if (s >= 3600 && s % 3600 === 0) return `${s / 3600}h`;
+  return `${s}s`;
+}
+
 export default function OAuthClientsPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
@@ -36,13 +45,10 @@ export default function OAuthClientsPage() {
       router.push('/login');
       return;
     }
-
-    // Redirect if not super admin
     if (!isSuperAdmin()) {
       router.push('/connectors');
       return;
     }
-
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [admin]);
@@ -51,20 +57,13 @@ export default function OAuthClientsPage() {
     try {
       setLoading(true);
       setError(null);
-
-      // Load clients and organizations in parallel
       const [clientsData, orgsData] = await Promise.all([
         getOAuthClients(),
         getOrganizations(),
       ]);
-
       setClients(clientsData.clients);
-
-      // Create a map of organization ID to organization for quick lookup
       const orgMap = new Map<string, Organization>();
-      orgsData.organizations.forEach((org) => {
-        orgMap.set(org.id, org);
-      });
+      orgsData.organizations.forEach((org) => orgMap.set(org.id, org));
       setOrganizations(orgMap);
     } catch (err: any) {
       setError(err.message || 'Failed to load OAuth clients');
@@ -76,14 +75,12 @@ export default function OAuthClientsPage() {
   const handleDelete = async (clientId: string, name: string) => {
     const confirmed = await confirm({
       title: 'Delete OAuth Client',
-      description: `Are you sure you want to delete the OAuth client "${name}"? This action cannot be undone.`,
+      description: `Are you sure you want to delete "${name}"? This cannot be undone.`,
       confirmText: 'Delete',
       cancelText: 'Cancel',
       variant: 'destructive',
     });
-
     if (!confirmed) return;
-
     try {
       await deleteOAuthClient(clientId);
       toast.success('OAuth client deleted successfully');
@@ -93,17 +90,18 @@ export default function OAuthClientsPage() {
     }
   };
 
-  const getOrganizationName = (orgId: string): string => {
+  const getOrganizationName = (orgId: string | null): string => {
+    if (!orgId) return '—';
     const org = organizations.get(orgId);
-    return org ? org.name : `Unknown (${orgId.substring(0, 8)}...)`;
+    return org ? org.name : `${orgId.substring(0, 8)}…`;
   };
 
   if (!admin || loading) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
-          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-          <p className="text-muted-foreground">Loading...</p>
+          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <p className="text-muted-foreground">Loading…</p>
         </div>
       </div>
     );
@@ -115,7 +113,7 @@ export default function OAuthClientsPage() {
         <div>
           <h1 className="text-3xl font-bold">OAuth Clients</h1>
           <p className="text-muted-foreground">
-            Manage OAuth 2.0 clients for backend integration (Claude to Wazzi)
+            Manage OAuth 2.0 clients — Connectors (Claude / MCP) and Platform clients (Admin UI, KB Portal)
           </p>
         </div>
         <Button onClick={() => router.push('/oauth-clients/create')}>
@@ -127,8 +125,11 @@ export default function OAuthClientsPage() {
       <Alert className="mb-6">
         <Info className="h-4 w-4" />
         <AlertDescription>
-          Client secrets are only shown once during creation and cannot be retrieved later.
-          Make sure to save them securely when creating new OAuth clients.
+          <strong>Connector</strong> clients are confidential (client_secret + PKCE) and scoped to an
+          organization — used for Claude / MCP integrations. Recommended refresh token TTL: <strong>7 days</strong>.
+          <br />
+          <strong>Platform</strong> clients are public (PKCE only, no secret) — used for the Admin UI and
+          KB Portal. Recommended refresh token TTL: <strong>24 hours</strong>.
         </AlertDescription>
       </Alert>
 
@@ -142,7 +143,7 @@ export default function OAuthClientsPage() {
         <CardHeader>
           <CardTitle>OAuth Clients</CardTitle>
           <CardDescription>
-            {clients.length} OAuth client{clients.length !== 1 ? 's' : ''} configured
+            {clients.length} client{clients.length !== 1 ? 's' : ''} configured
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -155,9 +156,10 @@ export default function OAuthClientsPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Name</TableHead>
+                  <TableHead>Type</TableHead>
                   <TableHead>Client ID</TableHead>
                   <TableHead>Organization</TableHead>
-                  <TableHead>Redirect URI</TableHead>
+                  <TableHead>Refresh TTL</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -169,15 +171,25 @@ export default function OAuthClientsPage() {
                     className="cursor-pointer hover:bg-muted/50"
                     onClick={() => router.push(`/oauth-clients/${client.client_id}/edit`)}
                   >
-                    <TableCell className="font-medium">{client.client_name}</TableCell>
-                    <TableCell className="font-mono text-xs">{client.client_id}</TableCell>
                     <TableCell>
-                      <Badge variant="outline">{getOrganizationName(client.organization_id)}</Badge>
+                      <div className="font-medium">{client.client_name}</div>
+                      {client.description && (
+                        <div className="text-xs text-muted-foreground">{client.description}</div>
+                      )}
                     </TableCell>
                     <TableCell>
-                      <div className="max-w-xs truncate text-xs text-muted-foreground">
-                        {client.redirect_uri}
-                      </div>
+                      {client.is_public ? (
+                        <Badge variant="secondary">Platform</Badge>
+                      ) : (
+                        <Badge variant="outline">Connector</Badge>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{client.client_id}</TableCell>
+                    <TableCell>
+                      <span className="text-sm">{getOrganizationName(client.organization_id)}</span>
+                    </TableCell>
+                    <TableCell className="text-sm text-muted-foreground">
+                      {formatRefreshTTL(client.refresh_token_expiry_seconds)}
                     </TableCell>
                     <TableCell>
                       {client.is_active ? (

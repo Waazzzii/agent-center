@@ -186,12 +186,14 @@ export default function KnowledgeBasePage() {
       setKbNameInput(data.settings.name || '');
       setCustomThemeInput(data.settings.custom_theme || '');
 
-      // Load logo only if one is stored (avoids unnecessary 404 requests)
-      if (data.settings.logo_storage_path) {
+      // Load logo if one exists (logo_url is included in settings response)
+      if (data.logo_url) {
         try {
-          const url = await fetchKbLogoBlob(data.settings.auto_domain, data.settings.logo_storage_path);
+          const url = await fetchKbLogoBlob(selectedOrgId);
           setLogoUrl(url);
         } catch { /* logo fetch failed */ }
+      } else {
+        setLogoUrl(null);
       }
 
       const autoStatus   = data.settings.auto_domain_config?.status   ?? null;
@@ -230,14 +232,13 @@ export default function KnowledgeBasePage() {
 
   const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file || !kbSettings) return;
+    if (!file || !selectedOrgId) return;
     setLogoUploading(true);
     try {
-      const { storage_path } = await uploadKbLogo(kbSettings.auto_domain, file);
+      await uploadKbLogo(selectedOrgId, file);
       if (logoUrl) URL.revokeObjectURL(logoUrl);
-      const url = await fetchKbLogoBlob(kbSettings.auto_domain, storage_path);
+      const url = await fetchKbLogoBlob(selectedOrgId);
       setLogoUrl(url);
-      setKbSettings({ ...kbSettings, logo_storage_path: storage_path });
       toast.success('Logo uploaded');
     } catch {
       toast.error('Failed to upload logo');
@@ -248,10 +249,10 @@ export default function KnowledgeBasePage() {
   };
 
   const handleLogoDelete = async () => {
-    if (!kbSettings) return;
+    if (!selectedOrgId) return;
     setLogoDeleting(true);
     try {
-      await deleteKbLogo(kbSettings.auto_domain);
+      await deleteKbLogo(selectedOrgId);
       if (logoUrl) URL.revokeObjectURL(logoUrl);
       setLogoUrl(null);
       toast.success('Logo removed');

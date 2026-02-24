@@ -13,13 +13,29 @@ export async function getOAuthClient(clientId: string) {
   return response.data;
 }
 
-export async function createOAuthClient(data: {
+export interface CreateConnectorClientData {
   client_id: string;
   organization_id: string;
   client_name: string;
   redirect_uri: string;
-}) {
-  const response = await apiClient.post<OAuthClient>('/admin/oauth-clients', data);
+  is_public: false;
+  description?: string;
+  refresh_token_expiry_seconds?: number | null;
+}
+
+export interface CreatePlatformClientData {
+  client_id: string;
+  client_name: string;
+  is_public: true;
+  description?: string;
+  refresh_token_expiry_seconds?: number | null;
+}
+
+export async function createOAuthClient(data: CreateConnectorClientData | CreatePlatformClientData) {
+  const response = await apiClient.post<OAuthClient & { client_secret?: string }>(
+    '/admin/oauth-clients',
+    data
+  );
   return response.data;
 }
 
@@ -30,6 +46,8 @@ export async function updateOAuthClient(
     redirect_uri?: string;
     organization_id?: string;
     is_active?: boolean;
+    description?: string;
+    refresh_token_expiry_seconds?: number | null;
   }
 ) {
   const response = await apiClient.patch<OAuthClient>(

@@ -6,6 +6,16 @@
 import axios, { type AxiosError } from 'axios';
 import { refreshAccessToken } from '../auth/oauth';
 
+function clearAuthAndRedirect(): void {
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('refresh_token');
+  localStorage.removeItem('auth-storage');
+  sessionStorage.clear();
+  if (typeof window !== 'undefined') {
+    window.location.replace('/login');
+  }
+}
+
 const apiClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000',
   headers: {
@@ -45,14 +55,8 @@ apiClient.interceptors.response.use(
           const refreshToken = localStorage.getItem('refresh_token');
 
           if (!refreshToken) {
-            // No refresh token, clear everything and redirect to login
             isRefreshing = false;
-            localStorage.clear();
-            sessionStorage.clear();
-            // Use replace to avoid back button issues
-            if (typeof window !== 'undefined') {
-              window.location.replace('/login');
-            }
+            clearAuthAndRedirect();
             return Promise.reject(new Error('No refresh token available'));
           }
 
@@ -76,14 +80,7 @@ apiClient.interceptors.response.use(
         } catch (refreshError) {
           isRefreshing = false;
           refreshQueue = [];
-
-          // Refresh failed, clear everything and redirect to login
-          localStorage.clear();
-          sessionStorage.clear();
-          if (typeof window !== 'undefined') {
-            window.location.replace('/login');
-          }
-
+          clearAuthAndRedirect();
           return Promise.reject(new Error('Session expired. Please login again.'));
         }
       }

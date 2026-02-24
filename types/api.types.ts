@@ -143,12 +143,17 @@ export interface Group {
 export interface OAuthClient {
   id: string;
   client_id: string;
-  organization_id: string;
+  organization_id: string | null;
   client_name: string;
-  redirect_uri: string;
+  redirect_uri: string | null;
   is_active: boolean;
+  is_public: boolean;
+  description: string | null;
+  /** Per-client refresh token TTL in seconds. null = use server default (REFRESH_TOKEN_EXPIRY). */
+  refresh_token_expiry_seconds: number | null;
   created_at: string;
   updated_at: string;
+  last_used_at: string | null;
   client_secret?: string; // Only returned on creation
 }
 
