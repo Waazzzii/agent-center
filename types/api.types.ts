@@ -380,6 +380,8 @@ export interface KbOrgSettings {
   guest_enabled: boolean;
   /** Custom CSS injected into the portal <head> to override CSS variables */
   custom_theme: string | null;
+  /** GCS object path of the uploaded logo, null if no logo has been set */
+  logo_storage_path: string | null;
   created_at: string;
   updated_at: string;
 }

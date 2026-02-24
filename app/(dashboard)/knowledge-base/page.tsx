@@ -10,6 +10,11 @@ import {
   checkDomain,
   setDomainStatus,
 } from '@/lib/api/kb-settings';
+import {
+  fetchKbLogoBlob,
+  uploadKbLogo,
+  deleteKbLogo,
+} from '@/lib/api/kb-logos';
 import type { KbOrgSettings, DomainProvisioningStatus, ProvisionDomainResult } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -103,6 +108,12 @@ export default function KnowledgeBasePage() {
   const [themeTabSaved, setThemeTabSaved]   = useState(false);
   const [showVarsRef, setShowVarsRef]       = useState(false);
 
+  // Logo state
+  const [logoUrl, setLogoUrl]             = useState<string | null>(null);
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [logoDeleting, setLogoDeleting]   = useState(false);
+  const logoInputRef = useRef<HTMLInputElement>(null);
+
   // Local domain status — "issuing" exists only in-flight and is never persisted
   const [autoDomainStatus, setAutoDomainStatus]     = useState<DomainProvisioningStatus | 'issuing' | null>(null);
   const [customDomainStatus, setCustomDomainStatus] = useState<DomainProvisioningStatus | 'issuing' | null>(null);
@@ -175,6 +186,14 @@ export default function KnowledgeBasePage() {
       setKbNameInput(data.settings.name || '');
       setCustomThemeInput(data.settings.custom_theme || '');
 
+      // Load logo only if one is stored (avoids unnecessary 404 requests)
+      if (data.settings.logo_storage_path) {
+        try {
+          const url = await fetchKbLogoBlob(data.settings.auto_domain, data.settings.logo_storage_path);
+          setLogoUrl(url);
+        } catch { /* logo fetch failed */ }
+      }
+
       const autoStatus   = data.settings.auto_domain_config?.status   ?? null;
       const customStatus = data.settings.custom_domain_config?.status  ?? null;
       setAutoDomainStatus(autoStatus);
@@ -205,6 +224,42 @@ export default function KnowledgeBasePage() {
   ) => {
     setStatus('failed');
     try { await setDomainStatus(orgId, type, 'failed'); } catch { /* best-effort */ }
+  };
+
+  // ── Logo handlers ──────────────────────────────────────────────────────────
+
+  const handleLogoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !kbSettings) return;
+    setLogoUploading(true);
+    try {
+      const { storage_path } = await uploadKbLogo(kbSettings.auto_domain, file);
+      if (logoUrl) URL.revokeObjectURL(logoUrl);
+      const url = await fetchKbLogoBlob(kbSettings.auto_domain, storage_path);
+      setLogoUrl(url);
+      setKbSettings({ ...kbSettings, logo_storage_path: storage_path });
+      toast.success('Logo uploaded');
+    } catch {
+      toast.error('Failed to upload logo');
+    } finally {
+      setLogoUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleLogoDelete = async () => {
+    if (!kbSettings) return;
+    setLogoDeleting(true);
+    try {
+      await deleteKbLogo(kbSettings.auto_domain);
+      if (logoUrl) URL.revokeObjectURL(logoUrl);
+      setLogoUrl(null);
+      toast.success('Logo removed');
+    } catch {
+      toast.error('Failed to remove logo');
+    } finally {
+      setLogoDeleting(false);
+    }
   };
 
   // ── Handlers ───────────────────────────────────────────────────────────────
@@ -629,14 +684,51 @@ export default function KnowledgeBasePage() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center">
-                  <Upload className="h-8 w-8 text-muted-foreground mb-2" />
-                  <p className="text-sm font-medium">Upload logo</p>
-                  <p className="text-xs text-muted-foreground mt-1">PNG, JPG or SVG — max 2 MB</p>
-                  <Button variant="outline" size="sm" className="mt-4" disabled>
-                    Choose file
-                  </Button>
-                </div>
+                <input
+                  ref={logoInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml"
+                  className="hidden"
+                  onChange={handleLogoUpload}
+                />
+                {logoUrl ? (
+                  <div className="flex items-center gap-4">
+                    <img
+                      src={logoUrl}
+                      alt="KB Logo"
+                      className="h-16 max-w-[200px] object-contain rounded border p-2 bg-white"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleLogoDelete}
+                      disabled={logoDeleting}
+                    >
+                      {logoDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
+                    </Button>
+                  </div>
+                ) : (
+                  <div
+                    className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => !logoUploading && logoInputRef.current?.click()}
+                  >
+                    {logoUploading
+                      ? <Loader2 className="h-8 w-8 text-muted-foreground mb-2 animate-spin" />
+                      : <Upload className="h-8 w-8 text-muted-foreground mb-2" />
+                    }
+                    <p className="text-sm font-medium">{logoUploading ? 'Uploading…' : 'Upload logo'}</p>
+                    <p className="text-xs text-muted-foreground mt-1">PNG, JPG or SVG — max 2 MB</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-4"
+                      disabled={logoUploading}
+                      onClick={(e) => { e.stopPropagation(); logoInputRef.current?.click(); }}
+                    >
+                      Choose file
+                    </Button>
+                  </div>
+                )}
               </CardContent>
             </Card>
 
