@@ -690,6 +690,7 @@ export default function KnowledgeBasePage() {
                             {copiedDomain === customDnsInstructions.value ? <Check className="h-3 w-3 text-green-600" /> : <Copy className="h-3 w-3" />}
                           </Button>
                         </div>
+                        <div className="flex gap-2"><span className="w-12 text-muted-foreground">Proxy</span><span>None (DNS only)</span></div>
                       </div>
                       <p className="text-muted-foreground">{customDnsInstructions.note}</p>
                     </div>
