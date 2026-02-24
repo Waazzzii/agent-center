@@ -33,6 +33,7 @@ function getTokenExp(token: string | null): number | null {
 export function TokenRefreshProvider() {
   const admin = useAuthStore((s) => s.admin)
   const updateTokens = useAuthStore((s) => s.updateTokens)
+  const clearAuth = useAuthStore((s) => s.clearAuth)
 
   useEffect(() => {
     if (!admin) return
@@ -54,6 +55,8 @@ export function TokenRefreshProvider() {
         }
       },
 
+      onSessionExpired: clearAuth,
+
       lockName: "admin-token-refresh",
       loginPath: "/login",
 
@@ -72,7 +75,7 @@ export function TokenRefreshProvider() {
         return () => window.removeEventListener("storage", handleStorage)
       },
     })
-  }, [admin, updateTokens])
+  }, [admin, updateTokens, clearAuth])
 
   return null
 }

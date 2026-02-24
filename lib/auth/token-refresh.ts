@@ -21,9 +21,9 @@
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-export const REFRESH_BEFORE_EXPIRY_MS = 10_000 // fire this many ms before expiry
-const REFRESH_TIMEOUT_MS               = 3_000  // max time for the refresh network call
-const LOCK_WAIT_MS                     = 2_000  // max time to wait for the lock
+export const REFRESH_BEFORE_EXPIRY_MS = 60_000 // fire this many ms before expiry
+const REFRESH_TIMEOUT_MS               = 10_000 // max time for the refresh network call
+const LOCK_WAIT_MS                     = 5_000  // max time to wait for the lock
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -56,6 +56,13 @@ export interface TokenRefreshOptions {
   lockName: string
 
   /**
+   * Called before redirecting to the login page when the session cannot be
+   * recovered. Use this to clear any persisted auth state so the login page
+   * doesn't immediately redirect back to the dashboard.
+   */
+  onSessionExpired?: () => void
+
+  /**
    * Optional extra event listeners (e.g. StorageEvent for localStorage-based
    * apps to pick up token updates written by other tabs).
    * Receives a `reschedule` callback to call with the new expiry.
@@ -66,8 +73,9 @@ export interface TokenRefreshOptions {
 
 // ─── Internal helpers ─────────────────────────────────────────────────────────
 
-function clearAndRedirect(loginPath: string): void {
+function clearAndRedirect(loginPath: string, opts: TokenRefreshOptions): void {
   stop()
+  opts.onSessionExpired?.()
   window.location.replace(loginPath)
 }
 
@@ -90,7 +98,7 @@ export function scheduleTokenRefresh(exp: number, opts: TokenRefreshOptions): vo
       const newExp = await opts.refresh(AbortSignal.timeout(REFRESH_TIMEOUT_MS))
       newExp !== null
         ? scheduleTokenRefresh(newExp, opts)
-        : clearAndRedirect(opts.loginPath)
+        : clearAndRedirect(opts.loginPath, opts)
     }
 
     if (!("locks" in navigator)) {
@@ -128,7 +136,7 @@ export function start(opts: TokenRefreshOptions): () => void {
   if (!exp) return () => {}
 
   if (exp * 1000 < Date.now()) {
-    clearAndRedirect(opts.loginPath)
+    clearAndRedirect(opts.loginPath, opts)
     return () => {}
   }
 
@@ -139,7 +147,7 @@ export function start(opts: TokenRefreshOptions): () => void {
     if (document.visibilityState !== "visible") return
     const freshExp = opts.readExp()
     if (!freshExp || freshExp * 1000 < Date.now()) {
-      clearAndRedirect(opts.loginPath)
+      clearAndRedirect(opts.loginPath, opts)
       return
     }
     scheduleTokenRefresh(freshExp, opts)
