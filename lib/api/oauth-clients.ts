@@ -13,26 +13,17 @@ export async function getOAuthClient(clientId: string) {
   return response.data;
 }
 
-export interface CreateConnectorClientData {
+export interface CreateOAuthClientData {
   client_id: string;
-  organization_id: string;
   client_name: string;
-  redirect_uri: string;
-  is_public: false;
+  organization_id?: string;  // Required for MCP clients, optional for platform clients
+  redirect_uri?: string;      // Required for MCP clients, optional for platform clients
   description?: string;
   refresh_token_expiry_seconds?: number | null;
 }
 
-export interface CreatePlatformClientData {
-  client_id: string;
-  client_name: string;
-  is_public: true;
-  description?: string;
-  refresh_token_expiry_seconds?: number | null;
-}
-
-export async function createOAuthClient(data: CreateConnectorClientData | CreatePlatformClientData) {
-  const response = await apiClient.post<OAuthClient & { client_secret?: string }>(
+export async function createOAuthClient(data: CreateOAuthClientData) {
+  const response = await apiClient.post<OAuthClient>(
     '/admin/oauth-clients',
     data
   );

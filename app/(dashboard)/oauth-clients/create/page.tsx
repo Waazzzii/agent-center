@@ -17,10 +17,10 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { ArrowLeft, AlertTriangle, Copy, Check, Plug, Layout } from 'lucide-react';
 import { toast } from 'sonner';
 
-type ClientType = 'connector' | 'platform';
+type ClientType = 'mcp' | 'platform';
 
-const CONNECTOR_DEFAULT_TTL = 604800; // 7 days
-const PLATFORM_DEFAULT_TTL  = 86400;  // 24 hours
+const MCP_DEFAULT_TTL = 604800; // 7 days
+const PLATFORM_DEFAULT_TTL = 86400;  // 24 hours
 
 function ttlLabel(seconds: number): string {
   if (seconds >= 86400 && seconds % 86400 === 0) return `${seconds / 86400} day${seconds / 86400 !== 1 ? 's' : ''}`;
@@ -33,7 +33,7 @@ export default function CreateOAuthClientPage() {
   const { admin, isSuperAdmin } = useAuthStore();
   const [loading, setLoading] = useState(false);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [clientType, setClientType] = useState<ClientType>('connector');
+  const [clientType, setClientType] = useState<ClientType>('mcp');
 
   const [formData, setFormData] = useState({
     client_id: '',
@@ -41,15 +41,14 @@ export default function CreateOAuthClientPage() {
     organization_id: '',
     redirect_uri: '',
     description: '',
-    refresh_token_expiry_seconds: String(CONNECTOR_DEFAULT_TTL),
+    refresh_token_expiry_seconds: String(MCP_DEFAULT_TTL),
   });
 
   const [showSuccessModal, setShowSuccessModal] = useState(false);
   const [createdCredentials, setCreatedCredentials] = useState<{
     client_id: string;
-    client_secret?: string;
   } | null>(null);
-  const [copiedField, setCopiedField] = useState<'id' | 'secret' | null>(null);
+  const [copiedField, setCopiedField] = useState<'id' | null>(null);
 
   useEffect(() => {
     if (!admin || !isSuperAdmin()) {
@@ -64,7 +63,7 @@ export default function CreateOAuthClientPage() {
     setFormData((prev) => ({
       ...prev,
       refresh_token_expiry_seconds: String(
-        clientType === 'connector' ? CONNECTOR_DEFAULT_TTL : PLATFORM_DEFAULT_TTL
+        clientType === 'mcp' ? MCP_DEFAULT_TTL : PLATFORM_DEFAULT_TTL
       ),
     }));
   }, [clientType]);
@@ -87,7 +86,7 @@ export default function CreateOAuthClientPage() {
     setFormData((f) => ({ ...f, client_id: uuid }));
   };
 
-  const handleCopy = async (text: string, field: 'id' | 'secret') => {
+  const handleCopy = async (text: string, field: 'id') => {
     try {
       await navigator.clipboard.writeText(text);
       setCopiedField(field);
@@ -115,40 +114,32 @@ export default function CreateOAuthClientPage() {
     try {
       setLoading(true);
 
-      let response;
-      if (clientType === 'connector') {
+      // Validation for MCP clients
+      if (clientType === 'mcp') {
         if (!formData.organization_id) {
-          toast.error('Organization is required for connector clients');
+          toast.error('Organization is required for MCP clients');
           setLoading(false);
           return;
         }
         if (!formData.redirect_uri.trim()) {
-          toast.error('Redirect URI is required for connector clients');
+          toast.error('Redirect URI is required for MCP clients');
           setLoading(false);
           return;
         }
-        response = await createOAuthClient({
-          client_id: formData.client_id,
-          client_name: formData.client_name,
-          organization_id: formData.organization_id,
-          redirect_uri: formData.redirect_uri.trim(),
-          is_public: false,
-          description: formData.description.trim() || undefined,
-          refresh_token_expiry_seconds: ttlRaw,
-        });
-      } else {
-        response = await createOAuthClient({
-          client_id: formData.client_id,
-          client_name: formData.client_name,
-          is_public: true,
-          description: formData.description.trim() || undefined,
-          refresh_token_expiry_seconds: ttlRaw,
-        });
       }
+
+      // Create OAuth client (all are PKCE-based, no secrets)
+      await createOAuthClient({
+        client_id: formData.client_id,
+        client_name: formData.client_name,
+        organization_id: clientType === 'mcp' ? formData.organization_id : undefined,
+        redirect_uri: clientType === 'mcp' ? formData.redirect_uri.trim() : undefined,
+        description: formData.description.trim() || undefined,
+        refresh_token_expiry_seconds: ttlRaw,
+      });
 
       setCreatedCredentials({
         client_id: formData.client_id,
-        client_secret: (response as any).client_secret,
       });
       setShowSuccessModal(true);
     } catch (error: any) {
@@ -165,7 +156,7 @@ export default function CreateOAuthClientPage() {
 
   if (!admin || !isSuperAdmin()) return null;
 
-  const isConnector = clientType === 'connector';
+  const isMcp = clientType === 'mcp';
 
   return (
     <div className="container mx-auto p-6">
@@ -176,20 +167,9 @@ export default function CreateOAuthClientPage() {
         </Button>
         <div>
           <h1 className="text-3xl font-bold">Create OAuth Client</h1>
-          <p className="text-muted-foreground">Add a new OAuth 2.0 client</p>
+          <p className="text-muted-foreground">Add a new OAuth 2.0 client (PKCE)</p>
         </div>
       </div>
-
-      {isConnector && (
-        <Alert variant="destructive" className="mb-6 max-w-2xl">
-          <AlertTriangle className="h-4 w-4" />
-          <AlertTitle>Client Secret — save it now</AlertTitle>
-          <AlertDescription>
-            The client secret will only be shown once after creation.
-            Copy and store it securely — you cannot retrieve it later.
-          </AlertDescription>
-        </Alert>
-      )}
 
       <Card className="max-w-2xl">
         <CardHeader>
@@ -207,17 +187,17 @@ export default function CreateOAuthClientPage() {
               <div className="grid grid-cols-2 gap-3">
                 <button
                   type="button"
-                  onClick={() => setClientType('connector')}
+                  onClick={() => setClientType('mcp')}
                   className={`flex flex-col gap-1 rounded-lg border p-4 text-left transition-colors ${
-                    isConnector ? 'border-primary bg-primary/5' : 'border-muted hover:border-muted-foreground/50'
+                    isMcp ? 'border-primary bg-primary/5' : 'border-muted hover:border-muted-foreground/50'
                   }`}
                 >
                   <div className="flex items-center gap-2 font-medium">
                     <Plug className="h-4 w-4" />
-                    Connector
+                    MCP
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Claude / MCP integrations. Confidential client with secret + PKCE. Scoped to an organization.
+                    Claude / MCP integrations. Uses PKCE (no secret). Scoped to an organization.
                     Recommended refresh token: <strong>7 days</strong>.
                   </p>
                 </button>
@@ -225,7 +205,7 @@ export default function CreateOAuthClientPage() {
                   type="button"
                   onClick={() => setClientType('platform')}
                   className={`flex flex-col gap-1 rounded-lg border p-4 text-left transition-colors ${
-                    !isConnector ? 'border-primary bg-primary/5' : 'border-muted hover:border-muted-foreground/50'
+                    !isMcp ? 'border-primary bg-primary/5' : 'border-muted hover:border-muted-foreground/50'
                   }`}
                 >
                   <div className="flex items-center gap-2 font-medium">
@@ -233,7 +213,7 @@ export default function CreateOAuthClientPage() {
                     Platform
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Admin UI, KB Portal, or internal tools. Public client (PKCE only, no secret).
+                    Admin UI, KB Portal, or internal tools. Uses PKCE (no secret).
                     Redirect URI validated dynamically.
                     Recommended refresh token: <strong>24 hours</strong>.
                   </p>
@@ -266,7 +246,7 @@ export default function CreateOAuthClientPage() {
                 value={formData.client_name}
                 onChange={(e) => setFormData((f) => ({ ...f, client_name: e.target.value }))}
                 required
-                placeholder={isConnector ? 'e.g., Claude MCP – Acme Corp' : 'e.g., Admin UI'}
+                placeholder={isMcp ? 'e.g., Claude MCP – Acme Corp' : 'e.g., Admin UI'}
               />
             </div>
 
@@ -277,16 +257,16 @@ export default function CreateOAuthClientPage() {
                 value={formData.description}
                 onChange={(e) => setFormData((f) => ({ ...f, description: e.target.value }))}
                 placeholder={
-                  isConnector
-                    ? 'e.g., Allows Claude to access Wazzi connectors for the Acme organization'
-                    : 'e.g., Wazzi Admin Dashboard — public PKCE client'
+                  isMcp
+                    ? 'e.g., Allows Claude to access Wazzi MCP connectors for the Acme organization'
+                    : 'e.g., Wazzi Admin Dashboard — PKCE client'
                 }
                 rows={2}
               />
             </div>
 
-            {/* ── Connector-only fields ── */}
-            {isConnector && (
+            {/* ── MCP-only fields ── */}
+            {isMcp && (
               <>
                 <div className="space-y-2">
                   <Label htmlFor="organization_id">Organization *</Label>
@@ -324,7 +304,7 @@ export default function CreateOAuthClientPage() {
               </>
             )}
 
-            {!isConnector && (
+            {!isMcp && (
               <div className="rounded-lg border border-muted bg-muted/50 p-3 text-sm text-muted-foreground">
                 Platform clients use <strong>dynamic redirect URI validation</strong> — the backend
                 accepts any <code>*.wazzi.io/callback</code> origin or localhost during development.
@@ -352,8 +332,8 @@ export default function CreateOAuthClientPage() {
                   return (
                     <>
                       {ttlLabel(v)} — rotated on every use; TTL resets on each access token refresh.{' '}
-                      {isConnector
-                        ? 'Recommended: 604800 (7 days) — allows idle Claude sessions to persist across the week.'
+                      {isMcp
+                        ? 'Recommended: 604800 (7 days) — allows idle MCP sessions to persist across the week.'
                         : 'Recommended: 86400 (24 hours) — users must re-authenticate after a day of inactivity.'}
                     </>
                   );
@@ -379,9 +359,7 @@ export default function CreateOAuthClientPage() {
           <DialogHeader>
             <DialogTitle>OAuth Client Created</DialogTitle>
             <DialogDescription>
-              {createdCredentials?.client_secret
-                ? 'Save these credentials securely. The client secret will not be shown again.'
-                : 'Platform client created — no secret to save (public / PKCE only).'}
+              PKCE-based OAuth client created successfully. Copy the Client ID below.
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
@@ -403,39 +381,6 @@ export default function CreateOAuthClientPage() {
                 </Button>
               </div>
             </div>
-
-            {createdCredentials?.client_secret && (
-              <>
-                <div className="space-y-2">
-                  <Label>Client Secret</Label>
-                  <div className="flex gap-2">
-                    <Input
-                      value={createdCredentials.client_secret}
-                      readOnly
-                      className="flex-1 font-mono text-sm"
-                    />
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => handleCopy(createdCredentials!.client_secret!, 'secret')}
-                    >
-                      {copiedField === 'secret' ? (
-                        <Check className="h-4 w-4" />
-                      ) : (
-                        <Copy className="h-4 w-4" />
-                      )}
-                    </Button>
-                  </div>
-                </div>
-                <Alert variant="destructive">
-                  <AlertTriangle className="h-4 w-4" />
-                  <AlertDescription>
-                    This is the only time the client secret is displayed. Copy it now.
-                  </AlertDescription>
-                </Alert>
-              </>
-            )}
           </div>
           <DialogFooter>
             <Button type="button" onClick={handleModalClose}>
