@@ -14,7 +14,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, Layout, Plug } from 'lucide-react';
+import { AlertTriangle, ArrowLeft, Layout, Plug } from 'lucide-react';
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { toast } from 'sonner';
 
 function ttlLabel(seconds: number): string {
@@ -31,6 +32,7 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
   const [initialLoading, setInitialLoading] = useState(true);
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [client, setClient] = useState<OAuthClient | null>(null);
+  const [ttlWasNull, setTtlWasNull] = useState(false);
 
   const [formData, setFormData] = useState({
     client_name: '',
@@ -58,6 +60,7 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
         getOrganizations(),
       ]);
       setClient(clientData);
+      setTtlWasNull(clientData.refresh_token_expiry_seconds == null);
       setFormData({
         client_name: clientData.client_name || '',
         organization_id: clientData.organization_id || '',
@@ -154,6 +157,17 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {ttlWasNull && (
+            <Alert variant="destructive" className="mb-6">
+              <AlertTriangle className="h-4 w-4" />
+              <AlertTitle>Refresh token TTL not set</AlertTitle>
+              <AlertDescription>
+                This client has no refresh token TTL configured in the database — sessions are
+                using the server-wide default, which may be missing or zero. Save a value below
+                to fix this and prevent users from being logged out immediately after login.
+              </AlertDescription>
+            </Alert>
+          )}
           <form onSubmit={handleSubmit} className="space-y-6">
             <div className="space-y-2">
               <Label htmlFor="client_id">Client ID</Label>
@@ -223,11 +237,12 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
             )}
 
             <div className="space-y-2">
-              <Label htmlFor="refresh_ttl">Refresh Token TTL (seconds)</Label>
+              <Label htmlFor="refresh_ttl">Refresh Token TTL (seconds) *</Label>
               <Input
                 id="refresh_ttl"
                 type="number"
                 min={60}
+                required
                 value={formData.refresh_token_expiry_seconds}
                 onChange={(e) =>
                   setFormData((f) => ({ ...f, refresh_token_expiry_seconds: e.target.value }))
