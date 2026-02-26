@@ -30,7 +30,6 @@ function AuthorizeContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [clientInfo, setClientInfo] = useState<ClientInfo | null>(null);
-  const [requestingApp, setRequestingApp] = useState<string>('an application');
 
   // Extract state parameter which contains the auth session
   const state = searchParams.get('state');
@@ -50,18 +49,6 @@ function AuthorizeContent() {
       if (response.ok) {
         const data: ClientInfo = await response.json();
         setClientInfo(data);
-
-        // Detect requesting application from client name
-        const name = data.client_name.toLowerCase();
-        if (name.includes('claude')) {
-          setRequestingApp('Claude');
-        } else if (name.includes('mcp')) {
-          setRequestingApp('MCP Client');
-        } else {
-          // Use first part of client name (e.g., "Acme Corp - MCP Connector" → "Acme Corp")
-          const firstPart = data.client_name.split('-')[0].trim();
-          setRequestingApp(firstPart);
-        }
       }
     } catch (err) {
       console.error('Failed to fetch client info:', err);
@@ -156,7 +143,7 @@ function AuthorizeContent() {
               </p>
             )}
             <p className="text-sm text-muted-foreground mt-2">
-              <span className="font-medium">{requestingApp}</span> is requesting access to your Wazzi account.
+              <span className="font-medium">{clientInfo?.client_name || 'An application'}</span> is requesting access to your Wazzi account.
             </p>
           </div>
 
@@ -216,7 +203,7 @@ function AuthorizeContent() {
         <Separator />
         <div className="px-8 py-4 bg-muted/30">
           <p className="text-xs text-center text-muted-foreground">
-            By continuing, you authorize <span className="font-medium">{requestingApp}</span> to access your Wazzi account on your behalf.
+            By continuing, you authorize <span className="font-medium">{clientInfo?.client_name || 'this application'}</span> to access your Wazzi account on your behalf.
             You can revoke access at any time.
           </p>
         </div>
