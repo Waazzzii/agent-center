@@ -158,6 +158,7 @@ export default function KnowledgeBasePage() {
   const { selectedOrgId, selectedOrgName, isOrgAdminView } = useAdminViewStore();
 
   const [kbSettings, setKbSettings] = useState<KbOrgSettings | null>(null);
+  const [logoUrlFromApi, setLogoUrlFromApi] = useState<string | null>(null);
   const [kbLoading, setKbLoading]   = useState(false);
   const [kbSaving, setKbSaving]     = useState(false);
   const [customDomainInput, setCustomDomainInput] = useState('');
@@ -172,6 +173,7 @@ export default function KnowledgeBasePage() {
 
   // Logo state
   const [logoUrl, setLogoUrl]             = useState<string | null>(null);
+  const [logoLoading, setLogoLoading]     = useState(false);
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoDeleting, setLogoDeleting]   = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
@@ -238,25 +240,57 @@ export default function KnowledgeBasePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId, isOrgAdminView]);
 
+  // Load logo asynchronously (don't block page render)
+  useEffect(() => {
+    if (!selectedOrgId) return;
+
+    // Reset logo state when logo URL changes
+    setLogoUrl(null);
+
+    // Only fetch if logo exists (from API response)
+    if (!logoUrlFromApi) {
+      setLogoLoading(false);
+      return;
+    }
+
+    let cancelled = false;
+    const loadLogo = async () => {
+      setLogoLoading(true);
+      try {
+        const url = await fetchKbLogoBlob(selectedOrgId);
+        if (!cancelled) {
+          setLogoUrl(url);
+          setLogoLoading(false);
+        }
+      } catch {
+        // Logo fetch failed - silently ignore
+        if (!cancelled) {
+          setLogoUrl(null);
+          setLogoLoading(false);
+        }
+      }
+    };
+
+    loadLogo();
+
+    return () => {
+      cancelled = true;
+      // Cleanup object URL if component unmounts
+      if (logoUrl) URL.revokeObjectURL(logoUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrgId, logoUrlFromApi]);
+
   const loadKbSettings = async () => {
     if (!selectedOrgId) return;
     try {
       setKbLoading(true);
       const data = await getKbSettings(selectedOrgId);
       setKbSettings(data.settings);
+      setLogoUrlFromApi(data.logo_url); // Store logo_url from API response
       setCustomDomainInput(data.settings.custom_domain || '');
       setKbNameInput(data.settings.name || '');
       setCustomThemeInput(data.settings.custom_theme || '');
-
-      // Load logo if one exists (logo_url is included in settings response)
-      if (data.logo_url) {
-        try {
-          const url = await fetchKbLogoBlob(selectedOrgId);
-          setLogoUrl(url);
-        } catch { /* logo fetch failed */ }
-      } else {
-        setLogoUrl(null);
-      }
 
       const autoStatus   = data.settings.auto_domain_config?.status   ?? null;
       const customStatus = data.settings.custom_domain_config?.status  ?? null;
@@ -297,11 +331,26 @@ export default function KnowledgeBasePage() {
     if (!file || !selectedOrgId) return;
     setLogoUploading(true);
     try {
-      await uploadKbLogo(selectedOrgId, file);
-      if (logoUrl) URL.revokeObjectURL(logoUrl);
-      const url = await fetchKbLogoBlob(selectedOrgId);
-      setLogoUrl(url);
+      const uploadResult = await uploadKbLogo(selectedOrgId, file);
+
+      // Update logo_url from API (triggers useEffect to load blob)
+      setLogoUrlFromApi(uploadResult.logo_url);
+
       toast.success('Logo uploaded');
+
+      // Fetch the new logo asynchronously
+      if (logoUrl) URL.revokeObjectURL(logoUrl);
+      setLogoUrl(null);
+      setLogoLoading(true);
+
+      try {
+        const url = await fetchKbLogoBlob(selectedOrgId);
+        setLogoUrl(url);
+      } catch {
+        // Logo fetch failed after upload
+      } finally {
+        setLogoLoading(false);
+      }
     } catch {
       toast.error('Failed to upload logo');
     } finally {
@@ -317,6 +366,10 @@ export default function KnowledgeBasePage() {
       await deleteKbLogo(selectedOrgId);
       if (logoUrl) URL.revokeObjectURL(logoUrl);
       setLogoUrl(null);
+
+      // Clear logo_url
+      setLogoUrlFromApi(null);
+
       toast.success('Logo removed');
     } catch {
       toast.error('Failed to remove logo');
@@ -755,7 +808,12 @@ export default function KnowledgeBasePage() {
                   className="hidden"
                   onChange={handleLogoUpload}
                 />
-                {logoUrl ? (
+                {logoLoading || (logoUrlFromApi && !logoUrl) ? (
+                  <div className="flex items-center gap-4 h-16">
+                    <div className="h-16 w-[200px] rounded border bg-muted animate-pulse" />
+                    <div className="text-sm text-muted-foreground">Loading logo...</div>
+                  </div>
+                ) : logoUrl ? (
                   <div className="flex items-center gap-4">
                     <img
                       src={logoUrl}
