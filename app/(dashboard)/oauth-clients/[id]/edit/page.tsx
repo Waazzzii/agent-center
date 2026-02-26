@@ -183,6 +183,9 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
                 onChange={(e) => setFormData((f) => ({ ...f, client_name: e.target.value }))}
                 required
               />
+              <p className="text-xs text-muted-foreground">
+                This name will be displayed on the authorization screen when users connect. Use a friendly, recognizable name like "Claude Desktop" or "My App Name".
+              </p>
             </div>
 
             <div className="space-y-2">

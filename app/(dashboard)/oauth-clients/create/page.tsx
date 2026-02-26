@@ -246,8 +246,11 @@ export default function CreateOAuthClientPage() {
                 value={formData.client_name}
                 onChange={(e) => setFormData((f) => ({ ...f, client_name: e.target.value }))}
                 required
-                placeholder={isMcp ? 'e.g., Claude MCP – Acme Corp' : 'e.g., Admin UI'}
+                placeholder={isMcp ? 'e.g., Claude Desktop' : 'e.g., Admin UI'}
               />
+              <p className="text-xs text-muted-foreground">
+                This name will be displayed on the authorization screen when users connect. Use a friendly, recognizable name like "Claude Desktop" or "My App Name".
+              </p>
             </div>
 
             <div className="space-y-2">
