@@ -90,14 +90,6 @@ export async function exchangeCodeForTokens(code: string): Promise<{
     code_verifier: codeVerifier,
   };
 
-  console.log('[OAuth] Exchanging code for tokens:', {
-    url: tokenUrl,
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    code: code.substring(0, 10) + '...',
-    code_verifier: codeVerifier.substring(0, 10) + '...',
-  });
-
   const response = await fetch(tokenUrl, {
     method: 'POST',
     headers: {
@@ -110,7 +102,6 @@ export async function exchangeCodeForTokens(code: string): Promise<{
     let errorMessage = `Failed to exchange code for tokens (HTTP ${response.status})`;
     try {
       const error = await response.json();
-      console.error('[OAuth] Token exchange error:', error);
       errorMessage = error.message || error.error_description || error.error || errorMessage;
       // Include additional details if available
       if (error.error) {
@@ -120,10 +111,8 @@ export async function exchangeCodeForTokens(code: string): Promise<{
         errorMessage += `: ${error.error_description}`;
       }
     } catch (e) {
-      // Response wasn't JSON, try to get text
-      const text = await response.text();
-      console.error('[OAuth] Token exchange failed with non-JSON response:', text);
-      errorMessage += ` - ${text.substring(0, 200)}`;
+      // Response wasn't JSON
+      errorMessage += ' - Invalid response format';
     }
     throw new Error(errorMessage);
   }

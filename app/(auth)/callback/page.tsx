@@ -17,56 +17,43 @@ function CallbackContent() {
 
   useEffect(() => {
     const handleCallback = async () => {
-      console.log('[AUTH] Starting OAuth callback handler');
       const code = searchParams.get('code');
       const errorParam = searchParams.get('error');
       const state = searchParams.get('state');
 
-      console.log('[AUTH] Received params - code:', code?.substring(0, 10) + '...', 'state:', state?.substring(0, 10) + '...');
-
       if (errorParam) {
-        console.error('[AUTH] OAuth error:', errorParam);
         setError(errorParam);
         return;
       }
 
       // Verify state parameter
       const storedState = sessionStorage.getItem('oauth_state');
-      console.log('[AUTH] Verifying state parameter');
       if (state !== storedState) {
-        console.error('[AUTH] State mismatch! Expected:', storedState?.substring(0, 10) + '...', 'Got:', state?.substring(0, 10) + '...');
         setError('Invalid state parameter - possible CSRF attack');
         return;
       }
-      console.log('[AUTH] ✓ State verified');
 
       // Clear stored state
       sessionStorage.removeItem('oauth_state');
 
       if (!code) {
-        console.error('[AUTH] No authorization code received');
         setError('No authorization code received');
         return;
       }
 
       try {
-        console.log('[AUTH] Exchanging code for tokens...');
         const { accessToken, refreshToken } = await exchangeCodeForTokens(code);
-        console.log('[AUTH] ✓ Tokens received');
 
         // Set tokens temporarily
         localStorage.setItem('access_token', accessToken);
         localStorage.setItem('refresh_token', refreshToken);
 
-        console.log('[AUTH] Fetching admin user info...');
         const response = await apiClient.get<AdminUser>('/admin/me');
         const admin = response.data;
-        console.log('[AUTH] ✓ Admin user:', admin.email, '(' + admin.role + ')');
 
         // Store auth state
         setAuth(admin, accessToken, refreshToken);
 
-        console.log('[AUTH] ✓ Redirecting to dashboard');
         // Honour any stored post-login destination (e.g. deep-linked from wazzi-kb)
         const intendedPath = sessionStorage.getItem('post_login_redirect');
         sessionStorage.removeItem('post_login_redirect');
@@ -78,8 +65,7 @@ function CallbackContent() {
           router.push('/users');
         }
       } catch (err: any) {
-        console.error('[AUTH] Error:', err.message);
-        console.error('[AUTH] Error details:', err, err.response?.data);
+        console.error('[AUTH] Authentication failed:', err.message);
         setError(err.message || 'Failed to complete authentication');
       }
     };

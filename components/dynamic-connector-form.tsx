@@ -78,10 +78,6 @@ export function DynamicConnectorForm({
 
   const handleFormSubmit = async (data: Record<string, any>) => {
     try {
-      console.log('[FORM] Submit triggered with data:', data);
-      console.log('[FORM] Secret masks:', secretMasks);
-      console.log('[FORM] Form errors:', errors);
-
       // Separate regular config from secrets
       const config: Record<string, any> = {};
       const secrets: Record<string, string> = {};
@@ -126,10 +122,6 @@ export function DynamicConnectorForm({
         }
       });
 
-      console.log('[FORM] Prepared config:', config);
-      console.log('[FORM] Prepared secrets:', Object.keys(secrets));
-      console.log('[FORM] Missing required:', missingRequired);
-
       // Show error if required fields are missing
       if (missingRequired.length > 0) {
         toast.error('Required fields missing', {
@@ -138,11 +130,9 @@ export function DynamicConnectorForm({
         return;
       }
 
-      console.log('[FORM] Calling onSubmit...');
       await onSubmit(config, secrets);
-      console.log('[FORM] Submit completed successfully');
     } catch (error) {
-      console.error('[FORM] Submit error:', error);
+      console.error('[FORM] Failed to save configuration');
       toast.error('Failed to save configuration', {
         description: error instanceof Error ? error.message : 'Unknown error',
       });
@@ -150,7 +140,6 @@ export function DynamicConnectorForm({
   };
 
   const handleFormError = (errors: any) => {
-    console.error('[FORM] Validation errors:', errors);
     const errorMessages = Object.entries(errors)
       .map(([key, error]: [string, any]) => {
         const field = schema.fields.find(f => f.key === key);
