@@ -38,17 +38,36 @@ export async function getGroupUsers(orgId: string, groupId: string) {
   return response.data;
 }
 
-// Add user to group
-export async function addUserToGroup(orgId: string, userId: string, groupId: string) {
+// Add multiple groups to a user
+export async function addGroupsToUser(orgId: string, userId: string, groupIds: string[]) {
   const response = await apiClient.post(
-    `/admin/organizations/${orgId}/users/${userId}/groups/${groupId}`
+    `/admin/organizations/${orgId}/users/${userId}/groups`,
+    { group_ids: groupIds }
   );
   return response.data;
 }
 
-// Remove user from group
-export async function removeUserFromGroup(orgId: string, userId: string, groupId: string) {
+// Remove multiple groups from a user
+export async function removeGroupsFromUser(orgId: string, userId: string, groupIds: string[]) {
   await apiClient.delete(
-    `/admin/organizations/${orgId}/users/${userId}/groups/${groupId}`
+    `/admin/organizations/${orgId}/users/${userId}/groups`,
+    { data: { group_ids: groupIds } }
+  );
+}
+
+// Add multiple users to a group
+export async function addUsersToGroup(orgId: string, groupId: string, userIds: string[]) {
+  const response = await apiClient.post(
+    `/admin/organizations/${orgId}/groups/${groupId}/users`,
+    { user_ids: userIds }
+  );
+  return response.data;
+}
+
+// Remove multiple users from a group
+export async function removeUsersFromGroup(orgId: string, groupId: string, userIds: string[]) {
+  await apiClient.delete(
+    `/admin/organizations/${orgId}/groups/${groupId}/users`,
+    { data: { user_ids: userIds } }
   );
 }

@@ -4,7 +4,7 @@ import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getGroup, deleteGroup } from '@/lib/api/groups';
-import { getGroupUsers, removeUserFromGroup } from '@/lib/api/user-groups';
+import { getGroupUsers, removeUsersFromGroup } from '@/lib/api/user-groups';
 import { getGroupConnectors, removeConnectorFromGroup } from '@/lib/api/group-connectors';
 import type { Group, GroupConnector } from '@/types/api.types';
 import type { UserMembership } from '@/lib/api/user-groups';
@@ -77,7 +77,7 @@ export default function GroupDetailPage({ params }: { params: Promise<{ id: stri
     if (!confirmed) return;
 
     try {
-      await removeUserFromGroup(selectedOrgId, userId, groupId);
+      await removeUsersFromGroup(selectedOrgId, groupId, [userId]);
       toast.success('User removed from group');
       await loadData();
     } catch (error: any) {

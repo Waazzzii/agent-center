@@ -3,9 +3,9 @@
 import { use, useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { getUser, updateUser, deleteUser } from '@/lib/api/users';
+import { getUser, getUsers, updateUser, deleteUser } from '@/lib/api/users';
 import { getGroups } from '@/lib/api/groups';
-import { getUserGroups, addUserToGroup, removeUserFromGroup } from '@/lib/api/user-groups';
+import { getUserGroups, addGroupsToUser, removeGroupsFromUser } from '@/lib/api/user-groups';
 import type { User, UpdateUserDto, Group } from '@/types/api.types';
 import type { GroupMembership } from '@/lib/api/user-groups';
 import { Button } from '@/components/ui/button';
@@ -28,18 +28,18 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ArrowLeft, Trash2, Search, Plus, CheckSquare, Square } from 'lucide-react';
+import { ArrowLeft, Trash2, Search, Plus, CheckSquare, Square, MinusSquare } from 'lucide-react';
 import { toast } from 'sonner';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { DeleteUserDialog } from '@/components/users/delete-user-dialog';
 
 export default function EditUserPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: userId } = use(params);
   const router = useRouter();
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
-  const { confirm } = useConfirmDialog();
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
+  const [allUsers, setAllUsers] = useState<User[]>([]);
   const [allGroups, setAllGroups] = useState<Group[]>([]);
   const [userGroups, setUserGroups] = useState<GroupMembership[]>([]);
   const [selectedGroupIds, setSelectedGroupIds] = useState<string[]>([]); // For add dropdown
@@ -48,6 +48,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
   const [groupSearch, setGroupSearch] = useState('');
   const [memberSearch, setMemberSearch] = useState('');
   const [activeTab, setActiveTab] = useState('details');
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [formData, setFormData] = useState<UpdateUserDto & { email: string }>({
     email: '',
     first_name: '',
@@ -71,8 +72,9 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
 
     try {
       setInitialLoading(true);
-      const [userData, allGroupsData, userGroupsData] = await Promise.all([
+      const [userData, allUsersData, allGroupsData, userGroupsData] = await Promise.all([
         getUser(selectedOrgId, userId),
+        getUsers(selectedOrgId),
         getGroups(selectedOrgId),
         getUserGroups(selectedOrgId, userId),
       ]);
@@ -87,6 +89,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
         is_active: userData.is_active,
       });
 
+      setAllUsers(allUsersData.users);
       setAllGroups(allGroupsData.groups);
       setUserGroups(userGroupsData.groups);
     } catch (error: any) {
@@ -134,9 +137,9 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
   };
 
   const handleAddGroups = async (groupIds: string[]) => {
-    if (!selectedOrgId) return;
+    if (!selectedOrgId || groupIds.length === 0) return;
     try {
-      await Promise.all(groupIds.map(groupId => addUserToGroup(selectedOrgId, userId, groupId)));
+      await addGroupsToUser(selectedOrgId, userId, groupIds);
       toast.success(`${groupIds.length} group${groupIds.length !== 1 ? 's' : ''} added`);
       await loadData();
     } catch (error: any) {
@@ -149,18 +152,8 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
   const handleRemoveGroup = async (groupId: string) => {
     if (!selectedOrgId) return;
 
-    const confirmed = await confirm({
-      title: 'Remove from Group',
-      description: 'Are you sure you want to remove this user from the group?',
-      confirmText: 'Remove',
-      cancelText: 'Cancel',
-      variant: 'destructive',
-    });
-
-    if (!confirmed) return;
-
     try {
-      await removeUserFromGroup(selectedOrgId, userId, groupId);
+      await removeGroupsFromUser(selectedOrgId, userId, [groupId]);
       toast.success('User removed from group');
       await loadData();
     } catch (error: any) {
@@ -169,27 +162,30 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
     }
   };
 
-  const handleDeleteUser = async () => {
+  const handleDeleteConfirm = async (reassignToUserId: string) => {
     if (!selectedOrgId || !user) return;
 
-    const confirmed = await confirm({
-      title: 'Delete User',
-      description: `Are you sure you want to delete user "${user.email}"? This action cannot be undone.`,
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
-      variant: 'destructive',
-    });
+    const result = await deleteUser(selectedOrgId, userId, reassignToUserId);
 
-    if (!confirmed) return;
+    // Show success message with reassignment stats
+    const stats = result.reassigned;
+    const statsMessage = [
+      stats.kb_articles_authored > 0 && `${stats.kb_articles_authored} articles authored`,
+      stats.kb_articles_reviewed > 0 && `${stats.kb_articles_reviewed} articles reviewed`,
+      stats.kb_article_versions > 0 && `${stats.kb_article_versions} article versions`,
+      stats.kb_media > 0 && `${stats.kb_media} media files`,
+      stats.organization_connectors > 0 && `${stats.organization_connectors} connectors`,
+    ]
+      .filter(Boolean)
+      .join(', ');
 
-    try {
-      await deleteUser(selectedOrgId, userId);
+    if (statsMessage) {
+      toast.success(`User deleted successfully. Reassigned: ${statsMessage}`);
+    } else {
       toast.success('User deleted successfully');
-      router.push('/users');
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.message || error.message || 'Failed to delete user';
-      toast.error(errorMessage);
     }
+
+    router.push('/users');
   };
 
   // Available groups (not currently members) for add dropdown
@@ -206,6 +202,17 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [allGroups, userGroups, groupSearch]);
 
+  // Calculate available groups selection state
+  const availableSelectionState = useMemo(() => {
+    if (availableGroups.length === 0) return 'none';
+    const selectedCount = selectedGroupIds.filter(id =>
+      availableGroups.some(g => g.id === id)
+    ).length;
+    if (selectedCount === 0) return 'none';
+    if (selectedCount === availableGroups.length) return 'all';
+    return 'some';
+  }, [selectedGroupIds, availableGroups]);
+
   // Current members filtered by search
   const filteredMembers = useMemo(() => {
     const query = memberSearch.toLowerCase().trim();
@@ -216,6 +223,17 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [userGroups, memberSearch]);
+
+  // Calculate member selection state
+  const memberSelectionState = useMemo(() => {
+    if (filteredMembers.length === 0) return 'none';
+    const selectedCount = selectedMemberIds.filter(id =>
+      filteredMembers.some(m => m.id === id)
+    ).length;
+    if (selectedCount === 0) return 'none';
+    if (selectedCount === filteredMembers.length) return 'all';
+    return 'some';
+  }, [selectedMemberIds, filteredMembers]);
 
   const handleToggleGroup = (groupId: string) => {
     setSelectedGroupIds(prev =>
@@ -229,20 +247,36 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
     );
   };
 
-  const handleSelectAllAvailable = () => {
-    setSelectedGroupIds(availableGroups.map(g => g.id));
+  const handleToggleSelectAllAvailable = () => {
+    if (availableSelectionState === 'all') {
+      // Deselect all available groups
+      setSelectedGroupIds(prev =>
+        prev.filter(id => !availableGroups.some(g => g.id === id))
+      );
+    } else {
+      // Select all available groups
+      const availableIds = availableGroups.map(g => g.id);
+      setSelectedGroupIds(prev => {
+        const newIds = availableIds.filter(id => !prev.includes(id));
+        return [...prev, ...newIds];
+      });
+    }
   };
 
-  const handleDeselectAllAvailable = () => {
-    setSelectedGroupIds([]);
-  };
-
-  const handleSelectAllMembers = () => {
-    setSelectedMemberIds(filteredMembers.map(g => g.id));
-  };
-
-  const handleDeselectAllMembers = () => {
-    setSelectedMemberIds([]);
+  const handleToggleSelectAllMembers = () => {
+    if (memberSelectionState === 'all') {
+      // Deselect all filtered members
+      setSelectedMemberIds(prev =>
+        prev.filter(id => !filteredMembers.some(m => m.id === id))
+      );
+    } else {
+      // Select all filtered members (add to existing selection)
+      const filteredIds = filteredMembers.map(m => m.id);
+      setSelectedMemberIds(prev => {
+        const newIds = filteredIds.filter(id => !prev.includes(id));
+        return [...prev, ...newIds];
+      });
+    }
   };
 
   const handleAddSelected = async () => {
@@ -258,21 +292,9 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
   };
 
   const handleBulkRemove = async () => {
-    if (selectedMemberIds.length === 0) return;
-
-    const confirmed = await confirm({
-      title: 'Remove from Groups',
-      description: `Are you sure you want to remove this user from ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}?`,
-      confirmText: 'Remove',
-      cancelText: 'Cancel',
-      variant: 'destructive',
-    });
-
-    if (!confirmed) return;
-
-    if (!selectedOrgId) return;
+    if (!selectedOrgId || selectedMemberIds.length === 0) return;
     try {
-      await Promise.all(selectedMemberIds.map(groupId => removeUserFromGroup(selectedOrgId, userId, groupId)));
+      await removeGroupsFromUser(selectedOrgId, userId, selectedMemberIds);
       toast.success(`User removed from ${selectedMemberIds.length} group${selectedMemberIds.length !== 1 ? 's' : ''}`);
       setSelectedMemberIds([]);
       await loadData();
@@ -308,7 +330,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
             </p>
           </div>
         </div>
-        <Button variant="destructive" onClick={handleDeleteUser}>
+        <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
           <Trash2 className="mr-2 h-4 w-4" />
           Delete User
         </Button>
@@ -420,19 +442,20 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
         <TabsContent value="groups" className="mt-6">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <CardTitle>Group Memberships</CardTitle>
                   <CardDescription>
                     {userGroups.length} group{userGroups.length !== 1 ? 's' : ''} assigned to this user
                   </CardDescription>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full sm:w-auto">
                   {selectedMemberIds.length > 0 && (
                     <Button
                       onClick={handleBulkRemove}
                       variant="destructive"
                       size="sm"
+                      className="flex-1 sm:flex-none"
                     >
                       <Trash2 className="mr-2 h-4 w-4" />
                       Remove Selected ({selectedMemberIds.length})
@@ -440,7 +463,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                   )}
                   <Popover open={addDropdownOpen} onOpenChange={setAddDropdownOpen}>
                     <PopoverTrigger asChild>
-                      <Button size="sm">
+                      <Button size="sm" className="flex-1 sm:flex-none">
                         <Plus className="mr-2 h-4 w-4" />
                         Add Groups
                       </Button>
@@ -462,28 +485,28 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                             <p className="text-sm text-muted-foreground">
                               {selectedGroupIds.length} selected
                             </p>
-                            <div className="flex gap-2">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleSelectAllAvailable}
-                                disabled={availableGroups.length === 0}
-                              >
-                                <CheckSquare className="h-4 w-4 mr-1" />
-                                All
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleDeselectAllAvailable}
-                                disabled={selectedGroupIds.length === 0}
-                              >
-                                <Square className="h-4 w-4 mr-1" />
-                                None
-                              </Button>
-                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={handleToggleSelectAllAvailable}
+                              disabled={availableGroups.length === 0}
+                              title={
+                                availableSelectionState === 'all'
+                                  ? 'Deselect all'
+                                  : availableSelectionState === 'some'
+                                  ? 'Select all'
+                                  : 'Select all'
+                              }
+                            >
+                              {availableSelectionState === 'all' ? (
+                                <CheckSquare className="h-4 w-4" />
+                              ) : availableSelectionState === 'some' ? (
+                                <MinusSquare className="h-4 w-4" />
+                              ) : (
+                                <Square className="h-4 w-4" />
+                              )}
+                            </Button>
                           </div>
                         </div>
 
@@ -545,28 +568,28 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                     className="pl-9"
                   />
                 </div>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleSelectAllMembers}
-                    disabled={filteredMembers.length === 0}
-                  >
-                    <CheckSquare className="h-4 w-4 mr-1" />
-                    Select All
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleDeselectAllMembers}
-                    disabled={selectedMemberIds.length === 0}
-                  >
-                    <Square className="h-4 w-4 mr-1" />
-                    Deselect All
-                  </Button>
-                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={handleToggleSelectAllMembers}
+                  disabled={filteredMembers.length === 0}
+                  title={
+                    memberSelectionState === 'all'
+                      ? 'Deselect all'
+                      : memberSelectionState === 'some'
+                      ? 'Select all'
+                      : 'Select all'
+                  }
+                >
+                  {memberSelectionState === 'all' ? (
+                    <CheckSquare className="h-4 w-4" />
+                  ) : memberSelectionState === 'some' ? (
+                    <MinusSquare className="h-4 w-4" />
+                  ) : (
+                    <Square className="h-4 w-4" />
+                  )}
+                </Button>
               </div>
 
               {/* Current members table */}
@@ -575,44 +598,94 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                   {memberSearch ? 'No matching groups found' : 'User is not a member of any groups yet'}
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-12"></TableHead>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Slug</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+                <>
+                  {/* Mobile Card View */}
+                  <div className="sm:hidden space-y-3">
                     {filteredMembers.map((group) => (
-                      <TableRow key={group.id}>
-                        <TableCell>
+                      <Card key={group.id} className="p-4">
+                        <div className="flex items-stretch gap-3">
                           <Checkbox
                             checked={selectedMemberIds.includes(group.id)}
                             onCheckedChange={() => handleToggleMember(group.id)}
+                            className="self-center"
                           />
-                        </TableCell>
-                        <TableCell className="font-medium">{group.name}</TableCell>
-                        <TableCell className="text-muted-foreground">{group.slug}</TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => handleRemoveGroup(group.id)}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </TableCell>
-                      </TableRow>
+                          <div className="flex-1 min-w-0 space-y-3 py-1 pr-4">
+                            <div className="flex flex-wrap gap-x-4 gap-y-2">
+                              <div className="flex-1 min-w-[120px]">
+                                <div className="text-sm font-medium text-muted-foreground">Name</div>
+                                <div className="font-medium">{group.name}</div>
+                              </div>
+                              <div className="flex-1 min-w-[120px]">
+                                <div className="text-sm font-medium text-muted-foreground">Slug</div>
+                                <div className="text-muted-foreground">{group.slug}</div>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex flex-col w-12 -mr-4 -my-4">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleRemoveGroup(group.id)}
+                              className="flex-1 rounded-none rounded-r-lg border-l border-r-0 border-y-0 border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </div>
+                        </div>
+                      </Card>
                     ))}
-                  </TableBody>
-                </Table>
+                  </div>
+
+                  {/* Desktop Table View */}
+                  <Table className="hidden sm:table">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12"></TableHead>
+                        <TableHead>Name</TableHead>
+                        <TableHead>Slug</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredMembers.map((group) => (
+                        <TableRow key={group.id}>
+                          <TableCell>
+                            <Checkbox
+                              checked={selectedMemberIds.includes(group.id)}
+                              onCheckedChange={() => handleToggleMember(group.id)}
+                            />
+                          </TableCell>
+                          <TableCell className="font-medium">{group.name}</TableCell>
+                          <TableCell className="text-muted-foreground">{group.slug}</TableCell>
+                          <TableCell className="text-right">
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => handleRemoveGroup(group.id)}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </>
               )}
             </CardContent>
           </Card>
         </TabsContent>
       </Tabs>
+
+      {user && (
+        <DeleteUserDialog
+          open={deleteDialogOpen}
+          onOpenChange={setDeleteDialogOpen}
+          userToDelete={user}
+          availableUsers={allUsers}
+          onConfirm={handleDeleteConfirm}
+        />
+      )}
     </div>
   );
 }

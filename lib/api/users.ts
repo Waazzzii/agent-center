@@ -35,6 +35,16 @@ export async function updateUser(
   return response.data;
 }
 
-export async function deleteUser(orgId: string, userId: string) {
-  await apiClient.delete(`/admin/organizations/${orgId}/users/${userId}`);
+export async function deleteUser(orgId: string, userId: string, reassignToUserId: string) {
+  const response = await apiClient.delete<{
+    message: string;
+    reassigned: {
+      kb_articles_authored: number;
+      kb_articles_reviewed: number;
+      kb_article_versions: number;
+      kb_media: number;
+      organization_connectors: number;
+    };
+  }>(`/admin/organizations/${orgId}/users/${userId}?reassign_to_user_id=${reassignToUserId}`);
+  return response.data;
 }

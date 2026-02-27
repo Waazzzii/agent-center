@@ -26,6 +26,7 @@ import {
   ChevronDown,
   Settings,
   BookOpen,
+  X,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -109,6 +110,12 @@ const orgAdminNavItems: NavItem[] = [
     orgAdminOnly: true,
   },
   {
+    label: 'OAuth Clients',
+    href: '/oauth-clients',
+    icon: Key,
+    orgAdminOnly: true,
+  },
+  {
     label: 'Knowledge Base',
     href: '/knowledge-base',
     icon: BookOpen,
@@ -170,15 +177,18 @@ export function ViewModeSidebar() {
 
   return (
     <>
-      {/* Mobile menu button */}
-      <Button
-        variant="ghost"
-        size="icon"
-        className="fixed left-4 top-4 z-50 md:hidden"
-        onClick={toggleSidebar}
-      >
-        <Menu className="h-6 w-6" />
-      </Button>
+      {/* Mobile menu button - Only show in super admin view (when ViewSwitcher is hidden) */}
+      {viewMode === 'super_admin' && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="fixed left-4 top-4 z-50 md:hidden h-12 w-12 rounded-lg bg-background/95 backdrop-blur shadow-lg border"
+          onClick={toggleSidebar}
+          aria-label="Toggle menu"
+        >
+          <Menu className="h-6 w-6" />
+        </Button>
+      )}
 
       {/* Overlay for mobile */}
       {sidebarOpen && (
@@ -191,13 +201,13 @@ export function ViewModeSidebar() {
       {/* Sidebar */}
       <aside
         className={cn(
-          'fixed left-0 top-0 z-40 h-screen w-64 border-r bg-sidebar transition-transform',
+          'fixed left-0 top-0 z-50 h-screen w-64 border-r bg-sidebar transition-transform duration-300 ease-in-out',
           sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'
         )}
       >
         <div className="flex h-full flex-col">
           {/* Header */}
-          <div className="flex h-16 items-center border-b px-4">
+          <div className="flex h-16 items-center justify-between border-b px-4">
             <div className="flex items-center gap-2.5">
               <Image
                 src="/logo.png"
@@ -221,6 +231,16 @@ export function ViewModeSidebar() {
                 className="h-3 w-auto hidden dark:block"
               />
             </div>
+            {/* Close button for mobile */}
+            <Button
+              variant="ghost"
+              size="icon"
+              className="md:hidden"
+              onClick={toggleSidebar}
+              aria-label="Close menu"
+            >
+              <X className="h-5 w-5" />
+            </Button>
           </div>
 
           {/* Organization Selector - only in org admin view */}

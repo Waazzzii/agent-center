@@ -78,15 +78,15 @@ export default function LoginPage() {
       <Card className="w-full max-w-sm overflow-hidden shadow-lg">
 
         {/* Logo section */}
-        <div className="flex flex-col items-center px-8 pb-2 pt-0">
-          <div className="flex items-center justify-center gap-3">
+        <div className="flex flex-col items-center px-6 sm:px-8 pb-2 pt-0">
+          <div className="flex items-center justify-center gap-2 sm:gap-3">
             <Image
               src="/logo.png"
               alt=""
               width={80}
               height={80}
               priority
-              className="h-20 w-auto"
+              className="h-16 sm:h-20 w-auto"
             />
             <Image
               src="/wazzi_light.png"
@@ -94,7 +94,7 @@ export default function LoginPage() {
               width={120}
               height={40}
               priority
-              className="h-5 w-auto dark:hidden"
+              className="h-4 sm:h-5 w-auto dark:hidden"
             />
             <Image
               src="/wazzi_dark.png"
@@ -102,10 +102,10 @@ export default function LoginPage() {
               width={120}
               height={40}
               priority
-              className="h-5 w-auto hidden dark:block"
+              className="h-4 sm:h-5 w-auto hidden dark:block"
             />
           </div>
-          <p className="text-base font-medium text-muted-foreground">
+          <p className="text-sm sm:text-base font-medium text-muted-foreground">
             Admin Portal
           </p>
         </div>
@@ -113,9 +113,9 @@ export default function LoginPage() {
         <Separator />
 
         {/* Sign-in section */}
-        <div className="flex flex-col gap-6 px-8 py-7">
+        <div className="flex flex-col gap-4 sm:gap-6 px-6 sm:px-8 py-6 sm:py-7">
           <div className="flex flex-col gap-2 text-center">
-            <h2 className="text-3xl font-bold text-foreground">
+            <h2 className="text-2xl sm:text-3xl font-bold text-foreground">
               Welcome
             </h2>
             <p className="text-sm text-muted-foreground">

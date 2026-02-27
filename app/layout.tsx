@@ -1,6 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { Toaster } from "sonner";
+import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "next-themes";
 import { TokenRefreshProvider } from "@/components/auth/TokenRefreshProvider";
 import "./globals.css";
@@ -31,6 +31,17 @@ export const metadata: Metadata = {
   },
 };
 
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#0a0a0a' },
+  ],
+};
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -44,7 +55,13 @@ export default function RootLayout({
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
           <TokenRefreshProvider />
           {children}
-          <Toaster position="top-right" richColors />
+          <Toaster
+            position="top-right"
+            richColors
+            expand={true}
+            visibleToasts={5}
+            closeButton
+          />
         </ThemeProvider>
       </body>
     </html>

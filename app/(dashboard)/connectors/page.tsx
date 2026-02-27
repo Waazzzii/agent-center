@@ -8,17 +8,11 @@ import { getConnectors, deleteConnector } from '@/lib/api/connectors';
 import { OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus, Pencil } from 'lucide-react';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { toast } from 'sonner';
 
 export default function ConnectorsPage() {
   const router = useRouter();
@@ -76,7 +70,7 @@ export default function ConnectorsPage() {
       await deleteConnector(selectedOrgId, connectorId);
       await loadConnectors();
     } catch (err: any) {
-      alert(err.message || 'Failed to delete connector');
+      toast.error(err.message || 'Failed to delete connector');
     }
   };
 
@@ -92,13 +86,13 @@ export default function ConnectorsPage() {
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Connectors</h1>
-          <p className="text-muted-foreground">Manage connector configurations for organizations</p>
+          <h1 className="text-2xl md:text-3xl font-bold">Connectors</h1>
+          <p className="text-sm md:text-base text-muted-foreground">Manage connector configurations for organizations</p>
         </div>
-        <Button disabled={!selectedOrgId} onClick={() => router.push('/connectors/add')}>
+        <Button disabled={!selectedOrgId} onClick={() => router.push('/connectors/add')} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />
           Browse Connectors
         </Button>
@@ -128,67 +122,92 @@ export default function ConnectorsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {connectors.length === 0 ? (
-                <div className="py-12 text-center text-muted-foreground">
-                  No connectors configured for this organization.
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Connector ID</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {connectors.map((connector) => (
-                      <TableRow
-                        key={connector.id}
-                        className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => router.push(`/connectors/${connector.id}/edit`)}
-                      >
-                        <TableCell className="font-medium">
-                          {connector.connector_name}
-                        </TableCell>
-                        <TableCell>
-                          {connector.is_enabled ? (
-                            <Badge variant="default">Enabled</Badge>
-                          ) : (
-                            <Badge variant="secondary">Disabled</Badge>
-                          )}
-                        </TableCell>
-                        <TableCell>{new Date(connector.created_at).toLocaleDateString()}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                router.push(`/connectors/${connector.id}/edit`);
-                              }}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDelete(connector.id);
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
+              <ResponsiveTable
+                data={connectors}
+                getRowKey={(connector) => connector.id}
+                onRowClick={(connector) => router.push(`/connectors/${connector.id}/edit`)}
+                emptyMessage="No connectors configured for this organization."
+                columns={[
+                  {
+                    key: 'name',
+                    label: 'Connector ID',
+                    mobileLabel: 'Connector',
+                    render: (connector) => (
+                      <span className="font-medium">{connector.connector_name}</span>
+                    ),
+                  },
+                  {
+                    key: 'status',
+                    label: 'Status',
+                    render: (connector) => (
+                      connector.is_enabled ? (
+                        <Badge variant="default">Enabled</Badge>
+                      ) : (
+                        <Badge variant="secondary">Disabled</Badge>
+                      )
+                    ),
+                  },
+                  {
+                    key: 'created',
+                    label: 'Created',
+                    render: (connector) => new Date(connector.created_at).toLocaleDateString(),
+                  },
+                  {
+                    key: 'actions',
+                    label: 'Actions',
+                    desktopRender: (connector) => (
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/connectors/${connector.id}/edit`);
+                          }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(connector.id);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ),
+                    render: (connector) => (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/connectors/${connector.id}/edit`);
+                          }}
+                          className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l hover:bg-muted/80"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(connector.id);
+                          }}
+                          className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </>
+                    ),
+                  },
+                ]}
+              />
             </CardContent>
           </Card>
         </>

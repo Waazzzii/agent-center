@@ -31,7 +31,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { ArrowLeft, Trash2, Users, Search, Plus, CheckSquare, Square, Settings } from 'lucide-react';
+import { ArrowLeft, Trash2, Users, Search, Plus, CheckSquare, Square, Pencil, MinusSquare } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
@@ -273,6 +273,17 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [allGroups, groupsWithAccess, groupSearch]);
 
+  // Calculate available groups selection state
+  const availableGroupsSelectionState = useMemo(() => {
+    if (availableGroups.length === 0) return 'none';
+    const selectedCount = selectedGroupIds.filter(id =>
+      availableGroups.some(g => g.id === id)
+    ).length;
+    if (selectedCount === 0) return 'none';
+    if (selectedCount === availableGroups.length) return 'all';
+    return 'some';
+  }, [selectedGroupIds, availableGroups]);
+
   // Current groups filtered by search
   const filteredMembers = useMemo(() => {
     const query = memberSearch.toLowerCase().trim();
@@ -283,6 +294,17 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       })
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [groupsWithAccess, memberSearch]);
+
+  // Calculate member selection state
+  const memberSelectionState = useMemo(() => {
+    if (filteredMembers.length === 0) return 'none';
+    const selectedCount = selectedMemberIds.filter(id =>
+      filteredMembers.some(m => m.id === id)
+    ).length;
+    if (selectedCount === 0) return 'none';
+    if (selectedCount === filteredMembers.length) return 'all';
+    return 'some';
+  }, [selectedMemberIds, filteredMembers]);
 
   // Group handlers
   const handleToggleGroup = (groupId: string) => {
@@ -297,20 +319,32 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     );
   };
 
-  const handleSelectAllAvailableGroups = () => {
-    setSelectedGroupIds(availableGroups.map(g => g.id));
+  const handleToggleSelectAllAvailableGroups = () => {
+    if (availableGroupsSelectionState === 'all') {
+      setSelectedGroupIds(prev =>
+        prev.filter(id => !availableGroups.some(g => g.id === id))
+      );
+    } else {
+      const availableIds = availableGroups.map(g => g.id);
+      setSelectedGroupIds(prev => {
+        const newIds = availableIds.filter(id => !prev.includes(id));
+        return [...prev, ...newIds];
+      });
+    }
   };
 
-  const handleDeselectAllAvailableGroups = () => {
-    setSelectedGroupIds([]);
-  };
-
-  const handleSelectAllMembers = () => {
-    setSelectedMemberIds(filteredMembers.map(g => g.id));
-  };
-
-  const handleDeselectAllMembers = () => {
-    setSelectedMemberIds([]);
+  const handleToggleSelectAllMembers = () => {
+    if (memberSelectionState === 'all') {
+      setSelectedMemberIds(prev =>
+        prev.filter(id => !filteredMembers.some(m => m.id === id))
+      );
+    } else {
+      const filteredIds = filteredMembers.map(m => m.id);
+      setSelectedMemberIds(prev => {
+        const newIds = filteredIds.filter(id => !prev.includes(id));
+        return [...prev, ...newIds];
+      });
+    }
   };
 
   const handleAddSelectedGroups = () => {
@@ -399,21 +433,21 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => router.push('/connectors')}>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+          <Button variant="ghost" size="sm" onClick={() => router.push('/connectors')} className="w-fit">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">{connectorInfo?.connector_name || 'Edit Connector'}</h1>
-            <p className="text-muted-foreground">
+            <h1 className="text-2xl md:text-3xl font-bold">{connectorInfo?.connector_name || 'Edit Connector'}</h1>
+            <p className="text-sm md:text-base text-muted-foreground">
               {connectorInfo?.connector_key || 'Connector configuration'}
             </p>
           </div>
         </div>
-        <Button variant="destructive" onClick={handleDeleteConnector}>
+        <Button variant="destructive" onClick={handleDeleteConnector} className="w-full sm:w-auto">
           <Trash2 className="mr-2 h-4 w-4" />
           Delete Connector
         </Button>
@@ -596,19 +630,20 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         <TabsContent value="groups" className="mt-6">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between">
+              <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
                 <div>
                   <CardTitle>Groups with Access</CardTitle>
                   <CardDescription>
                     {groupsWithAccess.length} group{groupsWithAccess.length !== 1 ? 's' : ''} can access this connector
                   </CardDescription>
                 </div>
-                <div className="flex gap-2">
+                <div className="flex gap-2 w-full sm:w-auto">
                   {selectedMemberIds.length > 0 && (
                     <Button
                       onClick={handleBulkRemoveGroups}
                       variant="destructive"
                       size="sm"
+                      className="flex-1 sm:flex-none"
                     >
                       <Trash2 className="mr-2 h-4 w-4" />
                       Remove Selected ({selectedMemberIds.length})
@@ -616,7 +651,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                   )}
                   <Popover open={addGroupsDropdownOpen} onOpenChange={setAddGroupsDropdownOpen}>
                     <PopoverTrigger asChild>
-                      <Button size="sm">
+                      <Button size="sm" className="flex-1 sm:flex-none">
                         <Plus className="mr-2 h-4 w-4" />
                         Add Groups
                       </Button>
@@ -637,28 +672,28 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                             <p className="text-sm text-muted-foreground">
                               {selectedGroupIds.length} selected
                             </p>
-                            <div className="flex gap-2">
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleSelectAllAvailableGroups}
-                                disabled={availableGroups.length === 0}
-                              >
-                                <CheckSquare className="h-4 w-4 mr-1" />
-                                All
-                              </Button>
-                              <Button
-                                type="button"
-                                variant="ghost"
-                                size="sm"
-                                onClick={handleDeselectAllAvailableGroups}
-                                disabled={selectedGroupIds.length === 0}
-                              >
-                                <Square className="h-4 w-4 mr-1" />
-                                None
-                              </Button>
-                            </div>
+                            <Button
+                              type="button"
+                              variant="ghost"
+                              size="icon"
+                              onClick={handleToggleSelectAllAvailableGroups}
+                              disabled={availableGroups.length === 0}
+                              title={
+                                availableGroupsSelectionState === 'all'
+                                  ? 'Deselect all'
+                                  : availableGroupsSelectionState === 'some'
+                                  ? 'Select all'
+                                  : 'Select all'
+                              }
+                            >
+                              {availableGroupsSelectionState === 'all' ? (
+                                <CheckSquare className="h-4 w-4" />
+                              ) : availableGroupsSelectionState === 'some' ? (
+                                <MinusSquare className="h-4 w-4" />
+                              ) : (
+                                <Square className="h-4 w-4" />
+                              )}
+                            </Button>
                           </div>
                         </div>
                         <div className="flex-1 overflow-y-auto p-2">
@@ -715,130 +750,233 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                     className="pl-9"
                   />
                 </div>
-                <div className="flex gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleSelectAllMembers}
-                    disabled={filteredMembers.length === 0}
-                  >
-                    <CheckSquare className="h-4 w-4 mr-1" />
-                    Select All
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    onClick={handleDeselectAllMembers}
-                    disabled={selectedMemberIds.length === 0}
-                  >
-                    <Square className="h-4 w-4 mr-1" />
-                    Deselect All
-                  </Button>
-                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="icon"
+                  onClick={handleToggleSelectAllMembers}
+                  disabled={filteredMembers.length === 0}
+                  title={
+                    memberSelectionState === 'all'
+                      ? 'Deselect all'
+                      : memberSelectionState === 'some'
+                      ? 'Select all'
+                      : 'Select all'
+                  }
+                >
+                  {memberSelectionState === 'all' ? (
+                    <CheckSquare className="h-4 w-4" />
+                  ) : memberSelectionState === 'some' ? (
+                    <MinusSquare className="h-4 w-4" />
+                  ) : (
+                    <Square className="h-4 w-4" />
+                  )}
+                </Button>
               </div>
               {filteredMembers.length === 0 ? (
                 <div className="py-12 text-center text-muted-foreground">
                   {memberSearch ? 'No matching groups found' : 'No groups have access to this connector yet'}
                 </div>
               ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead className="w-12"></TableHead>
-                      <TableHead>Group</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead>Authorized Endpoints</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
+                <>
+                  {/* Mobile Card View */}
+                  <div className="sm:hidden space-y-3">
                     {filteredMembers.map((group) => {
                       const endpoints = groupEndpoints[group.id] || [];
                       const displayEndpoints = endpoints.slice(0, 2);
                       const remainingCount = endpoints.length - displayEndpoints.length;
 
                       return (
-                        <TableRow
+                        <Card
                           key={group.id}
-                          className="cursor-pointer hover:bg-muted/50"
+                          className="p-4 cursor-pointer hover:bg-muted/50"
                           onClick={() => handleEditGroupEndpoints(group.id)}
                         >
-                          <TableCell onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-stretch gap-3">
                             <Checkbox
                               checked={selectedMemberIds.includes(group.id)}
                               onCheckedChange={() => handleToggleMember(group.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="self-center"
                             />
-                          </TableCell>
-                          <TableCell className="font-medium">{group.name}</TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {group.description || '—'}
-                          </TableCell>
-                          <TableCell>
-                            {endpoints.length === 0 ? (
-                              <span className="text-xs text-muted-foreground italic">No endpoints</span>
-                            ) : (
-                              <div className="flex flex-wrap gap-1">
-                                {displayEndpoints.map((endpoint, idx) => (
-                                  <code
-                                    key={idx}
-                                    className="inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
-                                  >
-                                    {endpoint}
-                                  </code>
-                                ))}
-                                {remainingCount > 0 && (
-                                  <span className="text-xs text-muted-foreground self-center">
-                                    +{remainingCount} more
-                                  </span>
+                            <div className="flex-1 min-w-0 space-y-3 py-1 pr-4">
+                              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                                <div className="flex-1 min-w-[120px]">
+                                  <div className="text-sm font-medium text-muted-foreground">Group</div>
+                                  <div className="font-medium">{group.name}</div>
+                                </div>
+                                <div className="w-auto">
+                                  <div className="text-sm font-medium text-muted-foreground">Status</div>
+                                  {group.is_active ? (
+                                    <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
+                                      Active
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
+                                      Inactive
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
+                              {group.description && (
+                                <div>
+                                  <div className="text-sm font-medium text-muted-foreground">Description</div>
+                                  <div className="text-muted-foreground text-sm">{group.description}</div>
+                                </div>
+                              )}
+                              <div>
+                                <div className="text-sm font-medium text-muted-foreground mb-1">Authorized Endpoints</div>
+                                {endpoints.length === 0 ? (
+                                  <span className="text-xs text-muted-foreground italic">No endpoints</span>
+                                ) : (
+                                  <div className="flex flex-wrap gap-1">
+                                    {displayEndpoints.map((endpoint, idx) => (
+                                      <code
+                                        key={idx}
+                                        className="inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
+                                      >
+                                        {endpoint}
+                                      </code>
+                                    ))}
+                                    {remainingCount > 0 && (
+                                      <span className="text-xs text-muted-foreground self-center">
+                                        +{remainingCount} more
+                                      </span>
+                                    )}
+                                  </div>
                                 )}
                               </div>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {group.is_active ? (
-                              <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                                Active
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                                Inactive
-                              </span>
-                            )}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex items-center justify-end gap-2">
+                            </div>
+                            <div className="flex flex-col w-12 -mr-4 -my-4" onClick={(e) => e.stopPropagation()}>
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleEditGroupEndpoints(group.id);
                                 }}
                                 title="Edit Endpoints"
+                                className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l hover:bg-muted/80"
                               >
-                                <Settings className="h-4 w-4" />
+                                <Pencil className="h-4 w-4" />
                               </Button>
                               <Button
-                                variant="ghost"
+                                variant="outline"
                                 size="sm"
                                 onClick={(e) => {
                                   e.stopPropagation();
                                   handleRemoveGroup(group.id);
                                 }}
                                 title="Remove Group"
+                                className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
                               >
                                 <Trash2 className="h-4 w-4 text-destructive" />
                               </Button>
                             </div>
-                          </TableCell>
-                        </TableRow>
+                          </div>
+                        </Card>
                       );
                     })}
-                  </TableBody>
-                </Table>
+                  </div>
+
+                  {/* Desktop Table View */}
+                  <Table className="hidden sm:table">
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead className="w-12"></TableHead>
+                        <TableHead>Group</TableHead>
+                        <TableHead>Description</TableHead>
+                        <TableHead>Authorized Endpoints</TableHead>
+                        <TableHead>Status</TableHead>
+                        <TableHead className="text-right">Actions</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {filteredMembers.map((group) => {
+                        const endpoints = groupEndpoints[group.id] || [];
+                        const displayEndpoints = endpoints.slice(0, 2);
+                        const remainingCount = endpoints.length - displayEndpoints.length;
+
+                        return (
+                          <TableRow
+                            key={group.id}
+                            className="cursor-pointer hover:bg-muted/50"
+                            onClick={() => handleEditGroupEndpoints(group.id)}
+                          >
+                            <TableCell onClick={(e) => e.stopPropagation()}>
+                              <Checkbox
+                                checked={selectedMemberIds.includes(group.id)}
+                                onCheckedChange={() => handleToggleMember(group.id)}
+                              />
+                            </TableCell>
+                            <TableCell className="font-medium">{group.name}</TableCell>
+                            <TableCell className="text-muted-foreground">
+                              {group.description || '—'}
+                            </TableCell>
+                            <TableCell>
+                              {endpoints.length === 0 ? (
+                                <span className="text-xs text-muted-foreground italic">No endpoints</span>
+                              ) : (
+                                <div className="flex flex-wrap gap-1">
+                                  {displayEndpoints.map((endpoint, idx) => (
+                                    <code
+                                      key={idx}
+                                      className="inline-block rounded bg-muted px-1.5 py-0.5 text-xs"
+                                    >
+                                      {endpoint}
+                                    </code>
+                                  ))}
+                                  {remainingCount > 0 && (
+                                    <span className="text-xs text-muted-foreground self-center">
+                                      +{remainingCount} more
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </TableCell>
+                            <TableCell>
+                              {group.is_active ? (
+                                <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
+                                  Active
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
+                                  Inactive
+                                </span>
+                              )}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <div className="flex items-center justify-end gap-2">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleEditGroupEndpoints(group.id);
+                                  }}
+                                  title="Edit Endpoints"
+                                >
+                                  <Pencil className="h-4 w-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleRemoveGroup(group.id);
+                                  }}
+                                  title="Remove Group"
+                                >
+                                  <Trash2 className="h-4 w-4 text-destructive" />
+                                </Button>
+                              </div>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </>
               )}
             </CardContent>
           </Card>

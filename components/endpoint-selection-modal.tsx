@@ -12,7 +12,7 @@ import {
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
-import { Search, CheckSquare, Square } from 'lucide-react';
+import { Search, CheckSquare, Square, MinusSquare } from 'lucide-react';
 
 interface EndpointSelectionModalProps {
   open: boolean;
@@ -57,6 +57,15 @@ export function EndpointSelectionModal({
     );
   }, [availableEndpoints, searchQuery]);
 
+  // Calculate selection state
+  const selectionState = useMemo(() => {
+    if (filteredEndpoints.length === 0) return 'none';
+    const selectedCount = filteredEndpoints.filter(ep => selectedEndpoints.has(ep)).length;
+    if (selectedCount === 0) return 'none';
+    if (selectedCount === filteredEndpoints.length) return 'all';
+    return 'some';
+  }, [filteredEndpoints, selectedEndpoints]);
+
   const toggleEndpoint = (endpoint: string) => {
     setSelectedEndpoints((prev) => {
       const next = new Set(prev);
@@ -69,12 +78,22 @@ export function EndpointSelectionModal({
     });
   };
 
-  const selectAll = () => {
-    setSelectedEndpoints(new Set(filteredEndpoints));
-  };
-
-  const selectNone = () => {
-    setSelectedEndpoints(new Set());
+  const toggleSelectAll = () => {
+    if (selectionState === 'all') {
+      // Deselect all filtered endpoints
+      setSelectedEndpoints(prev => {
+        const next = new Set(prev);
+        filteredEndpoints.forEach(ep => next.delete(ep));
+        return next;
+      });
+    } else {
+      // Select all filtered endpoints
+      setSelectedEndpoints(prev => {
+        const next = new Set(prev);
+        filteredEndpoints.forEach(ep => next.add(ep));
+        return next;
+      });
+    }
   };
 
   const handleConfirm = () => {
@@ -110,22 +129,24 @@ export function EndpointSelectionModal({
             <Button
               type="button"
               variant="outline"
-              size="sm"
-              onClick={selectAll}
+              size="icon"
+              onClick={toggleSelectAll}
               disabled={filteredEndpoints.length === 0}
+              title={
+                selectionState === 'all'
+                  ? 'Deselect all'
+                  : selectionState === 'some'
+                  ? 'Select all'
+                  : 'Select all'
+              }
             >
-              <CheckSquare className="h-4 w-4 mr-1" />
-              All
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={selectNone}
-              disabled={selectedEndpoints.size === 0}
-            >
-              <Square className="h-4 w-4 mr-1" />
-              None
+              {selectionState === 'all' ? (
+                <CheckSquare className="h-4 w-4" />
+              ) : selectionState === 'some' ? (
+                <MinusSquare className="h-4 w-4" />
+              ) : (
+                <Square className="h-4 w-4" />
+              )}
             </Button>
           </div>
 

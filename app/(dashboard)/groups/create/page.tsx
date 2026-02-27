@@ -6,7 +6,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { createGroup } from '@/lib/api/groups';
 import { getUsers } from '@/lib/api/users';
 import { getConnectors } from '@/lib/api/connectors';
-import { addUserToGroup } from '@/lib/api/user-groups';
+import { addUsersToGroup } from '@/lib/api/user-groups';
 import { addConnectorToGroup } from '@/lib/api/group-connectors';
 import type { User, OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
@@ -119,11 +119,7 @@ export default function CreateGroupPage() {
 
       // Assign selected users to the group
       if (selectedUsers.length > 0) {
-        await Promise.all(
-          selectedUsers.map(userId =>
-            addUserToGroup(selectedOrgId, userId, group.id)
-          )
-        );
+        await addUsersToGroup(selectedOrgId, group.id, selectedUsers);
       }
 
       // Assign selected connectors to the group

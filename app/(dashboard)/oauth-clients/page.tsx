@@ -3,19 +3,13 @@
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
+import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getOAuthClients, deleteOAuthClient } from '@/lib/api/oauth-clients';
 import { getOrganizations } from '@/lib/api/organizations';
 import { OAuthClient, Organization } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Trash2, Plus, Edit, Info } from 'lucide-react';
@@ -34,24 +28,23 @@ function formatRefreshTTL(seconds: number | null): string {
 export default function OAuthClientsPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
+  const { selectedOrgId } = useAdminViewStore();
   const { confirm } = useConfirmDialog();
   const [clients, setClients] = useState<OAuthClient[]>([]);
   const [organizations, setOrganizations] = useState<Map<string, Organization>>(new Map());
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  const isReadOnly = !isSuperAdmin();
+
   useEffect(() => {
     if (!admin) {
       router.push('/login');
       return;
     }
-    if (!isSuperAdmin()) {
-      router.push('/connectors');
-      return;
-    }
     loadData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [admin]);
+  }, [admin, selectedOrgId]);
 
   const loadData = async () => {
     try {
@@ -61,7 +54,16 @@ export default function OAuthClientsPage() {
         getOAuthClients(),
         getOrganizations(),
       ]);
-      setClients(clientsData.clients);
+
+      // Filter clients for org admins to only show their org's clients
+      let filteredClients = clientsData.clients;
+      if (isReadOnly && selectedOrgId) {
+        filteredClients = clientsData.clients.filter(
+          client => client.organization_id === selectedOrgId
+        );
+      }
+
+      setClients(filteredClients);
       const orgMap = new Map<string, Organization>();
       orgsData.organizations.forEach((org) => orgMap.set(org.id, org));
       setOrganizations(orgMap);
@@ -108,30 +110,46 @@ export default function OAuthClientsPage() {
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">OAuth Clients</h1>
-          <p className="text-muted-foreground">
-            Manage OAuth 2.0 clients — Connectors (Claude / MCP) and Platform clients (Admin UI, KB Portal)
+          <h1 className="text-2xl md:text-3xl font-bold">OAuth Clients</h1>
+          <p className="text-sm md:text-base text-muted-foreground">
+            {isReadOnly
+              ? 'View OAuth 2.0 clients for your organization'
+              : 'Manage OAuth 2.0 clients — Connectors (Claude / MCP) and Platform clients (Admin UI, KB Portal)'
+            }
           </p>
         </div>
-        <Button onClick={() => router.push('/oauth-clients/create')}>
-          <Plus className="mr-2 h-4 w-4" />
-          Add OAuth Client
-        </Button>
+        {!isReadOnly && (
+          <Button onClick={() => router.push('/oauth-clients/create')} className="w-full sm:w-auto">
+            <Plus className="mr-2 h-4 w-4" />
+            Add OAuth Client
+          </Button>
+        )}
       </div>
 
-      <Alert className="mb-6">
-        <Info className="h-4 w-4" />
-        <AlertDescription>
-          <strong>Connector</strong> clients are confidential (client_secret + PKCE) and scoped to an
-          organization — used for Claude / MCP integrations. Recommended refresh token TTL: <strong>7 days</strong>.
-          <br />
-          <strong>Platform</strong> clients are public (PKCE only, no secret) — used for the Admin UI and
-          KB Portal. Recommended refresh token TTL: <strong>24 hours</strong>.
-        </AlertDescription>
-      </Alert>
+      {isReadOnly ? (
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            These OAuth clients are issued and managed by Wazzi for your organization.
+            They are used to authenticate connectors (Claude/MCP integrations) and platform applications.
+            Contact your super administrator if you need to create or modify OAuth clients.
+          </AlertDescription>
+        </Alert>
+      ) : (
+        <Alert>
+          <Info className="h-4 w-4" />
+          <AlertDescription>
+            <strong>Connector</strong> clients are confidential (client_secret + PKCE) and scoped to an
+            organization — used for Claude / MCP integrations. Recommended refresh token TTL: <strong>7 days</strong>.
+            <br />
+            <strong>Platform</strong> clients are public (PKCE only, no secret) — used for the Admin UI and
+            KB Portal. Recommended refresh token TTL: <strong>24 hours</strong>.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {error && (
         <div className="mb-6 rounded-lg border border-destructive bg-destructive/10 p-4">
@@ -147,86 +165,125 @@ export default function OAuthClientsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {clients.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground">
-              No OAuth clients configured. Create your first client to get started.
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Name</TableHead>
-                  <TableHead>Type</TableHead>
-                  <TableHead>Client ID</TableHead>
-                  <TableHead>Organization</TableHead>
-                  <TableHead>Refresh TTL</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {clients.map((client) => (
-                  <TableRow
-                    key={client.client_id}
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => router.push(`/oauth-clients/${client.client_id}/edit`)}
-                  >
-                    <TableCell>
-                      <div className="font-medium">{client.client_name}</div>
-                      {client.description && (
-                        <div className="text-xs text-muted-foreground">{client.description}</div>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {client.is_public ? (
-                        <Badge variant="secondary">Platform</Badge>
-                      ) : (
-                        <Badge variant="outline">Connector</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{client.client_id}</TableCell>
-                    <TableCell>
-                      <span className="text-sm">{getOrganizationName(client.organization_id)}</span>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground">
-                      {formatRefreshTTL(client.refresh_token_expiry_seconds)}
-                    </TableCell>
-                    <TableCell>
-                      {client.is_active ? (
-                        <Badge variant="default">Active</Badge>
-                      ) : (
-                        <Badge variant="secondary">Inactive</Badge>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            router.push(`/oauth-clients/${client.client_id}/edit`);
-                          }}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(client.client_id, client.client_name);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+          <ResponsiveTable
+            data={clients}
+            getRowKey={(client) => client.client_id}
+            onRowClick={isReadOnly ? undefined : (client) => router.push(`/oauth-clients/${client.client_id}/edit`)}
+            emptyMessage={isReadOnly ? "No OAuth clients found for your organization." : "No OAuth clients configured. Create your first client to get started."}
+            columns={[
+              {
+                key: 'name',
+                label: 'Name',
+                render: (client) => (
+                  <div>
+                    <div className="font-medium">{client.client_name}</div>
+                    {client.description && (
+                      <div className="text-xs text-muted-foreground line-clamp-1">{client.description}</div>
+                    )}
+                  </div>
+                ),
+              },
+              {
+                key: 'type',
+                label: 'Type',
+                render: (client) => (
+                  client.is_public ? (
+                    <Badge variant="secondary">Platform</Badge>
+                  ) : (
+                    <Badge variant="outline">Connector</Badge>
+                  )
+                ),
+              },
+              {
+                key: 'client_id',
+                label: 'Client ID',
+                render: (client) => (
+                  <span className="font-mono text-xs break-all">{client.client_id}</span>
+                ),
+              },
+              {
+                key: 'organization',
+                label: 'Organization',
+                render: (client) => (
+                  <span className="text-sm">{getOrganizationName(client.organization_id)}</span>
+                ),
+              },
+              {
+                key: 'refresh_ttl',
+                label: 'Refresh TTL',
+                render: (client) => (
+                  <span className="text-sm text-muted-foreground">
+                    {formatRefreshTTL(client.refresh_token_expiry_seconds)}
+                  </span>
+                ),
+              },
+              {
+                key: 'status',
+                label: 'Status',
+                render: (client) => (
+                  client.is_active ? (
+                    <Badge variant="default">Active</Badge>
+                  ) : (
+                    <Badge variant="secondary">Inactive</Badge>
+                  )
+                ),
+              },
+              ...(!isReadOnly ? [{
+                key: 'actions',
+                label: 'Actions',
+                desktopRender: (client: OAuthClient) => (
+                  <div className="flex items-center justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/oauth-clients/${client.client_id}/edit`);
+                      }}
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(client.client_id, client.client_name);
+                      }}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                ),
+                render: (client: OAuthClient) => (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/oauth-clients/${client.client_id}/edit`);
+                      }}
+                      className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l hover:bg-muted/80"
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(client.client_id, client.client_name);
+                      }}
+                      className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </>
+                ),
+              }] : []),
+            ]}
+          />
         </CardContent>
       </Card>
     </div>

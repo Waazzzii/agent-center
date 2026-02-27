@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Search, CheckSquare, Square, Plus, Trash2 } from 'lucide-react';
+import { Search, CheckSquare, Square, MinusSquare, Plus, Trash2 } from 'lucide-react';
 
 export interface RelationshipItem {
   id: string;
@@ -86,12 +86,28 @@ export function RelationshipManager({
     );
   };
 
-  const handleSelectAll = () => {
-    setSelectedIds(filteredAvailable.map((item) => item.id));
-  };
+  // Calculate selection state for filtered available items
+  const selectionState = useMemo(() => {
+    if (filteredAvailable.length === 0) return 'none';
+    const selectedCount = filteredAvailable.filter((item) => selectedIds.includes(item.id)).length;
+    if (selectedCount === 0) return 'none';
+    if (selectedCount === filteredAvailable.length) return 'all';
+    return 'some';
+  }, [filteredAvailable, selectedIds]);
 
-  const handleDeselectAll = () => {
-    setSelectedIds([]);
+  const toggleSelectAll = () => {
+    if (selectionState === 'all') {
+      // Deselect all filtered items
+      const filteredIds = filteredAvailable.map((item) => item.id);
+      setSelectedIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    } else {
+      // Select all filtered items
+      const filteredIds = filteredAvailable.map((item) => item.id);
+      setSelectedIds((prev) => {
+        const newSet = new Set([...prev, ...filteredIds]);
+        return Array.from(newSet);
+      });
+    }
   };
 
   const handleAdd = async () => {
@@ -105,9 +121,6 @@ export function RelationshipManager({
       setAdding(false);
     }
   };
-
-  const allSelected =
-    filteredAvailable.length > 0 && filteredAvailable.every((item) => selectedIds.includes(item.id));
 
   return (
     <div className="space-y-6">
@@ -183,48 +196,46 @@ export function RelationshipManager({
       {/* Add New Items */}
       <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
-            <div>
-              <CardTitle className="flex items-center gap-2">
-                <Plus className="h-5 w-5" />
-                Add Items
-              </CardTitle>
-              <CardDescription>Select items to add to this list</CardDescription>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleSelectAll}
-                disabled={filteredAvailable.length === 0 || allSelected}
-              >
-                <CheckSquare className="h-4 w-4 mr-1" />
-                Select All
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={handleDeselectAll}
-                disabled={selectedIds.length === 0}
-              >
-                <Square className="h-4 w-4 mr-1" />
-                Deselect All
-              </Button>
-            </div>
-          </div>
+          <CardTitle className="flex items-center gap-2">
+            <Plus className="h-5 w-5" />
+            Add Items
+          </CardTitle>
+          <CardDescription>Select items to add to this list</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           {/* Search available */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              placeholder={`${searchPlaceholder} (${selectedIds.length} selected)`}
-              value={availableSearch}
-              onChange={(e) => setAvailableSearch(e.target.value)}
-              className="pl-9"
-            />
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                placeholder={`${searchPlaceholder} (${selectedIds.length} selected)`}
+                value={availableSearch}
+                onChange={(e) => setAvailableSearch(e.target.value)}
+                className="pl-9"
+              />
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={toggleSelectAll}
+              disabled={filteredAvailable.length === 0}
+              title={
+                selectionState === 'all'
+                  ? 'Deselect all'
+                  : selectionState === 'some'
+                  ? 'Select all'
+                  : 'Select all'
+              }
+            >
+              {selectionState === 'all' ? (
+                <CheckSquare className="h-4 w-4" />
+              ) : selectionState === 'some' ? (
+                <MinusSquare className="h-4 w-4" />
+              ) : (
+                <Square className="h-4 w-4" />
+              )}
+            </Button>
           </div>
 
           {/* Available items checkboxes */}

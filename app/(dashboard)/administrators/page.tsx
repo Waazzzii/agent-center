@@ -8,14 +8,7 @@ import { getAdministrators, deleteAdministrator } from '@/lib/api/administrators
 import { Administrator } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Plus, Shield, Trash2, Edit } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -94,14 +87,14 @@ export default function AdministratorsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Administrators</h1>
-          <p className="text-muted-foreground">
+          <h1 className="text-2xl md:text-3xl font-bold">Administrators</h1>
+          <p className="text-sm md:text-base text-muted-foreground">
             Manage administrator users and their access levels
           </p>
         </div>
-        <Button onClick={() => router.push('/administrators/create')}>
+        <Button onClick={() => router.push('/administrators/create')} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />
           Create Administrator
         </Button>
@@ -115,86 +108,115 @@ export default function AdministratorsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {administrators.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground">
-              No administrators found. Create your first administrator to get started.
-            </div>
-          ) : (
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Email</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Assigned Organizations</TableHead>
-                  <TableHead>Last Login</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {administrators.map((adm) => (
-                  <TableRow
-                    key={adm.id}
-                    className="cursor-pointer hover:bg-muted/50"
-                    onClick={() => router.push(`/administrators/${adm.id}/edit`)}
+          <ResponsiveTable
+            data={administrators}
+            getRowKey={(adm) => adm.id}
+            onRowClick={(adm) => router.push(`/administrators/${adm.id}/edit`)}
+            emptyMessage="No administrators found. Create your first administrator to get started."
+            columns={[
+              {
+                key: 'email',
+                label: 'Email',
+                render: (adm) => <span className="font-medium">{adm.email}</span>,
+              },
+              {
+                key: 'role',
+                label: 'Role',
+                render: (adm) => (
+                  <span
+                    className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium ${
+                      adm.role === 'super_admin'
+                        ? 'bg-primary/10 text-primary'
+                        : 'bg-secondary/10 text-secondary'
+                    }`}
                   >
-                    <TableCell className="font-medium">{adm.email}</TableCell>
-                    <TableCell>
-                      <span
-                        className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-xs font-medium ${
-                          adm.role === 'super_admin'
-                            ? 'bg-primary/10 text-primary'
-                            : 'bg-secondary/10 text-secondary'
-                        }`}
-                      >
-                        {adm.role === 'super_admin' && <Shield className="h-3 w-3" />}
-                        {adm.role === 'super_admin' ? 'Super Admin' : 'Org Admin'}
-                      </span>
-                    </TableCell>
-                    <TableCell>
-                      {adm.role === 'super_admin' ? (
-                        <span className="text-muted-foreground">All</span>
-                      ) : (
-                        <span className="text-sm">
-                          {adm.assigned_organizations.length} org
-                          {adm.assigned_organizations.length !== 1 ? 's' : ''}
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      {adm.last_login_at
-                        ? new Date(adm.last_login_at).toLocaleDateString()
-                        : 'Never'}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-2">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            router.push(`/administrators/${adm.id}/edit`);
-                          }}
-                        >
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(adm.id, adm.email);
-                          }}
-                          disabled={adm.id === admin?.id}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          )}
+                    {adm.role === 'super_admin' && <Shield className="h-3 w-3" />}
+                    {adm.role === 'super_admin' ? 'Super Admin' : 'Org Admin'}
+                  </span>
+                ),
+              },
+              {
+                key: 'organizations',
+                label: 'Assigned Organizations',
+                mobileLabel: 'Organizations',
+                render: (adm) => (
+                  adm.role === 'super_admin' ? (
+                    <span className="text-muted-foreground">All</span>
+                  ) : (
+                    <span className="text-sm">
+                      {adm.assigned_organizations.length} org
+                      {adm.assigned_organizations.length !== 1 ? 's' : ''}
+                    </span>
+                  )
+                ),
+              },
+              {
+                key: 'last_login',
+                label: 'Last Login',
+                render: (adm) => (
+                  adm.last_login_at
+                    ? new Date(adm.last_login_at).toLocaleDateString()
+                    : 'Never'
+                ),
+              },
+              {
+                key: 'actions',
+                label: 'Actions',
+                desktopRender: (adm) => (
+                  <div className="flex items-center justify-end gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/administrators/${adm.id}/edit`);
+                      }}
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(adm.id, adm.email);
+                      }}
+                      disabled={adm.id === admin?.id}
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                ),
+                render: (adm) => (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        router.push(`/administrators/${adm.id}/edit`);
+                      }}
+                      className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l hover:bg-muted/80"
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(adm.id, adm.email);
+                      }}
+                      disabled={adm.id === admin?.id}
+                      className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive disabled:opacity-50"
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </>
+                ),
+              },
+            ]}
+          />
         </CardContent>
       </Card>
     </div>

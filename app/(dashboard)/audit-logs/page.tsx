@@ -7,14 +7,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getAuditLogs, type AuditLog, type ActorType, type OperationType } from '@/lib/api/audit-logs';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import {
@@ -212,22 +205,22 @@ export default function AuditLogsPage() {
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6">
-        <h1 className="text-3xl font-bold">Audit Logs</h1>
-        <p className="text-muted-foreground">View all actions performed by admins and users</p>
+    <div className="space-y-6">
+      <div>
+        <h1 className="text-2xl md:text-3xl font-bold">Audit Logs</h1>
+        <p className="text-sm md:text-base text-muted-foreground">View all actions performed by admins and users</p>
       </div>
 
       {/* Filters */}
-      <Card className="mb-6">
+      <Card>
         <CardHeader>
-          <div className="flex items-center justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <CardTitle>Filters</CardTitle>
               <CardDescription>Filter audit logs by various criteria</CardDescription>
             </div>
             {hasActiveFilters && (
-              <Button variant="outline" size="sm" onClick={clearFilters}>
+              <Button variant="outline" size="sm" onClick={clearFilters} className="w-full sm:w-auto">
                 <X className="mr-2 h-4 w-4" />
                 Clear Filters
               </Button>
@@ -235,7 +228,7 @@ export default function AuditLogsPage() {
           </div>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 mb-4">
             <div className="space-y-2">
               <Label>Actor Type</Label>
               <Select
@@ -314,10 +307,12 @@ export default function AuditLogsPage() {
               variant="default"
               onClick={applyFilters}
               disabled={loading}
+              className="w-full sm:w-auto"
             >
               <Search className="mr-2 h-4 w-4" />
-              Apply Filters
-              {hasUnappliedChanges && <span className="ml-2 text-xs">(unapplied changes)</span>}
+              <span className="hidden sm:inline">Apply Filters</span>
+              <span className="sm:hidden">Apply</span>
+              {hasUnappliedChanges && <span className="hidden md:inline ml-2 text-xs">(unapplied changes)</span>}
             </Button>
           </div>
         </CardContent>
@@ -344,89 +339,99 @@ export default function AuditLogsPage() {
             </div>
           ) : (
             <>
-              <div className="overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Timestamp</TableHead>
-                      <TableHead>Actor</TableHead>
-                      <TableHead>Operation</TableHead>
-                      <TableHead>Resource</TableHead>
-                      <TableHead>Details</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {logs.map((log) => (
-                      <TableRow key={log.id}>
-                        <TableCell className="whitespace-nowrap">
-                          {formatDate(log.created_at)}
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="font-mono text-xs text-muted-foreground">
-                              {log.actor_id.slice(0, 8)}...
-                            </span>
-                            <Badge variant="outline" className="w-fit mt-1">
-                              {formatActorType(log.actor_type)}
-                            </Badge>
+              <ResponsiveTable
+                data={logs}
+                getRowKey={(log) => log.id}
+                emptyMessage="No audit logs found"
+                columns={[
+                  {
+                    key: 'timestamp',
+                    label: 'Timestamp',
+                    render: (log) => (
+                      <span className="whitespace-nowrap text-sm">{formatDate(log.created_at)}</span>
+                    ),
+                  },
+                  {
+                    key: 'actor',
+                    label: 'Actor',
+                    render: (log) => (
+                      <div className="flex flex-col gap-1">
+                        <span className="font-mono text-xs text-muted-foreground">
+                          {log.actor_id.slice(0, 8)}...
+                        </span>
+                        <Badge variant="outline" className="w-fit">
+                          {formatActorType(log.actor_type)}
+                        </Badge>
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'operation',
+                    label: 'Operation',
+                    render: (log) => (
+                      <Badge className={getOperationColor(log.operation)}>
+                        {log.operation}
+                      </Badge>
+                    ),
+                  },
+                  {
+                    key: 'resource',
+                    label: 'Resource',
+                    render: (log) => (
+                      <div className="flex flex-col gap-1">
+                        <span className="font-medium">{log.resource_type}</span>
+                        {log.resource_id && (
+                          <span className="font-mono text-xs text-muted-foreground">
+                            {log.resource_id.slice(0, 8)}...
+                          </span>
+                        )}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'details',
+                    label: 'Details',
+                    render: (log) => (
+                      <div className="text-xs text-muted-foreground space-y-1">
+                        {log.metadata?.ip && <div>IP: {log.metadata.ip}</div>}
+                        {log.metadata?.path && (
+                          <div className="break-all">
+                            {log.metadata.method} {log.metadata.path}
                           </div>
-                        </TableCell>
-                        <TableCell>
-                          <Badge className={getOperationColor(log.operation)}>
-                            {log.operation}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <div className="flex flex-col">
-                            <span className="font-medium">{log.resource_type}</span>
-                            {log.resource_id && (
-                              <span className="font-mono text-xs text-muted-foreground">
-                                {log.resource_id.slice(0, 8)}...
-                              </span>
-                            )}
-                          </div>
-                        </TableCell>
-                        <TableCell>
-                          {log.metadata?.ip && (
-                            <div className="text-xs text-muted-foreground">
-                              IP: {log.metadata.ip}
-                            </div>
-                          )}
-                          {log.metadata?.path && (
-                            <div className="text-xs text-muted-foreground">
-                              {log.metadata.method} {log.metadata.path}
-                            </div>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                        )}
+                      </div>
+                    ),
+                  },
+                ]}
+              />
 
               {/* Pagination */}
               {totalPages > 1 && (
-                <div className="mt-4 flex items-center justify-between">
-                  <div className="text-sm text-muted-foreground">
+                <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm text-muted-foreground text-center sm:text-left">
                     Page {currentPage} of {totalPages}
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 justify-center">
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setCurrentPage(currentPage - 1)}
                       disabled={currentPage === 1}
+                      className="flex-1 sm:flex-none"
                     >
                       <ChevronLeft className="h-4 w-4 mr-1" />
-                      Previous
+                      <span className="hidden sm:inline">Previous</span>
+                      <span className="sm:hidden">Prev</span>
                     </Button>
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setCurrentPage(currentPage + 1)}
                       disabled={currentPage === totalPages}
+                      className="flex-1 sm:flex-none"
                     >
-                      Next
+                      <span className="hidden sm:inline">Next</span>
+                      <span className="sm:hidden">Next</span>
                       <ChevronRight className="h-4 w-4 ml-1" />
                     </Button>
                   </div>

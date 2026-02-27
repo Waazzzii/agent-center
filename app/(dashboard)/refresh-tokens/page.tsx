@@ -14,14 +14,7 @@ import {
 import { RefreshToken, RefreshTokenStats } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -206,20 +199,20 @@ export default function RefreshTokensPage() {
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Refresh Tokens</h1>
-          <p className="text-muted-foreground">Manage OAuth refresh tokens and sessions</p>
+          <h1 className="text-2xl md:text-3xl font-bold">Refresh Tokens</h1>
+          <p className="text-sm md:text-base text-muted-foreground">Manage OAuth refresh tokens and sessions</p>
         </div>
-        <Button variant="destructive" onClick={handleCleanupExpired}>
+        <Button variant="destructive" onClick={handleCleanupExpired} className="w-full sm:w-auto">
           <Trash2 className="mr-2 h-4 w-4" />
           Cleanup Expired
         </Button>
       </div>
 
       {stats && (
-        <div className="mb-6 grid gap-4 md:grid-cols-5">
+        <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-5">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium text-muted-foreground">Active Tokens</CardTitle>
@@ -329,94 +322,137 @@ export default function RefreshTokensPage() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {tokens.length === 0 ? (
-            <div className="py-12 text-center text-muted-foreground">
-              No refresh tokens found with the current filters.
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Client</TableHead>
-                    <TableHead>User Email</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Created</TableHead>
-                    <TableHead>Expires</TableHead>
-                    <TableHead>Last Used</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {tokens.map((token) => {
-                    const status = getTokenStatus(token);
-                    return (
-                      <TableRow key={token.id}>
-                        <TableCell>
-                          <div className="font-medium">{token.client_name || token.client_id}</div>
-                          {token.client_name && (
-                            <div className="text-xs text-muted-foreground font-mono">
-                              {token.client_id}
-                            </div>
-                          )}
-                        </TableCell>
-                        <TableCell className="font-medium">{token.user_email}</TableCell>
-                        <TableCell>
-                          {status === 'active' && (
-                            <Badge variant="default" className="bg-green-100 text-green-800 hover:bg-green-100">
-                              Active
-                            </Badge>
-                          )}
-                          {status === 'expired' && (
-                            <Badge variant="secondary" className="bg-orange-100 text-orange-800">
-                              Expired
-                            </Badge>
-                          )}
-                          {status === 'revoked' && (
-                            <Badge variant="destructive">
-                              Revoked
-                            </Badge>
-                          )}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {formatDate(token.created_at)}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {formatDate(token.expires_at)}
-                        </TableCell>
-                        <TableCell className="text-sm text-muted-foreground">
-                          {formatDate(token.last_used_at)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            {status === 'active' && (
-                              <>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRevoke(token.id, token.user_email)}
-                                >
-                                  <Trash2 className="h-4 w-4 text-destructive" />
-                                </Button>
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  onClick={() => handleRevokeAllUser(token.user_email)}
-                                  title="Revoke all tokens for this user"
-                                >
-                                  <AlertCircle className="h-4 w-4 text-destructive" />
-                                </Button>
-                              </>
-                            )}
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+          <ResponsiveTable
+            data={tokens}
+            getRowKey={(token) => token.id}
+            emptyMessage="No refresh tokens found with the current filters."
+            columns={[
+              {
+                key: 'client',
+                label: 'Client',
+                render: (token) => (
+                  <div>
+                    <div className="font-medium">{token.client_name || token.client_id}</div>
+                    {token.client_name && (
+                      <div className="text-xs text-muted-foreground font-mono break-all">
+                        {token.client_id}
+                      </div>
+                    )}
+                  </div>
+                ),
+              },
+              {
+                key: 'user_email',
+                label: 'User Email',
+                render: (token) => <span className="font-medium break-all">{token.user_email}</span>,
+              },
+              {
+                key: 'status',
+                label: 'Status',
+                render: (token) => {
+                  const status = getTokenStatus(token);
+                  return (
+                    <>
+                      {status === 'active' && (
+                        <Badge variant="default" className="bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400 hover:bg-green-100">
+                          Active
+                        </Badge>
+                      )}
+                      {status === 'expired' && (
+                        <Badge variant="secondary" className="bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400">
+                          Expired
+                        </Badge>
+                      )}
+                      {status === 'revoked' && (
+                        <Badge variant="destructive">
+                          Revoked
+                        </Badge>
+                      )}
+                    </>
+                  );
+                },
+              },
+              {
+                key: 'created',
+                label: 'Created',
+                render: (token) => (
+                  <span className="text-sm text-muted-foreground whitespace-nowrap">
+                    {formatDate(token.created_at)}
+                  </span>
+                ),
+              },
+              {
+                key: 'expires',
+                label: 'Expires',
+                render: (token) => (
+                  <span className="text-sm text-muted-foreground whitespace-nowrap">
+                    {formatDate(token.expires_at)}
+                  </span>
+                ),
+              },
+              {
+                key: 'last_used',
+                label: 'Last Used',
+                render: (token) => (
+                  <span className="text-sm text-muted-foreground whitespace-nowrap">
+                    {formatDate(token.last_used_at)}
+                  </span>
+                ),
+              },
+              {
+                key: 'actions',
+                label: 'Actions',
+                desktopRender: (token) => {
+                  const status = getTokenStatus(token);
+                  return status === 'active' ? (
+                    <div className="flex items-center justify-end gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRevoke(token.id, token.user_email)}
+                        title="Revoke this token"
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRevokeAllUser(token.user_email)}
+                        title="Revoke all tokens for this user"
+                      >
+                        <AlertCircle className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </div>
+                  ) : null;
+                },
+                render: (token) => {
+                  const status = getTokenStatus(token);
+                  return status === 'active' ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRevoke(token.id, token.user_email)}
+                        title="Revoke this token"
+                        className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
+                      >
+                        <Trash2 className="h-4 w-4 text-destructive" />
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => handleRevokeAllUser(token.user_email)}
+                        title="Revoke all tokens for this user"
+                        className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
+                      >
+                        <AlertCircle className="h-4 w-4 text-destructive" />
+                      </Button>
+                    </>
+                  ) : null;
+                },
+              },
+            ]}
+          />
         </CardContent>
       </Card>
     </div>

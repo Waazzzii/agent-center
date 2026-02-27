@@ -13,7 +13,7 @@ import {
   DialogTitle,
   DialogFooter,
 } from '@/components/ui/dialog';
-import { Search, CheckSquare, Square } from 'lucide-react';
+import { Search, CheckSquare, Square, MinusSquare } from 'lucide-react';
 
 export interface SelectableItem {
   id: string;
@@ -77,31 +77,37 @@ export function MultiSelectModal({
     );
   };
 
-  const handleSelectAll = () => {
-    const availableIds = filteredItems.filter((item) => !item.disabled).map((item) => item.id);
-    setLocalSelectedIds((prev) => {
-      const newSet = new Set([...prev, ...availableIds]);
-      return Array.from(newSet);
-    });
-  };
+  // Calculate selection state for filtered items
+  const selectionState = useMemo(() => {
+    const availableItems = filteredItems.filter((item) => !item.disabled);
+    if (availableItems.length === 0) return 'none';
 
-  const handleDeselectAll = () => {
-    const filteredIds = filteredItems.filter((item) => !item.disabled).map((item) => item.id);
-    setLocalSelectedIds((prev) => prev.filter((id) => !filteredIds.includes(id)));
+    const selectedCount = availableItems.filter((item) => localSelectedIds.includes(item.id)).length;
+    if (selectedCount === 0) return 'none';
+    if (selectedCount === availableItems.length) return 'all';
+    return 'some';
+  }, [filteredItems, localSelectedIds]);
+
+  const toggleSelectAll = () => {
+    const availableItems = filteredItems.filter((item) => !item.disabled);
+    const availableIds = availableItems.map((item) => item.id);
+
+    if (selectionState === 'all') {
+      // Deselect all filtered items
+      setLocalSelectedIds((prev) => prev.filter((id) => !availableIds.includes(id)));
+    } else {
+      // Select all filtered items
+      setLocalSelectedIds((prev) => {
+        const newSet = new Set([...prev, ...availableIds]);
+        return Array.from(newSet);
+      });
+    }
   };
 
   const handleConfirm = () => {
     onConfirm(localSelectedIds);
     onOpenChange(false);
   };
-
-  const allFilteredSelected =
-    filteredItems.length > 0 &&
-    filteredItems.filter((item) => !item.disabled).every((item) => localSelectedIds.includes(item.id));
-
-  const someFilteredSelected =
-    filteredItems.some((item) => localSelectedIds.includes(item.id) && !item.disabled) &&
-    !allFilteredSelected;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -114,42 +120,42 @@ export function MultiSelectModal({
         <div className="flex-1 flex flex-col gap-4 overflow-hidden">
           {/* Search and Select All/None */}
           <div className="space-y-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                placeholder={searchPlaceholder}
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9"
-              />
+            <div className="flex items-center gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder={searchPlaceholder}
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={toggleSelectAll}
+                disabled={loading || filteredItems.filter((item) => !item.disabled).length === 0}
+                title={
+                  selectionState === 'all'
+                    ? 'Deselect all'
+                    : selectionState === 'some'
+                    ? 'Select all'
+                    : 'Select all'
+                }
+              >
+                {selectionState === 'all' ? (
+                  <CheckSquare className="h-4 w-4" />
+                ) : selectionState === 'some' ? (
+                  <MinusSquare className="h-4 w-4" />
+                ) : (
+                  <Square className="h-4 w-4" />
+                )}
+              </Button>
             </div>
 
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">
-                {localSelectedIds.length} of {items.length} selected
-              </p>
-              <div className="flex gap-2">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleSelectAll}
-                  disabled={loading || filteredItems.length === 0 || allFilteredSelected}
-                >
-                  <CheckSquare className="h-4 w-4 mr-1" />
-                  Select All
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleDeselectAll}
-                  disabled={loading || localSelectedIds.length === 0}
-                >
-                  <Square className="h-4 w-4 mr-1" />
-                  Deselect All
-                </Button>
-              </div>
+            <div className="text-sm text-muted-foreground">
+              {localSelectedIds.length} of {items.length} selected
             </div>
           </div>
 

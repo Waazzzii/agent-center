@@ -9,16 +9,10 @@ import { Group } from '@/types/api.types';
 import { CreateGroupModal } from '@/components/groups/create-group-modal';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Trash2, Plus, Pencil } from 'lucide-react';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { toast } from 'sonner';
 
 export default function GroupsPage() {
   const router = useRouter();
@@ -76,7 +70,7 @@ export default function GroupsPage() {
       await deleteGroup(selectedOrgId, groupId);
       await loadGroups();
     } catch (err: any) {
-      alert(err.message || 'Failed to delete group');
+      toast.error(err.message || 'Failed to delete group');
     }
   };
 
@@ -92,13 +86,13 @@ export default function GroupsPage() {
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Groups</h1>
-          <p className="text-muted-foreground">Manage user groups within organizations</p>
+          <h1 className="text-2xl md:text-3xl font-bold">Groups</h1>
+          <p className="text-sm md:text-base text-muted-foreground">Manage user groups within organizations</p>
         </div>
-        <Button disabled={!selectedOrgId} onClick={() => setCreateModalOpen(true)}>
+        <Button disabled={!selectedOrgId} onClick={() => setCreateModalOpen(true)} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />
           Add Group
         </Button>
@@ -128,79 +122,109 @@ export default function GroupsPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {groups.length === 0 ? (
-                <div className="py-12 text-center text-muted-foreground">
-                  No groups found in this organization.
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Slug</TableHead>
-                      <TableHead>Description</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {groups.map((group) => (
-                      <TableRow
-                        key={group.id}
-                        className="cursor-pointer hover:bg-muted/50"
-                        onClick={() => router.push(`/groups/${group.id}/edit`)}
-                      >
-                        <TableCell className="font-medium">
-                          {group.name}
-                        </TableCell>
-                        <TableCell>
-                          <code className="rounded bg-muted px-2 py-0.5 text-xs">{group.slug}</code>
-                        </TableCell>
-                        <TableCell className="max-w-md truncate text-muted-foreground">
-                          {group.description || '—'}
-                        </TableCell>
-                        <TableCell>
-                          {group.is_active ? (
-                            <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                              Active
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                              Inactive
-                            </span>
-                          )}
-                        </TableCell>
-                        <TableCell>{new Date(group.created_at).toLocaleDateString()}</TableCell>
-                        <TableCell className="text-right">
-                          <div className="flex justify-end gap-2">
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                router.push(`/groups/${group.id}/edit`);
-                              }}
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                handleDelete(group.id);
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              )}
+              <ResponsiveTable
+                data={groups}
+                getRowKey={(group) => group.id}
+                onRowClick={(group) => router.push(`/groups/${group.id}/edit`)}
+                emptyMessage="No groups found in this organization."
+                columns={[
+                  {
+                    key: 'name',
+                    label: 'Name',
+                    render: (group) => <span className="font-medium">{group.name}</span>,
+                  },
+                  {
+                    key: 'slug',
+                    label: 'Slug',
+                    render: (group) => (
+                      <code className="rounded bg-muted px-2 py-0.5 text-xs">{group.slug}</code>
+                    ),
+                  },
+                  {
+                    key: 'description',
+                    label: 'Description',
+                    render: (group) => (
+                      <span className="text-muted-foreground line-clamp-2">
+                        {group.description || '—'}
+                      </span>
+                    ),
+                  },
+                  {
+                    key: 'status',
+                    label: 'Status',
+                    render: (group) => (
+                      group.is_active ? (
+                        <span className="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/30 px-2 py-1 text-xs font-medium text-green-800 dark:text-green-400">
+                          Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs font-medium text-gray-800 dark:text-gray-400">
+                          Inactive
+                        </span>
+                      )
+                    ),
+                  },
+                  {
+                    key: 'created',
+                    label: 'Created',
+                    render: (group) => new Date(group.created_at).toLocaleDateString(),
+                  },
+                  {
+                    key: 'actions',
+                    label: 'Actions',
+                    desktopRender: (group) => (
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/groups/${group.id}/edit`);
+                          }}
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(group.id);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ),
+                    render: (group) => (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/groups/${group.id}/edit`);
+                          }}
+                          className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l hover:bg-muted/80"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDelete(group.id);
+                          }}
+                          className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </>
+                    ),
+                  },
+                ]}
+              />
             </CardContent>
           </Card>
         </>

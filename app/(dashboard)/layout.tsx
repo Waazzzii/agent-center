@@ -9,6 +9,7 @@ import { ViewModeSidebar } from '@/components/layout/ViewModeSidebar';
 import { ViewSwitcher } from '@/components/layout/ViewSwitcher';
 import { getOrganizations } from '@/lib/api/organizations';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
+import { cn } from '@/lib/utils';
 
 export default function DashboardLayout({
   children,
@@ -18,7 +19,7 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
   const { admin, isSuperAdmin } = useAuthStore();
-  const { selectedOrgId, switchToOrgAdminView } = useAdminViewStore();
+  const { viewMode, selectedOrgId, switchToOrgAdminView } = useAdminViewStore();
   const [isChecking, setIsChecking] = useState(true);
 
   useEffect(() => {
@@ -80,7 +81,10 @@ export default function DashboardLayout({
         <ViewModeSidebar />
         <div className="flex-1 flex flex-col overflow-hidden md:ml-64">
           <ViewSwitcher />
-          <main className="flex-1 overflow-y-auto bg-background p-6">
+          <main className={cn(
+            "flex-1 overflow-y-auto bg-background p-4 md:p-6",
+            viewMode === 'super_admin' && "pt-20 md:pt-6"
+          )}>
             {children}
           </main>
         </div>

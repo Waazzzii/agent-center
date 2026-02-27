@@ -8,27 +8,22 @@ import { getUsers, deleteUser } from '@/lib/api/users';
 import { User } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Trash2, Plus, Pencil } from 'lucide-react';
 import { CreateUserModal } from '@/components/users/create-user-modal';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { DeleteUserDialog } from '@/components/users/delete-user-dialog';
+import { toast } from 'sonner';
 
 export default function UsersPage() {
   const router = useRouter();
   const { admin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
-  const { confirm } = useConfirmDialog();
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [userToDelete, setUserToDelete] = useState<User | null>(null);
 
   useEffect(() => {
     if (!admin) {
@@ -59,25 +54,33 @@ export default function UsersPage() {
     }
   };
 
-  const handleDelete = async (userId: string) => {
-    if (!selectedOrgId) return;
+  const handleDeleteClick = (user: User) => {
+    setUserToDelete(user);
+    setDeleteDialogOpen(true);
+  };
 
-    const confirmed = await confirm({
-      title: 'Delete User',
-      description: 'Are you sure you want to delete this user? This action cannot be undone.',
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
-      variant: 'destructive',
-    });
+  const handleDeleteConfirm = async (reassignToUserId: string) => {
+    if (!selectedOrgId || !userToDelete) return;
 
-    if (!confirmed) return;
+    const result = await deleteUser(selectedOrgId, userToDelete.id, reassignToUserId);
 
-    try {
-      await deleteUser(selectedOrgId, userId);
-      await loadUsers();
-    } catch (err: any) {
-      alert(err.message || 'Failed to delete user');
+    // Show success message with reassignment stats
+    const stats = result.reassigned;
+    const statsMessage = [
+      stats.kb_articles_authored > 0 && `${stats.kb_articles_authored} articles authored`,
+      stats.kb_articles_reviewed > 0 && `${stats.kb_articles_reviewed} articles reviewed`,
+      stats.kb_article_versions > 0 && `${stats.kb_article_versions} article versions`,
+      stats.kb_media > 0 && `${stats.kb_media} media files`,
+      stats.organization_connectors > 0 && `${stats.organization_connectors} connectors`,
+    ]
+      .filter(Boolean)
+      .join(', ');
+
+    if (statsMessage) {
+      toast.success(`User deleted successfully. Reassigned: ${statsMessage}`);
     }
+
+    await loadUsers();
   };
 
   if (!admin || loading) {
@@ -92,13 +95,13 @@ export default function UsersPage() {
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Users</h1>
-          <p className="text-muted-foreground">Manage users within organizations</p>
+          <h1 className="text-2xl md:text-3xl font-bold">Users</h1>
+          <p className="text-sm md:text-base text-muted-foreground">Manage users within organizations</p>
         </div>
-        <Button disabled={!selectedOrgId} onClick={() => setCreateModalOpen(true)}>
+        <Button disabled={!selectedOrgId} onClick={() => setCreateModalOpen(true)} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />
           Add User
         </Button>
@@ -128,93 +131,130 @@ export default function UsersPage() {
               </CardDescription>
             </CardHeader>
             <CardContent>
-              {users.length === 0 ? (
-                <div className="py-12 text-center text-muted-foreground">
-                  No users found in this organization.
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Name</TableHead>
-                      <TableHead>Email</TableHead>
-                      <TableHead>Phone</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead>Created</TableHead>
-                      <TableHead className="text-right">Actions</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {users.map((user) => {
+              <ResponsiveTable
+                data={users}
+                getRowKey={(user) => user.id}
+                onRowClick={(user) => router.push(`/users/${user.id}/edit`)}
+                emptyMessage="No users found in this organization."
+                columns={[
+                  {
+                    key: 'name',
+                    label: 'Name',
+                    render: (user) => {
                       const displayName = user.display_name ||
                         (user.first_name || user.last_name
                           ? `${user.first_name || ''} ${user.last_name || ''}`.trim()
                           : user.email);
-
-                      return (
-                        <TableRow
-                          key={user.id}
-                          className="cursor-pointer hover:bg-muted/50"
-                          onClick={() => router.push(`/users/${user.id}/edit`)}
+                      return <span className="font-medium">{displayName}</span>;
+                    },
+                  },
+                  {
+                    key: 'email',
+                    label: 'Email',
+                    render: (user) => user.email,
+                  },
+                  {
+                    key: 'phone',
+                    label: 'Phone',
+                    render: (user) => <span className="text-muted-foreground">{user.phone || '—'}</span>,
+                  },
+                  {
+                    key: 'status',
+                    label: 'Status',
+                    render: (user) => (
+                      user.is_active ? (
+                        <span className="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/30 px-2 py-1 text-xs font-medium text-green-800 dark:text-green-400">
+                          Active
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs font-medium text-gray-800 dark:text-gray-400">
+                          Inactive
+                        </span>
+                      )
+                    ),
+                  },
+                  {
+                    key: 'created',
+                    label: 'Created',
+                    render: (user) => new Date(user.created_at).toLocaleDateString(),
+                  },
+                  {
+                    key: 'actions',
+                    label: 'Actions',
+                    mobileLabel: 'Actions',
+                    desktopRender: (user) => (
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/users/${user.id}/edit`);
+                          }}
                         >
-                          <TableCell className="font-medium">{displayName}</TableCell>
-                          <TableCell>{user.email}</TableCell>
-                          <TableCell className="text-muted-foreground">
-                            {user.phone || '—'}
-                          </TableCell>
-                          <TableCell>
-                            {user.is_active ? (
-                              <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                                Active
-                              </span>
-                            ) : (
-                              <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                                Inactive
-                              </span>
-                            )}
-                          </TableCell>
-                          <TableCell>{new Date(user.created_at).toLocaleDateString()}</TableCell>
-                          <TableCell className="text-right">
-                            <div className="flex justify-end gap-2">
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  router.push(`/users/${user.id}/edit`);
-                                }}
-                              >
-                                <Pencil className="h-4 w-4" />
-                              </Button>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleDelete(user.id);
-                                }}
-                              >
-                                <Trash2 className="h-4 w-4 text-destructive" />
-                              </Button>
-                            </div>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              )}
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteClick(user);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                    ),
+                    render: (user) => (
+                      <>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            router.push(`/users/${user.id}/edit`);
+                          }}
+                          className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l hover:bg-muted/80"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleDeleteClick(user);
+                          }}
+                          className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </>
+                    ),
+                  },
+                ]}
+              />
             </CardContent>
           </Card>
         </>
       )}
 
       {selectedOrgId && (
-        <CreateUserModal
-          open={createModalOpen}
-          onOpenChange={setCreateModalOpen}
-          organizationId={selectedOrgId}
-        />
+        <>
+          <CreateUserModal
+            open={createModalOpen}
+            onOpenChange={setCreateModalOpen}
+            organizationId={selectedOrgId}
+          />
+          <DeleteUserDialog
+            open={deleteDialogOpen}
+            onOpenChange={setDeleteDialogOpen}
+            userToDelete={userToDelete}
+            availableUsers={users}
+            onConfirm={handleDeleteConfirm}
+          />
+        </>
       )}
     </div>
   );

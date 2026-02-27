@@ -165,4 +165,32 @@ main::-webkit-scrollbar {
   body {
     @apply bg-background text-foreground;
   }
+
+  /* Mobile-specific improvements */
+  @media (max-width: 768px) {
+    /* Prevent overscroll/bounce on mobile */
+    html {
+      overscroll-behavior: none;
+    }
+
+    body {
+      overscroll-behavior: none;
+      -webkit-overflow-scrolling: touch;
+    }
+
+    /* Prevent text selection on UI elements */
+    button,
+    [role="button"] {
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Prevent zoom on input focus */
+    input,
+    select,
+    textarea {
+      font-size: 16px;
+    }
+  }
 }
