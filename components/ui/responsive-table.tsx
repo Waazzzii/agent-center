@@ -3,6 +3,7 @@
 import * as React from 'react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 
 interface Column<T> {
   key: string;
@@ -20,6 +21,9 @@ interface ResponsiveTableProps<T> {
   getRowKey: (item: T) => string;
   emptyMessage?: string;
   className?: string;
+  showCheckboxes?: boolean;
+  selectedIds?: string[];
+  onToggleSelect?: (id: string) => void;
 }
 
 export function ResponsiveTable<T>({
@@ -29,6 +33,9 @@ export function ResponsiveTable<T>({
   getRowKey,
   emptyMessage = 'No data available',
   className,
+  showCheckboxes = false,
+  selectedIds = [],
+  onToggleSelect,
 }: ResponsiveTableProps<T>) {
   if (data.length === 0) {
     return (
@@ -45,6 +52,7 @@ export function ResponsiveTable<T>({
         <table className="w-full caption-bottom text-sm">
           <thead className="[&_tr]:border-b">
             <tr className="border-b transition-colors">
+              {showCheckboxes && <th className="w-12"></th>}
               {columns.map((column) => (
                 <th
                   key={column.key}
@@ -56,25 +64,36 @@ export function ResponsiveTable<T>({
             </tr>
           </thead>
           <tbody className="[&_tr:last-child]:border-0">
-            {data.map((item) => (
-              <tr
-                key={getRowKey(item)}
-                onClick={() => onRowClick?.(item)}
-                className={cn(
-                  'hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors',
-                  onRowClick && 'cursor-pointer'
-                )}
-              >
-                {columns.map((column) => (
-                  <td
-                    key={column.key}
-                    className="p-2 align-middle whitespace-nowrap"
-                  >
-                    {column.desktopRender ? column.desktopRender(item) : column.render(item)}
-                  </td>
-                ))}
-              </tr>
-            ))}
+            {data.map((item) => {
+              const itemId = getRowKey(item);
+              return (
+                <tr
+                  key={itemId}
+                  onClick={() => onRowClick?.(item)}
+                  className={cn(
+                    'hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors',
+                    onRowClick && 'cursor-pointer'
+                  )}
+                >
+                  {showCheckboxes && (
+                    <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                      <Checkbox
+                        checked={selectedIds.includes(itemId)}
+                        onCheckedChange={() => onToggleSelect?.(itemId)}
+                      />
+                    </td>
+                  )}
+                  {columns.map((column) => (
+                    <td
+                      key={column.key}
+                      className="p-2 align-middle whitespace-nowrap"
+                    >
+                      {column.desktopRender ? column.desktopRender(item) : column.render(item)}
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
@@ -82,13 +101,14 @@ export function ResponsiveTable<T>({
       {/* Mobile Card View */}
       <div className="md:hidden space-y-3">
         {data.map((item) => {
+          const itemId = getRowKey(item);
           const visibleColumns = columns.filter((column) => !column.hideOnMobile);
           const actionsColumn = visibleColumns.find((col) => col.key === 'actions');
           const dataColumns = visibleColumns.filter((col) => col.key !== 'actions');
 
           return (
             <Card
-              key={getRowKey(item)}
+              key={itemId}
               onClick={() => onRowClick?.(item)}
               className={cn(
                 'p-4 transition-colors',
@@ -96,6 +116,16 @@ export function ResponsiveTable<T>({
               )}
             >
               <div className="flex items-stretch gap-3">
+                {/* Optional checkbox */}
+                {showCheckboxes && (
+                  <Checkbox
+                    checked={selectedIds.includes(itemId)}
+                    onCheckedChange={() => onToggleSelect?.(itemId)}
+                    onClick={(e) => e.stopPropagation()}
+                    className="self-center"
+                  />
+                )}
+
                 {/* Main content area */}
                 <div className="flex-1 min-w-0 space-y-3 py-1 pr-4">
                   <div className="flex flex-wrap gap-x-4 gap-y-2">

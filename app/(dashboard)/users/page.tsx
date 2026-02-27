@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
@@ -9,7 +9,8 @@ import { User } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
-import { Trash2, Plus, Pencil } from 'lucide-react';
+import { Input } from '@/components/ui/input';
+import { Trash2, Plus, Pencil, Search } from 'lucide-react';
 import { CreateUserModal } from '@/components/users/create-user-modal';
 import { DeleteUserDialog } from '@/components/users/delete-user-dialog';
 import { toast } from 'sonner';
@@ -24,6 +25,7 @@ export default function UsersPage() {
   const [createModalOpen, setCreateModalOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
+  const [userSearch, setUserSearch] = useState('');
 
   useEffect(() => {
     if (!admin) {
@@ -36,6 +38,7 @@ export default function UsersPage() {
   useEffect(() => {
     if (selectedOrgId) {
       loadUsers();
+      setUserSearch(''); // Clear search when org changes
     }
   }, [selectedOrgId]);
 
@@ -82,6 +85,23 @@ export default function UsersPage() {
 
     await loadUsers();
   };
+
+  // Filtered users based on search
+  const filteredUsers = useMemo(() => {
+    const query = userSearch.toLowerCase().trim();
+    return users
+      .filter(user => {
+        if (!query) return true;
+        const displayName = user.display_name ||
+          (user.first_name || user.last_name
+            ? `${user.first_name || ''} ${user.last_name || ''}`.trim()
+            : user.email);
+        return displayName.toLowerCase().includes(query) ||
+               user.email.toLowerCase().includes(query) ||
+               user.phone?.toLowerCase().includes(query);
+      })
+      .sort((a, b) => a.email.localeCompare(b.email));
+  }, [users, userSearch]);
 
   if (!admin || loading) {
     return (
@@ -130,12 +150,21 @@ export default function UsersPage() {
                 {users.length} user{users.length !== 1 ? 's' : ''} in this organization
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              <div className="relative">
+                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <Input
+                  placeholder="Search users..."
+                  value={userSearch}
+                  onChange={(e) => setUserSearch(e.target.value)}
+                  className="pl-9"
+                />
+              </div>
               <ResponsiveTable
-                data={users}
+                data={filteredUsers}
                 getRowKey={(user) => user.id}
                 onRowClick={(user) => router.push(`/users/${user.id}/edit`)}
-                emptyMessage="No users found in this organization."
+                emptyMessage={userSearch ? "No matching users found" : "No users found in this organization."}
                 columns={[
                   {
                     key: 'name',
