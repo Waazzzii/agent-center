@@ -316,21 +316,21 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
   }
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="sm" onClick={() => router.push('/users')}>
+    <div className="space-y-6">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-4">
+          <Button variant="ghost" size="sm" onClick={() => router.push('/users')} className="w-fit">
             <ArrowLeft className="mr-2 h-4 w-4" />
             Back
           </Button>
           <div>
-            <h1 className="text-3xl font-bold">{formData.email}</h1>
-            <p className="text-muted-foreground">
+            <h1 className="text-2xl md:text-3xl font-bold">{formData.email}</h1>
+            <p className="text-sm md:text-base text-muted-foreground">
               {formData.display_name || `${formData.first_name || ''} ${formData.last_name || ''}`.trim() || 'User details'}
             </p>
           </div>
         </div>
-        <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)}>
+        <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)} className="w-full sm:w-auto">
           <Trash2 className="mr-2 h-4 w-4" />
           Delete User
         </Button>
