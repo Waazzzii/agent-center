@@ -34,6 +34,7 @@ import {
 import { ArrowLeft, Trash2, Users, Search, Plus, CheckSquare, Square, Pencil, MinusSquare } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { TokenHealthStatusDisplay } from '@/components/token-health-status';
 
 export default function EditConnectorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: connectorId } = use(params);
@@ -135,7 +136,8 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       setGroupsWithAccess(groupsWithAccessList);
       setGroupEndpoints(endpointsMap);
     } catch (error: any) {
-      toast.error(error.message || 'Failed to load connector');
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to load connector';
+      toast.error(errorMessage);
       router.push('/connectors');
     } finally {
       setInitialLoading(false);
@@ -186,7 +188,8 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       toast.success('Connector updated successfully');
       await loadConnector(); // Reload to refresh tabs
     } catch (error: any) {
-      toast.error(error.message || 'Failed to update connector');
+      const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
+      toast.error(errorMessage);
     } finally {
       setLoading(false);
     }
@@ -486,6 +489,9 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                         return acc;
                       }, {} as Record<string, string>) || {}
                     }
+                    tokenHealthStatus={connector.secret_info?.health_status}
+                    tokenExpiresAt={connector.secret_info?.expires_at}
+                    tokenLastRenewedAt={connector.secret_info?.last_renewed_at}
                     onSubmit={async (config, secrets) => {
                       if (!selectedOrgId) return;
                       setLoading(true);
@@ -498,7 +504,8 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                         toast.success('Connector updated successfully');
                         await loadConnector();
                       } catch (error: any) {
-                        toast.error(error.message || 'Failed to update connector');
+                        const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
+                        toast.error(errorMessage);
                       } finally {
                         setLoading(false);
                       }
@@ -525,7 +532,8 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                           toast.success('Connector status updated');
                           await loadConnector();
                         } catch (error: any) {
-                          toast.error(error.message || 'Failed to update connector');
+                          const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
+                          toast.error(errorMessage);
                         }
                       }}
                     />

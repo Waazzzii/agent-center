@@ -10,12 +10,18 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Loader2, Lock, Settings } from 'lucide-react';
 import { toast } from 'sonner';
+import { TokenHealthStatusDisplay } from './token-health-status';
+import type { TokenHealthStatus } from '@/types/api.types';
 
 interface DynamicConnectorFormProps {
   schema: ConnectorConfigSchema;
   initialValues?: Record<string, any>;
   existingSecrets?: string[]; // Keys of secrets that exist (for required validation)
   maskedSecrets?: Record<string, string>; // Masked secret values (e.g., {"api_key": "••••••••1234"})
+  // Token health status (for connectors with expiring tokens)
+  tokenHealthStatus?: TokenHealthStatus;
+  tokenExpiresAt?: string;
+  tokenLastRenewedAt?: string;
   onSubmit: (config: Record<string, any>, secrets: Record<string, string>) => Promise<void>;
   loading?: boolean;
 }
@@ -25,6 +31,9 @@ export function DynamicConnectorForm({
   initialValues = {},
   existingSecrets = [],
   maskedSecrets = {},
+  tokenHealthStatus,
+  tokenExpiresAt,
+  tokenLastRenewedAt,
   onSubmit,
   loading = false,
 }: DynamicConnectorFormProps) {
@@ -198,6 +207,16 @@ export function DynamicConnectorForm({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Token Health Status */}
+            {tokenHealthStatus && (
+              <TokenHealthStatusDisplay
+                healthStatus={tokenHealthStatus}
+                expiresAt={tokenExpiresAt}
+                lastRenewedAt={tokenLastRenewedAt}
+              />
+            )}
+
+            {/* Secret Fields */}
             {secretFields.map((field) => (
               <FieldRenderer
                 key={field.key}

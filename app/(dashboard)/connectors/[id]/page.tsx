@@ -19,6 +19,7 @@ import {
 import { ArrowLeft, Pencil, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { TokenHealthStatusDisplay } from '@/components/token-health-status';
 
 interface GroupWithConnectorAccess {
   id: string;
@@ -164,6 +165,15 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
             <CardDescription>Configuration and status</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Token Health Status */}
+            {connector.secret_info?.health_status && (
+              <TokenHealthStatusDisplay
+                healthStatus={connector.secret_info.health_status}
+                expiresAt={connector.secret_info.expires_at}
+                lastRenewedAt={connector.secret_info.last_renewed_at}
+              />
+            )}
+
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <div className="text-sm font-medium text-muted-foreground">Status</div>

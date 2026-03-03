@@ -94,6 +94,9 @@ export interface Connector {
   updated_at: string;
 }
 
+// Token health status enum
+export type TokenHealthStatus = 'healthy' | 'needs_renewal' | 'renewal_failed' | 'expired' | 'unknown';
+
 // Organization connector configuration
 export interface OrganizationConnector {
   id: string;
@@ -106,6 +109,11 @@ export interface OrganizationConnector {
     secret_fields: string[];  // Array of field keys that have secrets (e.g., ["api_key", "api_secret"])
     masked_values?: Record<string, string>;  // Masked secret values (only present on single GET, not list)
     last_updated: string;
+    // Token health tracking (for connectors with expiring tokens)
+    expires_at?: string;  // ISO date when token expires
+    last_renewed_at?: string;  // ISO date when token was last renewed
+    health_status?: TokenHealthStatus;  // Current health status
+    // Note: Error details are in audit_log, not sent to frontend
   } | null;
   is_enabled: boolean;
   created_at: string;
