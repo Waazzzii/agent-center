@@ -202,15 +202,16 @@ export default function EditOAuthClientPage({ params }: { params: Promise<{ id: 
             {isConnector && (
               <>
                 <div className="space-y-2">
-                  <Label htmlFor="organization_id">Organization *</Label>
+                  <Label htmlFor="organization_id">Organization</Label>
                   <Select
-                    value={formData.organization_id}
-                    onValueChange={(v) => setFormData((f) => ({ ...f, organization_id: v }))}
+                    value={formData.organization_id || '__none__'}
+                    onValueChange={(v) => setFormData((f) => ({ ...f, organization_id: v === '__none__' ? '' : v }))}
                   >
                     <SelectTrigger id="organization_id">
                       <SelectValue placeholder="Select organization" />
                     </SelectTrigger>
                     <SelectContent>
+                      <SelectItem value="__none__">No Organization</SelectItem>
                       {organizations.map((org) => (
                         <SelectItem key={org.id} value={org.id}>
                           {org.name}
