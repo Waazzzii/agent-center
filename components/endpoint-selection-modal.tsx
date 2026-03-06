@@ -34,17 +34,18 @@ export function EndpointSelectionModal({
   description = 'Select which endpoints to authorize. At least one endpoint must be selected.',
 }: EndpointSelectionModalProps) {
   const [selectedEndpoints, setSelectedEndpoints] = useState<Set<string>>(
-    new Set(initialSelected)
+    new Set(initialSelected.filter(ep => availableEndpoints.includes(ep)))
   );
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Update selected endpoints when modal opens or initialSelected changes
+  // Update selected endpoints when modal opens or initialSelected changes.
+  // Only keep endpoints that are still available — stale DB values are ignored.
   useEffect(() => {
     if (open) {
-      setSelectedEndpoints(new Set(initialSelected));
+      setSelectedEndpoints(new Set(initialSelected.filter(ep => availableEndpoints.includes(ep))));
       setSearchQuery('');
     }
-  }, [open, initialSelected]);
+  }, [open, initialSelected, availableEndpoints]);
 
   // Filter endpoints based on search
   const filteredEndpoints = useMemo(() => {
