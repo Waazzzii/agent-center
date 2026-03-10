@@ -14,6 +14,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle, Loader2, UserCircle } from 'lucide-react';
 import { User } from '@/types/api.types';
 import { UserSelectModal } from './user-select-modal';
+import { toast } from 'sonner';
 
 interface DeleteUserDialogProps {
   open: boolean;
@@ -33,7 +34,6 @@ export function DeleteUserDialog({
   const [selectedUserId, setSelectedUserId] = useState<string>('');
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [showUserSelect, setShowUserSelect] = useState(false);
 
   // Reset state when dialog opens/closes
@@ -41,7 +41,6 @@ export function DeleteUserDialog({
     if (!open) {
       setSelectedUserId('');
       setSelectedUser(null);
-      setError(null);
       setIsDeleting(false);
     }
   }, [open]);
@@ -50,23 +49,25 @@ export function DeleteUserDialog({
     setSelectedUserId(userId);
     const user = availableUsers.find((u) => u.id === userId);
     setSelectedUser(user || null);
-    setError(null);
   };
 
   const handleConfirm = async () => {
     if (!selectedUserId) {
-      setError('Please select a user to reassign content to');
+      toast.error('Please select a user to reassign content to');
       return;
     }
 
     setIsDeleting(true);
-    setError(null);
 
     try {
       await onConfirm(selectedUserId);
       onOpenChange(false);
     } catch (err: any) {
-      setError(err.message || 'Failed to delete user');
+      const raw: string = err?.response?.data?.message || err?.message || '';
+      const message = raw.toLowerCase().includes('last administrator')
+        ? 'This is the last administrator in this organization. Please assign another administrator before deleting.'
+        : raw || 'Failed to delete user';
+      toast.error(message);
       setIsDeleting(false);
     }
   };
@@ -156,12 +157,6 @@ export function DeleteUserDialog({
               )}
             </div>
 
-            {error && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
           </div>
 
           <DialogFooter>

@@ -4,21 +4,30 @@ import * as React from 'react';
 import { cn } from '@/lib/utils';
 import { Card } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 
 interface Column<T> {
   key: string;
   label: string;
   render: (item: T) => React.ReactNode;
-  desktopRender?: (item: T) => React.ReactNode; // Optional separate render for desktop
+  desktopRender?: (item: T) => React.ReactNode;
   hideOnMobile?: boolean;
-  mobileLabel?: string; // Custom label for mobile card view
+  mobileLabel?: string;
 }
 
 interface ResponsiveTableProps<T> {
   data: T[];
   columns: Column<T>[];
   onRowClick?: (item: T) => void;
-  getRowKey: (item: T) => string;
+  /** When provided, clicking a row opens a detail dialog instead of calling onRowClick */
+  detailRender?: (item: T) => React.ReactNode;
+  detailTitle?: (item: T) => string;
+  getRowKey?: (item: T) => string;
   emptyMessage?: string;
   className?: string;
   showCheckboxes?: boolean;
@@ -30,13 +39,25 @@ export function ResponsiveTable<T>({
   data,
   columns,
   onRowClick,
-  getRowKey,
+  detailRender,
+  detailTitle,
+  getRowKey = (item: any) => item.id,
   emptyMessage = 'No data available',
   className,
   showCheckboxes = false,
   selectedIds = [],
   onToggleSelect,
 }: ResponsiveTableProps<T>) {
+  const [detailItem, setDetailItem] = React.useState<T | null>(null);
+
+  const handleRowClick = (item: T) => {
+    if (detailRender) {
+      setDetailItem(item);
+    } else {
+      onRowClick?.(item);
+    }
+  };
+
   if (data.length === 0) {
     return (
       <div className="py-12 text-center text-muted-foreground">
@@ -45,18 +66,20 @@ export function ResponsiveTable<T>({
     );
   }
 
+  const isClickable = !!(detailRender || onRowClick);
+
   return (
     <>
       {/* Desktop Table View */}
-      <div className={cn('hidden md:block relative w-full overflow-x-auto', className)}>
-        <table className="w-full caption-bottom text-sm">
+      <div className={cn('hidden md:block w-full overflow-hidden', className)}>
+        <table className="w-full caption-bottom text-sm table-fixed">
           <thead className="[&_tr]:border-b">
             <tr className="border-b transition-colors">
-              {showCheckboxes && <th className="w-12"></th>}
+              {showCheckboxes && <th className="w-10 px-2"></th>}
               {columns.map((column) => (
                 <th
                   key={column.key}
-                  className="text-foreground h-10 px-2 text-left align-middle font-medium whitespace-nowrap"
+                  className="text-foreground h-10 px-2 text-left align-middle font-medium"
                 >
                   {column.label}
                 </th>
@@ -69,14 +92,14 @@ export function ResponsiveTable<T>({
               return (
                 <tr
                   key={itemId}
-                  onClick={() => onRowClick?.(item)}
+                  onClick={() => handleRowClick(item)}
                   className={cn(
                     'hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors',
-                    onRowClick && 'cursor-pointer'
+                    isClickable && 'cursor-pointer'
                   )}
                 >
                   {showCheckboxes && (
-                    <td className="p-2" onClick={(e) => e.stopPropagation()}>
+                    <td className="w-10 p-2" onClick={(e) => e.stopPropagation()}>
                       <Checkbox
                         checked={selectedIds.includes(itemId)}
                         onCheckedChange={() => onToggleSelect?.(itemId)}
@@ -86,9 +109,11 @@ export function ResponsiveTable<T>({
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className="p-2 align-middle whitespace-nowrap"
+                      className="p-2 align-middle overflow-hidden"
                     >
-                      {column.desktopRender ? column.desktopRender(item) : column.render(item)}
+                      <div className="truncate">
+                        {column.desktopRender ? column.desktopRender(item) : column.render(item)}
+                      </div>
                     </td>
                   ))}
                 </tr>
@@ -109,14 +134,13 @@ export function ResponsiveTable<T>({
           return (
             <Card
               key={itemId}
-              onClick={() => onRowClick?.(item)}
+              onClick={() => handleRowClick(item)}
               className={cn(
                 'p-4 transition-colors',
-                onRowClick && 'cursor-pointer hover:bg-muted/50'
+                isClickable && 'cursor-pointer hover:bg-muted/50'
               )}
             >
               <div className="flex items-stretch gap-3">
-                {/* Optional checkbox */}
                 {showCheckboxes && (
                   <Checkbox
                     checked={selectedIds.includes(itemId)}
@@ -126,21 +150,19 @@ export function ResponsiveTable<T>({
                   />
                 )}
 
-                {/* Main content area */}
                 <div className="flex-1 min-w-0 space-y-3 py-1 pr-4">
                   <div className="flex flex-wrap gap-x-4 gap-y-2">
                     {dataColumns.map((column) => (
-                      <div key={column.key} className="flex-1 min-w-[120px]">
+                      <div key={column.key} className="flex-1 min-w-[120px] overflow-hidden">
                         <div className="text-sm font-medium text-muted-foreground">
                           {column.mobileLabel || column.label}
                         </div>
-                        <div className="text-sm">{column.render(item)}</div>
+                        <div className="text-sm truncate">{column.render(item)}</div>
                       </div>
                     ))}
                   </div>
                 </div>
 
-                {/* Actions column on the right */}
                 {actionsColumn && (
                   <div className="flex flex-col w-12 -mr-4 -my-4" onClick={(e) => e.stopPropagation()}>
                     {actionsColumn.render(item)}
@@ -151,6 +173,20 @@ export function ResponsiveTable<T>({
           );
         })}
       </div>
+
+      {/* Detail dialog */}
+      {detailRender && (
+        <Dialog open={detailItem !== null} onOpenChange={(open) => !open && setDetailItem(null)}>
+          <DialogContent className="sm:max-w-2xl md:left-[calc(50%+8rem)] max-h-[80vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>
+                {detailItem && detailTitle ? detailTitle(detailItem) : 'Details'}
+              </DialogTitle>
+            </DialogHeader>
+            {detailItem && detailRender(detailItem)}
+          </DialogContent>
+        </Dialog>
+      )}
     </>
   );
 }

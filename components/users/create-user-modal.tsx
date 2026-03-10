@@ -14,8 +14,17 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { toast } from 'sonner';
 import type { CreateUserDto } from '@/types/api.types';
+import { AdminRole } from '@/types/api.types';
+import { useAuthStore } from '@/stores/auth.store';
 
 interface CreateUserModalProps {
   open: boolean;
@@ -25,22 +34,21 @@ interface CreateUserModalProps {
 
 export function CreateUserModal({ open, onOpenChange, organizationId }: CreateUserModalProps) {
   const router = useRouter();
+  const { admin } = useAuthStore();
   const [loading, setLoading] = useState(false);
-  const [formData, setFormData] = useState<CreateUserDto>({
+  const [selectedRole, setSelectedRole] = useState<'org_admin' | 'org_user'>('org_user');
+  const [formData, setFormData] = useState<Omit<CreateUserDto, 'access_group_ids'>>({
     email: '',
     first_name: '',
     last_name: '',
   });
 
-  // Reset form when modal opens
+  const canSetAdminRole = admin?.role === AdminRole.SUPER_ADMIN || admin?.role === AdminRole.ORG_ADMIN;
+
   useEffect(() => {
-    if (open) {
-      setFormData({
-        email: '',
-        first_name: '',
-        last_name: '',
-      });
-    }
+    if (!open) return;
+    setFormData({ email: '', first_name: '', last_name: '' });
+    setSelectedRole('org_user');
   }, [open]);
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -51,7 +59,6 @@ export function CreateUserModal({ open, onOpenChange, organizationId }: CreateUs
       return;
     }
 
-    // Basic email validation
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     if (!emailRegex.test(formData.email)) {
       toast.error('Please enter a valid email address');
@@ -60,10 +67,12 @@ export function CreateUserModal({ open, onOpenChange, organizationId }: CreateUs
 
     try {
       setLoading(true);
-      const user = await createUser(organizationId, formData);
+      const user = await createUser(organizationId, {
+        ...formData,
+        role: selectedRole,
+      });
       toast.success('User created successfully');
       onOpenChange(false);
-      // Navigate to the edit page for further configuration
       router.push(`/users/${user.id}/edit`);
     } catch (error: any) {
       toast.error(error.message || 'Failed to create user');
@@ -116,6 +125,21 @@ export function CreateUserModal({ open, onOpenChange, organizationId }: CreateUs
               placeholder="Doe"
             />
           </div>
+
+          {canSetAdminRole && (
+            <div className="space-y-2">
+              <Label htmlFor="role">Role</Label>
+              <Select value={selectedRole} onValueChange={(v) => setSelectedRole(v as 'org_admin' | 'org_user')}>
+                <SelectTrigger id="role" className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="org_user">User</SelectItem>
+                  <SelectItem value="org_admin">Administrator</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={loading}>

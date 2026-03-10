@@ -24,6 +24,7 @@ interface DynamicConnectorFormProps {
   tokenLastRenewedAt?: string;
   onSubmit: (config: Record<string, any>, secrets: Record<string, string>) => Promise<void>;
   loading?: boolean;
+  disabled?: boolean;
 }
 
 export function DynamicConnectorForm({
@@ -36,6 +37,7 @@ export function DynamicConnectorForm({
   tokenLastRenewedAt,
   onSubmit,
   loading = false,
+  disabled = false,
 }: DynamicConnectorFormProps) {
   // Track original masked values to detect if user changed them
   const [secretMasks] = useState<Record<string, string>>(maskedSecrets);
@@ -186,6 +188,7 @@ export function DynamicConnectorForm({
                 field={field}
                 control={control}
                 error={errors[field.key]?.message as string}
+                disabled={disabled}
               />
             ))}
           </CardContent>
@@ -224,6 +227,7 @@ export function DynamicConnectorForm({
                 control={control}
                 error={errors[field.key]?.message as string}
                 maskedValue={maskedSecrets[field.key]}
+                disabled={disabled}
               />
             ))}
           </CardContent>
@@ -231,7 +235,7 @@ export function DynamicConnectorForm({
       )}
 
       <div className="flex justify-end pt-4">
-        <Button type="submit" disabled={loading}>
+        <Button type="submit" disabled={loading || disabled}>
           {loading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />

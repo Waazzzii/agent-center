@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { AdminRole } from '@/types/api.types';
+import { AdminRole, BYPASS_PERMISSION_ROLES } from '@/types/api.types';
 import {
   Building2,
   Plug,
@@ -20,13 +20,16 @@ import {
   Shield,
   Database,
   Ticket,
-  UsersRound,
-  Link as LinkIcon,
   FileText,
   ChevronDown,
   Settings,
   BookOpen,
   X,
+  Wand2,
+  Bot,
+  CheckCircle,
+  ChevronLeft,
+  ShieldCheck,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -40,104 +43,63 @@ import { useUIStore } from '@/stores/ui.store';
 import { logout } from '@/lib/auth/oauth';
 import { getOrganizations } from '@/lib/api/organizations';
 import type { Organization } from '@/types/api.types';
+import { orgMainNavItems as mainItems, orgSettingsNavItems as settingsItems, firstPermittedHref } from '@/lib/nav';
 
 interface NavItem {
   label: string;
   href: string;
   icon: React.ElementType;
   superAdminOnly?: boolean;
-  orgAdminOnly?: boolean;
+  permissionKeys?: string[];
 }
 
-// Super Admin View Navigation
+// Super Admin system-level nav
 const superAdminNavItems: NavItem[] = [
-  {
-    label: 'Organizations',
-    href: '/organizations',
-    icon: Building2,
-    superAdminOnly: true,
-  },
-  {
-    label: 'Connectors Catalog',
-    href: '/connectors-catalog',
-    icon: Database,
-    superAdminOnly: true,
-  },
-  {
-    label: 'OAuth Clients',
-    href: '/oauth-clients',
-    icon: Key,
-    superAdminOnly: true,
-  },
-  {
-    label: 'Administrators',
-    href: '/administrators',
-    icon: Shield,
-    superAdminOnly: true,
-  },
-  {
-    label: 'Refresh Tokens',
-    href: '/refresh-tokens',
-    icon: Ticket,
-    superAdminOnly: true,
-  },
-  {
-    label: 'Audit Logs',
-    href: '/audit-logs',
-    icon: FileText,
-    superAdminOnly: true,
-  },
+  { label: 'Organizations',      href: '/organizations',      icon: Building2, superAdminOnly: true },
+  { label: 'Connectors Catalog', href: '/connectors-catalog', icon: Database,  superAdminOnly: true },
+  { label: 'OAuth Clients',      href: '/oauth-clients',      icon: Key,       superAdminOnly: true },
+  { label: 'Administrators',     href: '/administrators',     icon: Shield,    superAdminOnly: true },
+  { label: 'Refresh Tokens',     href: '/refresh-tokens',    icon: Ticket,    superAdminOnly: true },
+  { label: 'Audit Logs',         href: '/audit-logs',        icon: FileText,  superAdminOnly: true },
 ];
 
-// Org Admin View Navigation
-const orgAdminNavItems: NavItem[] = [
-  {
-    label: 'Users',
-    href: '/users',
-    icon: UserCircle,
-    orgAdminOnly: true,
-  },
-  {
-    label: 'Groups',
-    href: '/groups',
-    icon: UsersRound,
-    orgAdminOnly: true,
-  },
-  {
-    label: 'Connectors',
-    href: '/connectors',
-    icon: Plug,
-    orgAdminOnly: true,
-  },
-  {
-    label: 'OAuth Clients',
-    href: '/oauth-clients',
-    icon: Key,
-    orgAdminOnly: true,
-  },
-  {
-    label: 'Knowledge Base',
-    href: '/knowledge-base',
-    icon: BookOpen,
-    orgAdminOnly: true,
-  },
-  {
-    label: 'Settings',
-    href: '/settings',
-    icon: Settings,
-    orgAdminOnly: true,
-  },
-];
+// Merge icons onto shared nav items so they work in the sidebar
+const MAIN_ICONS: Record<string, React.ElementType> = {
+  '/agents': Bot,
+  '/hitl':   CheckCircle,
+  '/skills': Wand2,
+};
+const SETTINGS_ICONS: Record<string, React.ElementType> = {
+  '/access-groups':  ShieldCheck,
+  '/audit-logs':     FileText,
+  '/knowledge-base': BookOpen,
+  '/connectors':     Plug,
+  '/oauth-clients':  Key,
+  '/organization':   Building2,
+  '/users':          UserCircle,
+};
+
+const orgMainNavItems: NavItem[] = mainItems.map((i) => ({ ...i, icon: MAIN_ICONS[i.href] ?? Bot }));
+const orgSettingsNavItems: NavItem[] = settingsItems.map((i) => ({ ...i, icon: SETTINGS_ICONS[i.href] ?? Building2 }));
+
+// Paths that belong to the settings panel (triggers settings mode)
+const SETTINGS_PATHS = ['/users', '/connectors', '/access-groups', '/oauth-clients', '/knowledge-base', '/audit-logs', '/organization'];
 
 export function ViewModeSidebar() {
   const pathname = usePathname();
-  const { admin, isSuperAdmin, clearAuth } = useAuthStore();
+  const { admin, isSuperAdmin, hasPermission, isOrgAdmin, hasOrgAccess } = useAuthStore();
   const { viewMode, selectedOrgName, selectedOrgId, switchToOrgAdminView } = useAdminViewStore();
   const { sidebarOpen, toggleSidebar, theme, toggleTheme } = useUIStore();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(false);
+  const [settingsMode, setSettingsMode] = useState(false);
 
-  // Load organizations when in org admin view
+  // Auto-detect settings mode from current path
+  useEffect(() => {
+    const inSettings = SETTINGS_PATHS.some((p) => pathname.startsWith(p));
+    setSettingsMode(inSettings);
+  }, [pathname]);
+
   useEffect(() => {
     if (viewMode === 'org_admin') {
       loadOrganizations();
@@ -160,24 +122,42 @@ export function ViewModeSidebar() {
     switchToOrgAdminView(org.id, org.name);
   };
 
+  const { clearAuth } = useAuthStore();
+
   const handleLogout = async () => {
     clearAuth();
     await logout();
   };
 
-  // Determine which nav items to show based on view mode
-  const navItems = viewMode === 'super_admin' ? superAdminNavItems : orgAdminNavItems;
+  const bypassPermissions = isSuperAdmin() || isOrgAdmin();
 
-  // Filter based on user role
-  const visibleNavItems = navItems.filter((item) => {
-    if (item.superAdminOnly) return isSuperAdmin();
-    if (item.orgAdminOnly) return true; // Both super admin and org admin can see
-    return true;
-  });
+  // Any admin permission key for "has settings access"
+  const settingsPermKeys = orgSettingsNavItems.flatMap((i) => i.permissionKeys ?? []);
+  const hasAnySettingsAccess = bypassPermissions || (selectedOrgId
+    ? settingsPermKeys.some((k) => hasPermission(selectedOrgId, k))
+    : false);
+
+  // Build visible nav list
+  let visibleNavItems: NavItem[];
+
+  if (viewMode === 'super_admin') {
+    visibleNavItems = superAdminNavItems;
+  } else if (settingsMode) {
+    visibleNavItems = orgSettingsNavItems.filter((item) => {
+      if (bypassPermissions) return true;
+      if (!item.permissionKeys || !selectedOrgId) return false;
+      return item.permissionKeys.some((key) => hasPermission(selectedOrgId, key));
+    });
+  } else {
+    visibleNavItems = orgMainNavItems.filter((item) => {
+      if (bypassPermissions) return true;
+      if (!item.permissionKeys || !selectedOrgId) return false;
+      return item.permissionKeys.some((key) => hasPermission(selectedOrgId, key));
+    });
+  }
 
   return (
     <>
-      {/* Mobile menu button - Only show in super admin view (when ViewSwitcher is hidden) */}
       {viewMode === 'super_admin' && (
         <Button
           variant="ghost"
@@ -190,15 +170,10 @@ export function ViewModeSidebar() {
         </Button>
       )}
 
-      {/* Overlay for mobile */}
       {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-40 bg-black/50 md:hidden"
-          onClick={toggleSidebar}
-        />
+        <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={toggleSidebar} />
       )}
 
-      {/* Sidebar */}
       <aside
         className={cn(
           'fixed left-0 top-0 z-50 h-screen w-64 border-r bg-sidebar transition-transform duration-300 ease-in-out',
@@ -209,50 +184,21 @@ export function ViewModeSidebar() {
           {/* Header */}
           <div className="flex h-16 items-center justify-between border-b px-4">
             <div className="flex items-center gap-2.5">
-              <Image
-                src="/logo.png"
-                alt=""
-                width={80}
-                height={80}
-                className="h-11 w-auto"
-              />
-              <Image
-                src="/wazzi_light.png"
-                alt="wazzi.io"
-                width={120}
-                height={40}
-                className="h-3 w-auto dark:hidden"
-              />
-              <Image
-                src="/wazzi_dark.png"
-                alt="wazzi.io"
-                width={120}
-                height={40}
-                className="h-3 w-auto hidden dark:block"
-              />
+              <Image src="/logo.png" alt="" width={80} height={80} className="h-11 w-auto" />
+              <Image src="/wazzi_light.png" alt="wazzi.io" width={120} height={40} className="h-3 w-auto dark:hidden" />
+              <Image src="/wazzi_dark.png" alt="wazzi.io" width={120} height={40} className="h-3 w-auto hidden dark:block" />
             </div>
-            {/* Close button for mobile */}
-            <Button
-              variant="ghost"
-              size="icon"
-              className="md:hidden"
-              onClick={toggleSidebar}
-              aria-label="Close menu"
-            >
+            <Button variant="ghost" size="icon" className="md:hidden" onClick={toggleSidebar} aria-label="Close menu">
               <X className="h-5 w-5" />
             </Button>
           </div>
 
-          {/* Organization Selector - only in org admin view */}
+          {/* Organization Selector / Mode badge */}
           {viewMode === 'org_admin' ? (
             <div className="border-b px-4 py-3">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="outline"
-                    className="w-full justify-between"
-                    disabled={loading}
-                  >
+                  <Button variant="outline" className="w-full justify-between" disabled={loading}>
                     <div className="flex items-center gap-2">
                       <Building2 className="h-4 w-4 text-primary" />
                       <span className="truncate text-sm font-medium">
@@ -264,13 +210,9 @@ export function ViewModeSidebar() {
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="start" className="w-[240px]">
                   {loading ? (
-                    <div className="p-2 text-center text-sm text-muted-foreground">
-                      Loading...
-                    </div>
+                    <div className="p-2 text-center text-sm text-muted-foreground">Loading...</div>
                   ) : organizations.length === 0 ? (
-                    <div className="p-2 text-center text-sm text-muted-foreground">
-                      No organizations available
-                    </div>
+                    <div className="p-2 text-center text-sm text-muted-foreground">No organizations available</div>
                   ) : (
                     organizations.map((org) => (
                       <DropdownMenuItem
@@ -296,7 +238,6 @@ export function ViewModeSidebar() {
               </DropdownMenu>
             </div>
           ) : (
-            /* Super Admin View Badge */
             <div className="border-b px-4 py-3">
               <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium bg-primary/10 text-primary">
                 <Shield className="h-3 w-3" />
@@ -305,12 +246,38 @@ export function ViewModeSidebar() {
             </div>
           )}
 
+          {/* Settings panel header */}
+          {viewMode === 'org_admin' && settingsMode && (
+            <div className="border-b px-2 py-2">
+              {/* ENABLE_MAIN_NAV — uncomment the block below to restore the Back button */}
+              {/* <Button
+                variant="ghost"
+                size="sm"
+                className="w-full justify-start gap-2 text-muted-foreground"
+                onClick={() => setSettingsMode(false)}
+                asChild
+              >
+                <Link href={firstPermittedHref(orgMainNavItems, bypassPermissions, hasPermission, selectedOrgId ?? '') ?? '/no-permission'}>
+                  <ChevronLeft className="h-4 w-4" />
+                  Back
+                </Link>
+              </Button> */}
+              <div className="px-3 pt-1 pb-0.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Settings
+              </div>
+            </div>
+          )}
+
           {/* Navigation */}
           <nav className="flex-1 space-y-1 overflow-y-auto p-4">
+            {visibleNavItems.length === 0 && viewMode === 'org_admin' && (
+              <div className="py-4 text-center text-sm text-muted-foreground">
+                No access granted yet
+              </div>
+            )}
             {visibleNavItems.map((item) => {
               const Icon = item.icon;
               const isActive = pathname.startsWith(item.href);
-
               return (
                 <Link
                   key={item.href}
@@ -321,15 +288,28 @@ export function ViewModeSidebar() {
                       ? 'bg-sidebar-accent text-sidebar-accent-foreground'
                       : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
                   )}
-                  onClick={() => {
-                    if (sidebarOpen) toggleSidebar();
-                  }}
+                  onClick={() => { if (sidebarOpen) toggleSidebar(); }}
                 >
                   <Icon className="h-5 w-5" />
                   {item.label}
                 </Link>
               );
             })}
+
+            {/* Settings entry point — shown in main mode when user has any admin access */}
+            {viewMode === 'org_admin' && !settingsMode && hasAnySettingsAccess && (
+              <Link
+                href={firstPermittedHref(orgSettingsNavItems, bypassPermissions, hasPermission, selectedOrgId ?? '') ?? '/no-permission'}
+                className={cn(
+                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+                  'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                )}
+                onClick={() => { if (sidebarOpen) toggleSidebar(); }}
+              >
+                <Settings className="h-5 w-5" />
+                Settings
+              </Link>
+            )}
           </nav>
 
           {/* Footer */}
@@ -345,20 +325,19 @@ export function ViewModeSidebar() {
                         'inline-block rounded-full px-2 py-0.5 text-xs font-medium',
                         admin.role === AdminRole.SUPER_ADMIN
                           ? 'bg-primary/10 text-primary'
-                          : 'bg-secondary/10 text-secondary'
+                          : admin.role === AdminRole.ORG_ADMIN
+                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+                          : 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400'
                       )}
                     >
-                      {admin.role === AdminRole.SUPER_ADMIN ? 'Super Admin' : 'Org Admin'}
+                      {admin.role === AdminRole.SUPER_ADMIN ? 'Super Admin'
+                      : admin.role === AdminRole.ORG_ADMIN ? 'Administrator'
+                      : 'User'}
                     </span>
                   </div>
                 </div>
                 <div className="mb-3 flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={toggleTheme}
-                    className="flex-shrink-0"
-                  >
+                  <Button variant="outline" size="icon" onClick={toggleTheme} className="flex-shrink-0">
                     {theme === 'light' ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />}
                   </Button>
                   <Button variant="outline" className="flex-1" onClick={handleLogout}>

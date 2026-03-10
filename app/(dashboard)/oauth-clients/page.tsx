@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
+import { useRequirePermission } from '@/lib/hooks/use-require-permission';
+import { usePermission } from '@/lib/hooks/use-permission';
 import { getOAuthClients, deleteOAuthClient } from '@/lib/api/oauth-clients';
 import { getOrganizations } from '@/lib/api/organizations';
 import { OAuthClient, Organization } from '@/types/api.types';
@@ -13,6 +15,7 @@ import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Badge } from '@/components/ui/badge';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Trash2, Plus, Edit, Info } from 'lucide-react';
+import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
@@ -29,6 +32,10 @@ export default function OAuthClientsPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
+  const permitted = useRequirePermission('oauth_clients_read');
+  const canCreate = usePermission('oauth_clients_create');
+  const canUpdate = usePermission('oauth_clients_update');
+  const canDelete = usePermission('oauth_clients_delete');
   const { confirm } = useConfirmDialog();
   const [clients, setClients] = useState<OAuthClient[]>([]);
   const [organizations, setOrganizations] = useState<Map<string, Organization>>(new Map());
@@ -55,9 +62,9 @@ export default function OAuthClientsPage() {
         getOrganizations(),
       ]);
 
-      // Filter clients for org admins to only show their org's clients
+      // Always filter to the selected org when one is set
       let filteredClients = clientsData.clients;
-      if (isReadOnly && selectedOrgId) {
+      if (selectedOrgId) {
         filteredClients = clientsData.clients.filter(
           client => client.organization_id === selectedOrgId
         );
@@ -109,6 +116,8 @@ export default function OAuthClientsPage() {
     );
   }
 
+  if (!permitted) return <NoPermissionContent />;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -122,7 +131,7 @@ export default function OAuthClientsPage() {
           </p>
         </div>
         {!isReadOnly && (
-          <Button onClick={() => router.push('/oauth-clients/create')} className="w-full sm:w-auto">
+          <Button disabled={!canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/oauth-clients/create')} className="w-full sm:w-auto">
             <Plus className="mr-2 h-4 w-4" />
             Add OAuth Client
           </Button>
@@ -236,6 +245,8 @@ export default function OAuthClientsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
+                      disabled={!canUpdate}
+                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         router.push(`/oauth-clients/${client.client_id}/edit`);
@@ -246,6 +257,8 @@ export default function OAuthClientsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
+                      disabled={!canDelete}
+                      title={!canDelete ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDelete(client.client_id, client.client_name);
@@ -260,6 +273,8 @@ export default function OAuthClientsPage() {
                     <Button
                       variant="outline"
                       size="sm"
+                      disabled={!canUpdate}
+                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         router.push(`/oauth-clients/${client.client_id}/edit`);
@@ -271,6 +286,8 @@ export default function OAuthClientsPage() {
                     <Button
                       variant="outline"
                       size="sm"
+                      disabled={!canDelete}
+                      title={!canDelete ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDelete(client.client_id, client.client_name);

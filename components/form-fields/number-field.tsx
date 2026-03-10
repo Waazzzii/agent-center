@@ -9,9 +9,10 @@ interface NumberFieldProps {
   field: ConnectorSchemaField;
   control: Control<any>;
   error?: string;
+  disabled?: boolean;
 }
 
-export function NumberField({ field, control, error }: NumberFieldProps) {
+export function NumberField({ field, control, error, disabled }: NumberFieldProps) {
   return (
     <div className="space-y-2">
       <Label htmlFor={field.key}>
@@ -34,6 +35,7 @@ export function NumberField({ field, control, error }: NumberFieldProps) {
               const value = e.target.value;
               formField.onChange(value === '' ? '' : Number(value));
             }}
+            disabled={disabled}
             className={error ? 'border-destructive' : ''}
           />
         )}

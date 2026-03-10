@@ -5,17 +5,40 @@
 
 export enum AdminRole {
   SUPER_ADMIN = 'super_admin',
-  ORG_ADMIN = 'org_admin'
+  ORG_ADMIN   = 'org_admin',
+  ORG_USER    = 'org_user',
 }
+
+/** Roles that bypass per-permission checks (org_admin is still scoped to their orgs) */
+export const BYPASS_PERMISSION_ROLES = [AdminRole.SUPER_ADMIN, AdminRole.ORG_ADMIN];
 
 export interface AdminUser {
   id: string;
   email: string;
   role: AdminRole;
   assignedOrganizations: string[];
+  /**
+   * Fully-resolved effective permissions per org (catalog defaults merged with explicit overrides).
+   * Only populated for org_user — super_admin bypasses all permission checks.
+   */
+  orgPermissions: Record<string, Record<string, boolean>>;
   createdAt: string;
   updatedAt: string;
   lastLoginAt: string | null;
+}
+
+export interface PermissionDefinition {
+  key: string;
+  label: string;
+  description: string | null;
+  category: string;
+  subcategory: string;
+  /** CRUD granularity: 'create' | 'read' | 'update' | 'delete' */
+  crud_type: 'create' | 'read' | 'update' | 'delete';
+  /** true = Administration section (not auto-included in Viewer/Editor defaults) */
+  is_admin: boolean;
+  sort_order: number;
+  default_value: boolean;
 }
 
 export interface Organization {
@@ -129,23 +152,32 @@ export interface User {
   display_name?: string;
   picture_url?: string;
   phone?: string;
-  organization_id: string;
   is_active: boolean;
+  role: 'org_admin' | 'org_user';
   created_at: string;
   updated_at: string;
 }
 
-export interface Group {
+export interface AccessGroup {
   id: string;
-  name: string;
-  slug: string;
-  description?: string;
   organization_id: string;
-  is_active: boolean;
+  name: string;
+  description?: string;
+  access: Record<string, boolean>;
+  member_count?: number;
   created_at: string;
   updated_at: string;
-  created_by?: string;
-  updated_by?: string;
+}
+
+export interface CreateAccessGroupDto {
+  name: string;
+  description?: string;
+  access?: Record<string, boolean>;
+}
+
+export interface UpdateAccessGroupDto {
+  name?: string;
+  description?: string;
 }
 
 export interface OAuthClient {
@@ -181,33 +213,6 @@ export interface Administrator {
   created_at: string;
   updated_at: string;
   last_login_at: string | null;
-}
-
-// User Groups
-export interface UserGroup {
-  id: string;
-  user_id: string;
-  group_id: string;
-  role: 'member' | 'admin' | 'owner';
-  created_at: string;
-  email?: string;
-  user_name?: string;
-  group_name?: string;
-}
-
-// Group Organization Connectors
-// Links groups to organization-specific connector instances
-export interface GroupConnector {
-  id: string;
-  group_id: string;
-  organization_connector_id: string; // References organization_connectors.id
-  authorized_endpoints: string[];
-  is_enabled: boolean;
-  created_at: string;
-  updated_at: string;
-  connector_key?: string;
-  connector_name?: string;
-  connector_available_endpoints?: string[];
 }
 
 // Refresh Tokens
@@ -275,26 +280,6 @@ export interface UpdateConnectorDto {
   is_public?: boolean;
 }
 
-export interface AddUserToGroupDto {
-  user_id: string;
-  role?: 'member' | 'admin' | 'owner';
-}
-
-export interface UpdateUserGroupRoleDto {
-  role: 'member' | 'admin' | 'owner';
-}
-
-export interface CreateGroupConnectorDto {
-  organization_connector_id: string; // ID of the organization connector
-  authorized_endpoints?: string[];
-  is_enabled?: boolean;
-}
-
-export interface UpdateGroupConnectorDto {
-  authorized_endpoints?: string[];
-  is_enabled?: boolean;
-}
-
 // User DTOs
 export interface CreateUserDto {
   email: string;
@@ -303,6 +288,9 @@ export interface CreateUserDto {
   display_name?: string;
   phone?: string;
   is_active?: boolean;
+  /** Access groups to assign on creation. If omitted, the org's default is auto-assigned. */
+  access_group_ids?: string[];
+  role?: 'org_admin' | 'org_user';
 }
 
 export interface UpdateUserDto {
@@ -312,21 +300,7 @@ export interface UpdateUserDto {
   display_name?: string;
   phone?: string;
   is_active?: boolean;
-}
-
-// Group DTOs
-export interface CreateGroupDto {
-  name: string;
-  slug: string;
-  description?: string;
-  is_active?: boolean;
-}
-
-export interface UpdateGroupDto {
-  name?: string;
-  slug?: string;
-  description?: string;
-  is_active?: boolean;
+  role?: 'org_admin' | 'org_user';
 }
 
 // Organization Connector Configuration DTOs (for linking connectors to orgs)

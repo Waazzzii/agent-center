@@ -16,7 +16,11 @@ interface AuthState {
   updateAdmin: (admin: Partial<AdminUser>) => void;
   updateTokens: (accessToken: string, refreshToken: string) => void;
   isSuperAdmin: () => boolean;
+  isOrgAdmin: () => boolean;
   hasOrgAccess: (orgId: string) => boolean;
+  /** Check if the current user has a specific permission in an org.
+   *  super_admin and org_admin always return true (they bypass permission checks). */
+  hasPermission: (orgId: string, permissionKey: string) => boolean;
 }
 
 export const useAuthStore = create<AuthState>()(
@@ -61,11 +65,24 @@ export const useAuthStore = create<AuthState>()(
         return admin?.role === AdminRole.SUPER_ADMIN;
       },
 
+      isOrgAdmin: () => {
+        const { admin } = get();
+        return admin?.role === AdminRole.ORG_ADMIN;
+      },
+
       hasOrgAccess: (orgId: string) => {
         const { admin } = get();
         if (!admin) return false;
         if (admin.role === AdminRole.SUPER_ADMIN) return true;
         return admin.assignedOrganizations.includes(orgId);
+      },
+
+      hasPermission: (orgId: string, permissionKey: string) => {
+        const { admin } = get();
+        if (!admin) return false;
+        // super_admin and org_admin bypass all permission checks
+        if (admin.role === AdminRole.SUPER_ADMIN || admin.role === AdminRole.ORG_ADMIN) return true;
+        return admin.orgPermissions?.[orgId]?.[permissionKey] === true;
       },
     }),
     {

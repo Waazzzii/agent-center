@@ -6,7 +6,7 @@ import { exchangeCodeForTokens } from '@/lib/auth/oauth';
 import { useAuthStore } from '@/stores/auth.store';
 import { useUIStore } from '@/stores/ui.store';
 import apiClient from '@/lib/api/client';
-import { AdminUser } from '@/types/api.types';
+import { AdminUser, AdminRole } from '@/types/api.types';
 
 function CallbackContent() {
   const router = useRouter();
@@ -59,10 +59,11 @@ function CallbackContent() {
         sessionStorage.removeItem('post_login_redirect');
         if (intendedPath && intendedPath !== '/login') {
           router.push(intendedPath);
-        } else if (admin.role === 'super_admin') {
+        } else if (admin.role === AdminRole.SUPER_ADMIN) {
           router.push('/organizations');
         } else {
-          router.push('/users');
+          // org_user: land on the first page they have access to (layout will redirect if needed)
+          router.push('/skills');
         }
       } catch (err: any) {
         console.error('[AUTH] Authentication failed:', err.message);

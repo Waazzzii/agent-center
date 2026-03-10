@@ -9,9 +9,10 @@ interface TextFieldProps {
   field: ConnectorSchemaField;
   control: Control<any>;
   error?: string;
+  disabled?: boolean;
 }
 
-export function TextField({ field, control, error }: TextFieldProps) {
+export function TextField({ field, control, error, disabled }: TextFieldProps) {
   const getInputType = () => {
     switch (field.type) {
       case 'url':
@@ -39,6 +40,7 @@ export function TextField({ field, control, error }: TextFieldProps) {
             id={field.key}
             type={getInputType()}
             placeholder={field.placeholder}
+            disabled={disabled}
             className={error ? 'border-destructive' : ''}
           />
         )}

@@ -94,6 +94,13 @@ apiClient.interceptors.response.use(
       });
     }
 
+    // 403 = permission denied — always reject so the caller decides how to handle it.
+    // Pages use useRequirePermission() to gate API calls and render <NoPermissionContent />
+    // inline, preserving the current URL and sidebar context.
+    if (error.response?.status === 403) {
+      return Promise.reject(error);
+    }
+
     return Promise.reject(error);
   }
 );

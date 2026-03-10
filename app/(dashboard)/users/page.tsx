@@ -4,13 +4,17 @@ import { useEffect, useState, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
+import { useRequirePermission } from '@/lib/hooks/use-require-permission';
+import { usePermission } from '@/lib/hooks/use-permission';
 import { getUsers, deleteUser } from '@/lib/api/users';
 import { User } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { Trash2, Plus, Pencil, Search } from 'lucide-react';
+import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { CreateUserModal } from '@/components/users/create-user-modal';
 import { DeleteUserDialog } from '@/components/users/delete-user-dialog';
 import { toast } from 'sonner';
@@ -19,6 +23,10 @@ export default function UsersPage() {
   const router = useRouter();
   const { admin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
+  const permitted = useRequirePermission('users_read');
+  const canCreate = usePermission('users_create');
+  const canUpdate = usePermission('users_update');
+  const canDelete = usePermission('users_delete');
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +38,6 @@ export default function UsersPage() {
   useEffect(() => {
     if (!admin) {
       router.push('/login');
-      return;
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [admin]);
@@ -38,13 +45,12 @@ export default function UsersPage() {
   useEffect(() => {
     if (selectedOrgId) {
       loadUsers();
-      setUserSearch(''); // Clear search when org changes
+      setUserSearch('');
     }
   }, [selectedOrgId]);
 
   const loadUsers = async () => {
     if (!selectedOrgId) return;
-
     try {
       setLoading(true);
       setError(null);
@@ -67,7 +73,6 @@ export default function UsersPage() {
 
     const result = await deleteUser(selectedOrgId, userToDelete.id, reassignToUserId);
 
-    // Show success message with reassignment stats
     const stats = result.reassigned;
     const statsMessage = [
       stats.kb_articles_authored > 0 && `${stats.kb_articles_authored} articles authored`,
@@ -81,26 +86,28 @@ export default function UsersPage() {
 
     if (statsMessage) {
       toast.success(`User deleted successfully. Reassigned: ${statsMessage}`);
+    } else {
+      toast.success('User deleted successfully');
     }
 
     await loadUsers();
   };
 
-  // Filtered users based on search
   const filteredUsers = useMemo(() => {
     const query = userSearch.toLowerCase().trim();
-    return users
-      .filter(user => {
-        if (!query) return true;
-        const displayName = user.display_name ||
-          (user.first_name || user.last_name
-            ? `${user.first_name || ''} ${user.last_name || ''}`.trim()
-            : user.email);
-        return displayName.toLowerCase().includes(query) ||
-               user.email.toLowerCase().includes(query) ||
-               user.phone?.toLowerCase().includes(query);
-      })
-      .sort((a, b) => a.email.localeCompare(b.email));
+    return users.filter((user) => {
+      if (!query) return true;
+      const displayName =
+        user.display_name ||
+        (user.first_name || user.last_name
+          ? `${user.first_name || ''} ${user.last_name || ''}`.trim()
+          : user.email);
+      return (
+        displayName.toLowerCase().includes(query) ||
+        user.email.toLowerCase().includes(query) ||
+        user.phone?.toLowerCase().includes(query)
+      );
+    });
   }, [users, userSearch]);
 
   if (!admin || loading) {
@@ -114,14 +121,16 @@ export default function UsersPage() {
     );
   }
 
+  if (!permitted) return <NoPermissionContent />;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold">Users</h1>
-          <p className="text-sm md:text-base text-muted-foreground">Manage users within organizations</p>
+          <p className="text-sm md:text-base text-muted-foreground">Manage users within this organization</p>
         </div>
-        <Button disabled={!selectedOrgId} onClick={() => setCreateModalOpen(true)} className="w-full sm:w-auto">
+        <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => setCreateModalOpen(true)} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />
           Add User
         </Button>
@@ -131,7 +140,7 @@ export default function UsersPage() {
         <Card>
           <CardContent className="py-12 text-center">
             <p className="text-muted-foreground">
-              No organization selected. Please select an organization from the header.
+              No organization selected. Please select an organization from the sidebar.
             </p>
           </CardContent>
         </Card>
@@ -164,13 +173,14 @@ export default function UsersPage() {
                 data={filteredUsers}
                 getRowKey={(user) => user.id}
                 onRowClick={(user) => router.push(`/users/${user.id}/edit`)}
-                emptyMessage={userSearch ? "No matching users found" : "No users found in this organization."}
+                emptyMessage={userSearch ? 'No matching users found' : 'No users found in this organization.'}
                 columns={[
                   {
                     key: 'name',
                     label: 'Name',
                     render: (user) => {
-                      const displayName = user.display_name ||
+                      const displayName =
+                        user.display_name ||
                         (user.first_name || user.last_name
                           ? `${user.first_name || ''} ${user.last_name || ''}`.trim()
                           : user.email);
@@ -185,12 +195,28 @@ export default function UsersPage() {
                   {
                     key: 'phone',
                     label: 'Phone',
-                    render: (user) => <span className="text-muted-foreground">{user.phone || '—'}</span>,
+                    render: (user) => (
+                      <span className="text-muted-foreground">{user.phone || '—'}</span>
+                    ),
+                  },
+                  {
+                    key: 'role',
+                    label: 'Role',
+                    render: (user) => (
+                      <span className={cn(
+                        'inline-block rounded-full px-2 py-0.5 text-xs font-medium',
+                        user.role === 'org_admin'
+                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
+                          : 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400'
+                      )}>
+                        {user.role === 'org_admin' ? 'Administrator' : 'User'}
+                      </span>
+                    ),
                   },
                   {
                     key: 'status',
                     label: 'Status',
-                    render: (user) => (
+                    render: (user) =>
                       user.is_active ? (
                         <span className="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/30 px-2 py-1 text-xs font-medium text-green-800 dark:text-green-400">
                           Active
@@ -199,8 +225,7 @@ export default function UsersPage() {
                         <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs font-medium text-gray-800 dark:text-gray-400">
                           Inactive
                         </span>
-                      )
-                    ),
+                      ),
                   },
                   {
                     key: 'created',
@@ -216,6 +241,8 @@ export default function UsersPage() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          disabled={!canUpdate}
+                          title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             router.push(`/users/${user.id}/edit`);
@@ -226,6 +253,8 @@ export default function UsersPage() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          disabled={!canDelete}
+                          title={!canDelete ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDeleteClick(user);
@@ -240,6 +269,8 @@ export default function UsersPage() {
                         <Button
                           variant="outline"
                           size="sm"
+                          disabled={!canUpdate}
+                          title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             router.push(`/users/${user.id}/edit`);
@@ -251,6 +282,8 @@ export default function UsersPage() {
                         <Button
                           variant="outline"
                           size="sm"
+                          disabled={!canDelete}
+                          title={!canDelete ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDeleteClick(user);

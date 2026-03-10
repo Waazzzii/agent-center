@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
+import { useRequirePermission } from '@/lib/hooks/use-require-permission';
+import { usePermission } from '@/lib/hooks/use-permission';
 import {
   getKbSettings,
   updateKbSettings,
@@ -14,6 +16,9 @@ import {
   fetchKbLogoBlob,
   uploadKbLogo,
   deleteKbLogo,
+  uploadKbFavicon,
+  fetchKbFaviconBlob,
+  deleteKbFavicon,
 } from '@/lib/api/kb-logos';
 import type { KbOrgSettings, DomainProvisioningStatus, ProvisionDomainResult } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
@@ -24,6 +29,7 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { BookOpen, Copy, Check, Globe, ExternalLink, AlertCircle, Settings, Palette, Upload, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
+import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -156,6 +162,10 @@ function DomainStatusBadge({ status }: { status: DomainProvisioningStatus | 'iss
 export default function KnowledgeBasePage() {
   const router = useRouter();
   const { selectedOrgId, selectedOrgName, isOrgAdminView } = useAdminViewStore();
+  const permitted = useRequirePermission(['knowledgebase_admin_read', 'knowledgebase_admin_update']);
+  const canCreate = usePermission('knowledgebase_admin_create');
+  const canUpdate = usePermission('knowledgebase_admin_update');
+  const canDelete = usePermission('knowledgebase_admin_delete');
 
   const [kbSettings, setKbSettings] = useState<KbOrgSettings | null>(null);
   const [logoUrlFromApi, setLogoUrlFromApi] = useState<string | null>(null);
@@ -177,6 +187,14 @@ export default function KnowledgeBasePage() {
   const [logoUploading, setLogoUploading] = useState(false);
   const [logoDeleting, setLogoDeleting]   = useState(false);
   const logoInputRef = useRef<HTMLInputElement>(null);
+
+  // Favicon state
+  const [faviconUrl, setFaviconUrl]               = useState<string | null>(null);
+  const [faviconLoading, setFaviconLoading]         = useState(false);
+  const [faviconUploading, setFaviconUploading]     = useState(false);
+  const [faviconDeleting, setFaviconDeleting]       = useState(false);
+  const [faviconUrlFromApi, setFaviconUrlFromApi]   = useState<string | null>(null);
+  const faviconInputRef = useRef<HTMLInputElement>(null);
 
   // Local domain status — "issuing" exists only in-flight and is never persisted
   const [autoDomainStatus, setAutoDomainStatus]     = useState<DomainProvisioningStatus | 'issuing' | null>(null);
@@ -281,6 +299,34 @@ export default function KnowledgeBasePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId, logoUrlFromApi]);
 
+  // Load favicon asynchronously (don't block page render)
+  useEffect(() => {
+    if (!selectedOrgId) return;
+    setFaviconUrl(null);
+    if (!faviconUrlFromApi) {
+      setFaviconLoading(false);
+      return;
+    }
+    let cancelled = false;
+    const loadFavicon = async () => {
+      try {
+        setFaviconLoading(true);
+        const url = await fetchKbFaviconBlob(selectedOrgId);
+        if (!cancelled) setFaviconUrl(url);
+      } catch {
+        // failed to load
+      } finally {
+        if (!cancelled) setFaviconLoading(false);
+      }
+    };
+    loadFavicon();
+    return () => {
+      cancelled = true;
+      if (faviconUrl) URL.revokeObjectURL(faviconUrl);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrgId, faviconUrlFromApi]);
+
   const loadKbSettings = async () => {
     if (!selectedOrgId) return;
     try {
@@ -288,6 +334,7 @@ export default function KnowledgeBasePage() {
       const data = await getKbSettings(selectedOrgId);
       setKbSettings(data.settings);
       setLogoUrlFromApi(data.logo_url); // Store logo_url from API response
+      setFaviconUrlFromApi(data.favicon_url ?? null);
       setCustomDomainInput(data.settings.custom_domain || '');
       setKbNameInput(data.settings.name || '');
       setCustomThemeInput(data.settings.custom_theme || '');
@@ -351,8 +398,9 @@ export default function KnowledgeBasePage() {
       } finally {
         setLogoLoading(false);
       }
-    } catch {
-      toast.error('Failed to upload logo');
+    } catch (err: any) {
+      const message = err?.response?.data?.message ?? 'Failed to upload logo';
+      toast.error(message);
     } finally {
       setLogoUploading(false);
       e.target.value = '';
@@ -375,6 +423,52 @@ export default function KnowledgeBasePage() {
       toast.error('Failed to remove logo');
     } finally {
       setLogoDeleting(false);
+    }
+  };
+
+  // ── Favicon handlers ────────────────────────────────────────────────────────
+
+  const handleFaviconUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !selectedOrgId) return;
+    setFaviconUploading(true);
+    try {
+      const uploadResult = await uploadKbFavicon(selectedOrgId, file);
+      setFaviconUrlFromApi(uploadResult.favicon_url);
+      toast.success('Favicon uploaded');
+      if (faviconUrl) URL.revokeObjectURL(faviconUrl);
+      setFaviconUrl(null);
+      setFaviconLoading(true);
+      try {
+        const url = await fetchKbFaviconBlob(selectedOrgId);
+        setFaviconUrl(url);
+      } catch {
+        // fetch failed after upload
+      } finally {
+        setFaviconLoading(false);
+      }
+    } catch (err: any) {
+      const message = err?.response?.data?.message || 'Failed to upload favicon';
+      toast.error(message);
+    } finally {
+      setFaviconUploading(false);
+      e.target.value = '';
+    }
+  };
+
+  const handleFaviconDelete = async () => {
+    if (!selectedOrgId) return;
+    setFaviconDeleting(true);
+    try {
+      await deleteKbFavicon(selectedOrgId);
+      if (faviconUrl) URL.revokeObjectURL(faviconUrl);
+      setFaviconUrl(null);
+      setFaviconUrlFromApi(null);
+      toast.success('Favicon removed');
+    } catch {
+      toast.error('Failed to remove favicon');
+    } finally {
+      setFaviconDeleting(false);
     }
   };
 
@@ -532,6 +626,8 @@ export default function KnowledgeBasePage() {
 
   // ── Render ─────────────────────────────────────────────────────────────────
 
+  if (!permitted) return <NoPermissionContent />;
+
   return (
     <div className="container mx-auto p-6">
       <div className="mb-6">
@@ -553,7 +649,7 @@ export default function KnowledgeBasePage() {
             <p className="text-sm text-muted-foreground mb-6 max-w-sm">
               Enable the Knowledge Base to provision a self-service portal for {selectedOrgName}.
             </p>
-            <Button onClick={() => handleKbToggle(true)} disabled={kbSaving}>
+            <Button onClick={() => handleKbToggle(true)} disabled={kbSaving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
               {kbSaving ? 'Enabling…' : 'Enable Knowledge Base'}
             </Button>
           </CardContent>
@@ -578,7 +674,8 @@ export default function KnowledgeBasePage() {
               variant="outline"
               size="sm"
               onClick={() => handleKbToggle(false)}
-              disabled={kbSaving}
+              disabled={kbSaving || !canUpdate}
+              title={!canUpdate ? "You don't have permission to perform this action" : undefined}
             >
               Disable
             </Button>
@@ -628,7 +725,7 @@ export default function KnowledgeBasePage() {
                     </div>
                     <Switch
                       checked={kbSettings?.[key] ?? false}
-                      disabled={kbSaving}
+                      disabled={kbSaving || !canUpdate}
                       onCheckedChange={async (enabled) => {
                         if (!selectedOrgId) return;
                         try {
@@ -715,15 +812,17 @@ export default function KnowledgeBasePage() {
                       value={customDomainInput}
                       onChange={(e) => setCustomDomainInput(e.target.value.toLowerCase().replace(/^https?:\/\//, ''))}
                       className="font-mono text-sm"
+                      disabled={!canUpdate}
                     />
                     <Button
                       onClick={handleSaveCustomDomain}
-                      disabled={kbSaving || !customDomainInput.trim() || customDomainInput.trim() === kbSettings?.custom_domain}
+                      disabled={kbSaving || !customDomainInput.trim() || customDomainInput.trim() === kbSettings?.custom_domain || !canUpdate}
+                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                     >
                       {kbSaving ? 'Saving…' : kbSettings?.custom_domain ? 'Update' : 'Save'}
                     </Button>
                     {kbSettings?.custom_domain && (
-                      <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={kbSaving}>
+                      <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={kbSaving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
                         Remove
                       </Button>
                     )}
@@ -784,6 +883,7 @@ export default function KnowledgeBasePage() {
                     placeholder={selectedOrgName || 'Knowledge Base'}
                     value={kbNameInput}
                     onChange={(e) => setKbNameInput(e.target.value)}
+                    disabled={!canUpdate}
                   />
                   <p className="text-xs text-muted-foreground">
                     Defaults to your organization name if not set.
@@ -824,7 +924,8 @@ export default function KnowledgeBasePage() {
                       variant="outline"
                       size="sm"
                       onClick={handleLogoDelete}
-                      disabled={logoDeleting}
+                      disabled={logoDeleting || !canUpdate}
+                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                     >
                       {logoDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
                     </Button>
@@ -844,8 +945,71 @@ export default function KnowledgeBasePage() {
                       variant="outline"
                       size="sm"
                       className="mt-4"
-                      disabled={logoUploading}
+                      disabled={logoUploading || !canUpdate}
+                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => { e.stopPropagation(); logoInputRef.current?.click(); }}
+                    >
+                      Choose file
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Favicon */}
+            <Card>
+              <CardHeader>
+                <CardTitle>Favicon</CardTitle>
+                <CardDescription>
+                  Upload a favicon to display in the browser tab for your Knowledge Base. Shown when visitors have your KB open.
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <input
+                  ref={faviconInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/svg+xml,image/x-icon,image/vnd.microsoft.icon"
+                  className="hidden"
+                  onChange={handleFaviconUpload}
+                />
+                {faviconLoading || (faviconUrlFromApi && !faviconUrl) ? (
+                  <div className="flex items-center gap-4 h-12">
+                    <div className="h-12 w-12 rounded border bg-muted animate-pulse" />
+                    <div className="text-sm text-muted-foreground">Loading favicon...</div>
+                  </div>
+                ) : faviconUrl ? (
+                  <div className="flex items-center gap-4">
+                    <img
+                      src={faviconUrl}
+                      alt="KB Favicon"
+                      className="h-12 w-12 object-contain rounded border p-2 bg-white"
+                    />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleFaviconDelete}
+                      disabled={faviconDeleting || !canUpdate}
+                    >
+                      {faviconDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
+                    </Button>
+                  </div>
+                ) : (
+                  <div
+                    className="flex flex-col items-center justify-center rounded-lg border-2 border-dashed p-8 text-center cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => !faviconUploading && faviconInputRef.current?.click()}
+                  >
+                    {faviconUploading
+                      ? <Loader2 className="h-8 w-8 text-muted-foreground mb-2 animate-spin" />
+                      : <Upload className="h-8 w-8 text-muted-foreground mb-2" />
+                    }
+                    <p className="text-sm font-medium">{faviconUploading ? 'Uploading…' : 'Upload favicon'}</p>
+                    <p className="text-xs text-muted-foreground mt-1">PNG, JPG, SVG or ICO — max 512 KB</p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="mt-4"
+                      disabled={faviconUploading || !canUpdate}
+                      onClick={(e) => { e.stopPropagation(); faviconInputRef.current?.click(); }}
                     >
                       Choose file
                     </Button>
@@ -896,7 +1060,8 @@ export default function KnowledgeBasePage() {
                     <button
                       type="button"
                       onClick={() => setCustomThemeInput(KB_THEME_DEFAULTS)}
-                      className="ml-auto text-xs text-slate-400 dark:text-[#8a9bb0] hover:text-slate-600 dark:hover:text-slate-300 transition-colors"
+                      disabled={!canUpdate}
+                      className="ml-auto text-xs text-slate-400 dark:text-[#8a9bb0] hover:text-slate-600 dark:hover:text-slate-300 transition-colors disabled:pointer-events-none disabled:opacity-40"
                     >
                       Load defaults
                     </button>
@@ -905,6 +1070,7 @@ export default function KnowledgeBasePage() {
                     value={customThemeInput}
                     onChange={(e) => setCustomThemeInput(e.target.value)}
                     placeholder="/* Paste custom CSS here, or click 'Load defaults' to start from the Wazzi defaults */"
+                    disabled={!canUpdate}
                     spellCheck={false}
                     autoCorrect="off"
                     autoCapitalize="off"
@@ -912,7 +1078,8 @@ export default function KnowledgeBasePage() {
                     className={cn(
                       'w-full resize-none bg-slate-50 dark:bg-[#0f1419] px-4 py-3 font-mono text-sm text-slate-900 dark:text-[#e8e8e8]',
                       'placeholder:text-slate-300 dark:placeholder:text-[#4a5a6e] focus:outline-none',
-                      'leading-relaxed tracking-wide'
+                      'leading-relaxed tracking-wide',
+                      !canUpdate && 'opacity-60 cursor-not-allowed'
                     )}
                   />
                 </div>
@@ -927,7 +1094,8 @@ export default function KnowledgeBasePage() {
             <div className="flex justify-end">
               <Button
                 onClick={handleSaveThemeTab}
-                disabled={themeTabSaving}
+                disabled={themeTabSaving || !canUpdate}
+                title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                 className="gap-2 min-w-[140px]"
               >
                 {themeTabSaving ? (

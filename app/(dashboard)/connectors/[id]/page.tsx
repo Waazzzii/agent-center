@@ -3,34 +3,14 @@
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { getConnector, deleteConnector, getConnectorGroups } from '@/lib/api/connectors';
-import { removeConnectorFromGroup } from '@/lib/api/group-connectors';
-import type { Group, OrganizationConnector } from '@/types/api.types';
+import { getConnector, deleteConnector } from '@/lib/api/connectors';
+import type { OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table';
-import { ArrowLeft, Pencil, Trash2, Users } from 'lucide-react';
+import { ArrowLeft, Pencil, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { TokenHealthStatusDisplay } from '@/components/token-health-status';
-
-interface GroupWithConnectorAccess {
-  id: string;
-  name: string;
-  description: string | null;
-  is_active: boolean;
-  created_at: string;
-  updated_at: string;
-  authorized_endpoints: string[];
-  connector_enabled: boolean;
-}
 
 export default function ConnectorDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: connectorId } = use(params);
@@ -38,7 +18,6 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
   const { confirm } = useConfirmDialog();
   const [connector, setConnector] = useState<OrganizationConnector | null>(null);
-  const [groups, setGroups] = useState<GroupWithConnectorAccess[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -55,44 +34,14 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-
-      // Load connector details and groups with access in parallel
-      const [connectorData, groupsData] = await Promise.all([
-        getConnector(selectedOrgId, connectorId),
-        getConnectorGroups(selectedOrgId, connectorId),
-      ]);
-
+      const connectorData = await getConnector(selectedOrgId, connectorId);
       setConnector(connectorData);
-      setGroups(groupsData.groups);
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to load connector details';
       toast.error(errorMessage);
       router.push('/connectors');
     } finally {
       setLoading(false);
-    }
-  };
-
-  const handleRemoveGroup = async (groupId: string) => {
-    if (!selectedOrgId) return;
-
-    const confirmed = await confirm({
-      title: 'Remove Group Access',
-      description: 'Are you sure you want to remove this group\'s access to the connector?',
-      confirmText: 'Remove',
-      cancelText: 'Cancel',
-      variant: 'destructive',
-    });
-
-    if (!confirmed) return;
-
-    try {
-      await removeConnectorFromGroup(selectedOrgId, groupId, connectorId);
-      toast.success('Group access removed');
-      await loadData();
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.message || error.message || 'Failed to remove group';
-      toast.error(errorMessage);
     }
   };
 
@@ -130,8 +79,6 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
     );
   }
 
-  const groupsWithAccess = groups; // All groups returned from API already have access
-
   return (
     <div className="container mx-auto p-6">
       <div className="mb-6 flex items-center justify-between">
@@ -157,127 +104,50 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
         </div>
       </div>
 
-      <div className="grid gap-6">
-        {/* Connector Info Card */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Connector Details</CardTitle>
-            <CardDescription>Configuration and status</CardDescription>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Token Health Status */}
-            {connector.secret_info?.health_status && (
-              <TokenHealthStatusDisplay
-                healthStatus={connector.secret_info.health_status}
-                expiresAt={connector.secret_info.expires_at}
-                lastRenewedAt={connector.secret_info.last_renewed_at}
-              />
-            )}
+      <Card>
+        <CardHeader>
+          <CardTitle>Connector Details</CardTitle>
+          <CardDescription>Configuration and status</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {connector.secret_info?.health_status && (
+            <TokenHealthStatusDisplay
+              healthStatus={connector.secret_info.health_status}
+              expiresAt={connector.secret_info.expires_at}
+              lastRenewedAt={connector.secret_info.last_renewed_at}
+            />
+          )}
 
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <div className="text-sm font-medium text-muted-foreground">Status</div>
-                <div className="mt-1">
-                  {connector.is_enabled ? (
-                    <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                      Enabled
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                      Disabled
-                    </span>
-                  )}
-                </div>
-              </div>
-              <div>
-                <div className="text-sm font-medium text-muted-foreground">Has Secrets</div>
-                <div className="mt-1">{connector.secret_info?.secret_fields && connector.secret_info.secret_fields.length > 0 ? 'Yes' : 'No'}</div>
-              </div>
-              <div>
-                <div className="text-sm font-medium text-muted-foreground">Created</div>
-                <div className="mt-1">{new Date(connector.created_at).toLocaleString()}</div>
-              </div>
-              <div>
-                <div className="text-sm font-medium text-muted-foreground">Last Updated</div>
-                <div className="mt-1">{new Date(connector.updated_at).toLocaleString()}</div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="text-sm font-medium text-muted-foreground">Status</div>
+              <div className="mt-1">
+                {connector.is_enabled ? (
+                  <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
+                    Enabled
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
+                    Disabled
+                  </span>
+                )}
               </div>
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Groups with Access Card */}
-        <Card>
-          <CardHeader>
-            <div className="flex items-center justify-between">
-              <div>
-                <CardTitle>Groups with Access</CardTitle>
-                <CardDescription>
-                  {groupsWithAccess.length} group{groupsWithAccess.length !== 1 ? 's' : ''} can access this connector
-                </CardDescription>
-              </div>
-              <Button size="sm" onClick={() => router.push('/groups')}>
-                <Users className="mr-2 h-4 w-4" />
-                Manage Groups
-              </Button>
+            <div>
+              <div className="text-sm font-medium text-muted-foreground">Has Secrets</div>
+              <div className="mt-1">{connector.secret_info?.secret_fields && connector.secret_info.secret_fields.length > 0 ? 'Yes' : 'No'}</div>
             </div>
-          </CardHeader>
-          <CardContent>
-            {groupsWithAccess.length === 0 ? (
-              <div className="py-12 text-center text-muted-foreground">
-                No groups have access to this connector yet
-              </div>
-            ) : (
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Group</TableHead>
-                    <TableHead>Description</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {groupsWithAccess.map((group) => (
-                    <TableRow
-                      key={group.id}
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => router.push(`/groups/${group.id}`)}
-                    >
-                      <TableCell className="font-medium">{group.name}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {group.description || '—'}
-                      </TableCell>
-                      <TableCell>
-                        {group.is_active ? (
-                          <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                            Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                            Inactive
-                          </span>
-                        )}
-                      </TableCell>
-                      <TableCell className="text-right">
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleRemoveGroup(group.id);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            )}
-          </CardContent>
-        </Card>
-      </div>
+            <div>
+              <div className="text-sm font-medium text-muted-foreground">Created</div>
+              <div className="mt-1">{new Date(connector.created_at).toLocaleString()}</div>
+            </div>
+            <div>
+              <div className="text-sm font-medium text-muted-foreground">Last Updated</div>
+              <div className="mt-1">{new Date(connector.updated_at).toLocaleString()}</div>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
+import { useRequirePermission } from '@/lib/hooks/use-require-permission';
+import { usePermission } from '@/lib/hooks/use-permission';
 import { getConnectors, deleteConnector } from '@/lib/api/connectors';
 import { OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
@@ -11,6 +13,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Badge } from '@/components/ui/badge';
 import { Trash2, Plus, Pencil } from 'lucide-react';
+import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 
@@ -18,6 +21,10 @@ export default function ConnectorsPage() {
   const router = useRouter();
   const { admin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
+  const permitted = useRequirePermission('connectors_read');
+  const canCreate = usePermission('connectors_create');
+  const canUpdate = usePermission('connectors_update');
+  const canDelete = usePermission('connectors_delete');
   const { confirm } = useConfirmDialog();
   const [connectors, setConnectors] = useState<OrganizationConnector[]>([]);
   const [loading, setLoading] = useState(true);
@@ -85,6 +92,8 @@ export default function ConnectorsPage() {
     );
   }
 
+  if (!permitted) return <NoPermissionContent />;
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -92,7 +101,7 @@ export default function ConnectorsPage() {
           <h1 className="text-2xl md:text-3xl font-bold">Connectors</h1>
           <p className="text-sm md:text-base text-muted-foreground">Manage connector configurations for organizations</p>
         </div>
-        <Button disabled={!selectedOrgId} onClick={() => router.push('/connectors/add')} className="w-full sm:w-auto">
+        <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/connectors/add')} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />
           Browse Connectors
         </Button>
@@ -160,6 +169,8 @@ export default function ConnectorsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          disabled={!canUpdate}
+                          title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             router.push(`/connectors/${connector.id}/edit`);
@@ -170,6 +181,8 @@ export default function ConnectorsPage() {
                         <Button
                           variant="ghost"
                           size="sm"
+                          disabled={!canDelete}
+                          title={!canDelete ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDelete(connector.id);
@@ -184,6 +197,8 @@ export default function ConnectorsPage() {
                         <Button
                           variant="outline"
                           size="sm"
+                          disabled={!canUpdate}
+                          title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             router.push(`/connectors/${connector.id}/edit`);
@@ -195,6 +210,8 @@ export default function ConnectorsPage() {
                         <Button
                           variant="outline"
                           size="sm"
+                          disabled={!canDelete}
+                          title={!canDelete ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDelete(connector.id);

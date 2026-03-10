@@ -100,6 +100,9 @@ export default function CreateOrganizationPage() {
                     required
                     placeholder="acme-corp"
                   />
+                  <p className="text-xs text-muted-foreground">
+                    Cannot be changed after creation — choose carefully
+                  </p>
                 </div>
               </div>
 

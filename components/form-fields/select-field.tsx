@@ -15,9 +15,10 @@ interface SelectFieldProps {
   field: ConnectorSchemaField;
   control: Control<any>;
   error?: string;
+  disabled?: boolean;
 }
 
-export function SelectField({ field, control, error }: SelectFieldProps) {
+export function SelectField({ field, control, error, disabled }: SelectFieldProps) {
   return (
     <div className="space-y-2">
       <Label htmlFor={field.key}>
@@ -32,6 +33,7 @@ export function SelectField({ field, control, error }: SelectFieldProps) {
           <Select
             value={formField.value}
             onValueChange={formField.onChange}
+            disabled={disabled}
           >
             <SelectTrigger id={field.key} className={error ? 'border-destructive' : ''}>
               <SelectValue placeholder={field.placeholder || 'Select an option'} />

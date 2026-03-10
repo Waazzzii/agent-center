@@ -47,7 +47,7 @@ export default function OrganizationsPage() {
 
   const handleManageOrg = (org: Organization) => {
     switchToOrgAdminView(org.id, org.name);
-    router.push('/users');
+    router.push('/hitl');
   };
 
   const handleDelete = async (id: string, name: string) => {

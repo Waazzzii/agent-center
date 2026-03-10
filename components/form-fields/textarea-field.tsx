@@ -9,9 +9,10 @@ interface TextareaFieldProps {
   field: ConnectorSchemaField;
   control: Control<any>;
   error?: string;
+  disabled?: boolean;
 }
 
-export function TextareaField({ field, control, error }: TextareaFieldProps) {
+export function TextareaField({ field, control, error, disabled }: TextareaFieldProps) {
   return (
     <div className="space-y-2">
       <Label htmlFor={field.key}>
@@ -28,6 +29,7 @@ export function TextareaField({ field, control, error }: TextareaFieldProps) {
             id={field.key}
             placeholder={field.placeholder}
             rows={4}
+            disabled={disabled}
             className={error ? 'border-destructive' : ''}
           />
         )}

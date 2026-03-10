@@ -4,6 +4,8 @@ import { useEffect } from "react"
 import { useAuthStore } from "@/stores/auth.store"
 import { refreshAccessToken } from "@/lib/auth/oauth"
 import { start } from "@/lib/auth/token-refresh"
+import apiClient from "@/lib/api/client"
+import type { AdminUser } from "@/types/api.types"
 
 /**
  * Mounts the token refresh scheduler for wazzi-frontend (admin UI).
@@ -33,6 +35,7 @@ function getTokenExp(token: string | null): number | null {
 export function TokenRefreshProvider() {
   const admin = useAuthStore((s) => s.admin)
   const updateTokens = useAuthStore((s) => s.updateTokens)
+  const updateAdmin = useAuthStore((s) => s.updateAdmin)
   const clearAuth = useAuthStore((s) => s.clearAuth)
 
   useEffect(() => {
@@ -49,6 +52,13 @@ export function TokenRefreshProvider() {
           localStorage.setItem("access_token", result.accessToken)
           localStorage.setItem("refresh_token", result.refreshToken)
           updateTokens(result.accessToken, result.refreshToken)
+          // Refresh admin data so permissions stay current after any access group changes
+          try {
+            const { data } = await apiClient.get<AdminUser>("/admin/me")
+            updateAdmin(data)
+          } catch {
+            // Non-fatal — stale admin is better than a broken refresh loop
+          }
           return Math.floor(Date.now() / 1000) + result.expiresIn
         } catch {
           return null

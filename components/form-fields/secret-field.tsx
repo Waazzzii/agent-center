@@ -13,6 +13,7 @@ interface SecretFieldProps {
   control: Control<any>;
   error?: string;
   maskedValue?: string;
+  disabled?: boolean;
 }
 
 export function SecretField({
@@ -20,6 +21,7 @@ export function SecretField({
   control,
   error,
   maskedValue,
+  disabled,
 }: SecretFieldProps) {
   const [showPassword, setShowPassword] = useState(false);
 
@@ -44,6 +46,7 @@ export function SecretField({
               id={field.key}
               type={showPassword ? 'text' : 'password'}
               placeholder={maskedValue || field.placeholder}
+              disabled={disabled}
               className={error ? 'border-destructive pr-10' : 'pr-10'}
             />
           )}

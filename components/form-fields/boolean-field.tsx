@@ -9,9 +9,10 @@ interface BooleanFieldProps {
   field: ConnectorSchemaField;
   control: Control<any>;
   error?: string;
+  disabled?: boolean;
 }
 
-export function BooleanField({ field, control, error }: BooleanFieldProps) {
+export function BooleanField({ field, control, error, disabled }: BooleanFieldProps) {
   return (
     <div className="space-y-2">
       <div className="flex items-center space-x-2">
@@ -24,6 +25,7 @@ export function BooleanField({ field, control, error }: BooleanFieldProps) {
               id={field.key}
               checked={formField.value}
               onCheckedChange={formField.onChange}
+              disabled={disabled}
             />
           )}
         />

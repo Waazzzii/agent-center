@@ -1,9 +1,10 @@
 'use client';
 
-import { use, useEffect, useState } from 'react';
+import { use, useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
-import { getConnector, updateConnector } from '@/lib/api/connectors-base';
+import { getConnector, updateConnector, getConnectorAccessDefinitions, putConnectorAccessDefinitions, syncConnectorAccessDefinitions } from '@/lib/api/connectors-base';
+import type { ConnectorAccessDefinition } from '@/lib/api/connectors-base';
 import { Connector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -12,10 +13,193 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { ConnectorSchemaBuilder } from '@/components/connector-schema-builder';
-import { EndpointManager } from '@/components/endpoint-manager';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, RefreshCw, Save, Trash2, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
+
+const CRUD_LABELS: Record<string, string> = {
+  read: 'Read', create: 'Create', update: 'Update', delete: 'Delete',
+};
+
+// Loose keyword match on label text to suggest CRUD type.
+// Runs after sync to catch cases where endpoint-name detection and label wording diverge.
+function refineCrudFromLabel(label: string): 'create' | 'read' | 'update' | 'delete' | null {
+  const l = label.toLowerCase();
+  if (/\b(view|list|get|read|search|find|show|browse|fetch|query)\b/.test(l)) return 'read';
+  if (/\b(create|add|new|insert|generate|post|submit|upload)\b/.test(l)) return 'create';
+  if (/\b(update|edit|modify|change|set|patch|replace|rename)\b/.test(l)) return 'update';
+  if (/\b(delete|remove|destroy|clear|purge|revoke)\b/.test(l)) return 'delete';
+  return null;
+}
+
+// ─── Access Definitions Tab ─────────────────────────────────────────────────
+
+function AccessDefinitionsTab({
+  connectorId,
+}: {
+  connectorId: string;
+}) {
+  const [definitions, setDefinitions] = useState<ConnectorAccessDefinition[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [syncing, setSyncing] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setLoading(true);
+      const data = await getConnectorAccessDefinitions(connectorId);
+      setDefinitions(data.definitions);
+    } catch {
+      toast.error('Failed to load access definitions');
+    } finally {
+      setLoading(false);
+    }
+  }, [connectorId]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const handleSync = async () => {
+    try {
+      setSyncing(true);
+      const data = await syncConnectorAccessDefinitions(connectorId);
+      // Apply a label-keyword pass to refine CRUD types the endpoint-name heuristic may have missed
+      const refined = data.definitions.map(def => {
+        const suggested = refineCrudFromLabel(def.label);
+        return suggested ? { ...def, crud_type: suggested } : def;
+      });
+      setDefinitions(refined);
+      if ((data as any).warning) toast.warning((data as any).warning);
+      else toast.success(`Synced ${refined.length} tool${refined.length !== 1 ? 's' : ''} from connector`);
+    } catch {
+      toast.error('Failed to sync tools from connector');
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const handleChange = (index: number, field: keyof ConnectorAccessDefinition, value: string) => {
+    setDefinitions(prev => prev.map((d, i) => i === index ? { ...d, [field]: value } : d));
+  };
+
+  const handleRemove = (index: number) => {
+    setDefinitions(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleSave = async () => {
+    try {
+      setSaving(true);
+      await putConnectorAccessDefinitions(connectorId, definitions);
+      toast.success('Access definitions saved');
+    } catch {
+      toast.error('Failed to save access definitions');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="py-12 text-center text-sm text-muted-foreground">Loading…</div>;
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Warning banner */}
+      <div className="flex items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 dark:border-amber-900/50 dark:bg-amber-950/20 px-4 py-3">
+        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0 text-amber-600 dark:text-amber-500" />
+        <p className="text-sm text-amber-800 dark:text-amber-400">
+          Saving will <strong>delete and replace</strong> all existing access definitions for this connector.
+          Permissions already granted to users that reference removed definitions will lose those grants.{' '}
+          CRUD type detection is automatic but not perfect — <strong>verify each type before saving</strong>.
+        </p>
+      </div>
+
+      {/* Toolbar */}
+      <div className="flex items-center justify-between">
+        <div>
+          <p className="text-sm text-muted-foreground">
+            {definitions.length} definition{definitions.length !== 1 ? 's' : ''} — one per endpoint
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={handleSync} disabled={syncing}>
+            <RefreshCw className={`h-3.5 w-3.5 mr-1.5 ${syncing ? 'animate-spin' : ''}`} />
+            {syncing ? 'Syncing…' : 'Sync from MCP'}
+          </Button>
+          <Button size="sm" onClick={handleSave} disabled={saving}>
+            <Save className="h-3.5 w-3.5 mr-1.5" />
+            {saving ? 'Saving…' : 'Save Definitions'}
+          </Button>
+        </div>
+      </div>
+
+      {definitions.length === 0 && (
+        <div className="rounded-lg border border-dashed px-6 py-10 text-center text-sm text-muted-foreground">
+          Click "Sync from MCP" to pull tool definitions directly from the connector.
+        </div>
+      )}
+
+      {definitions.length > 0 && (
+        <div className="rounded-lg border overflow-hidden">
+          {/* Header row */}
+          <div className="grid grid-cols-[1fr_1.4fr_2fr_120px_36px] gap-3 bg-muted/50 px-4 py-2.5 text-xs font-medium text-muted-foreground border-b">
+            <span>Key</span>
+            <span>Label</span>
+            <span>Description</span>
+            <span>CRUD Type</span>
+            <span />
+          </div>
+
+          {/* Definition rows */}
+          <div className="divide-y">
+            {definitions.map((def, i) => (
+              <div key={def.key} className="grid grid-cols-[1fr_1.4fr_2fr_120px_36px] gap-3 px-4 py-3 items-center">
+                <span className="font-mono text-xs text-muted-foreground truncate" title={def.key}>
+                  {def.key}
+                </span>
+                <Input
+                  className="h-8 text-sm"
+                  value={def.label}
+                  onChange={(e) => handleChange(i, 'label', e.target.value)}
+                  placeholder="Label"
+                />
+                <Input
+                  className="h-8 text-sm"
+                  value={def.description ?? ''}
+                  onChange={(e) => handleChange(i, 'description', e.target.value || null as any)}
+                  placeholder="Description (optional)"
+                />
+                <Select
+                  value={def.crud_type}
+                  onValueChange={(v) => handleChange(i, 'crud_type', v)}
+                >
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(['read', 'create', 'update', 'delete'] as const).map(t => (
+                      <SelectItem key={t} value={t}>{CRUD_LABELS[t]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                  onClick={() => handleRemove(i)}
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Page ───────────────────────────────────────────────────────────────────
 
 export default function EditConnectorPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: connectorId } = use(params);
@@ -92,13 +276,14 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         </div>
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-6">
-        <Tabs defaultValue="basic" className="w-full">
-          <TabsList>
-            <TabsTrigger value="basic">Basic Details</TabsTrigger>
-            <TabsTrigger value="schema">Custom Configuration</TabsTrigger>
-          </TabsList>
+      <Tabs defaultValue="basic" className="w-full">
+        <TabsList>
+          <TabsTrigger value="basic">Basic Details</TabsTrigger>
+          <TabsTrigger value="schema">Custom Configuration</TabsTrigger>
+          <TabsTrigger value="access">Access Definitions</TabsTrigger>
+        </TabsList>
 
+        <form onSubmit={handleSubmit}>
           <TabsContent value="basic" className="mt-6">
             <Card className="max-w-2xl">
               <CardHeader>
@@ -164,15 +349,6 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                     />
                   </div>
 
-                  <div className="space-y-2">
-                    <Label>Available Endpoints</Label>
-                    <EndpointManager
-                      endpoints={formData.available_endpoints || []}
-                      onChange={(endpoints) => setFormData({ ...formData, available_endpoints: endpoints })}
-                      placeholder="get_reservations"
-                    />
-                  </div>
-
                   <div className="flex items-center justify-between rounded-lg border p-4">
                     <div className="space-y-0.5">
                       <Label htmlFor="is_active">Active</Label>
@@ -221,17 +397,32 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
               </CardContent>
             </Card>
           </TabsContent>
-        </Tabs>
 
-        <div className="flex gap-4">
-          <Button type="submit" disabled={loading}>
-            {loading ? 'Saving...' : 'Save Changes'}
-          </Button>
-          <Button type="button" variant="outline" onClick={() => router.back()}>
-            Cancel
-          </Button>
-        </div>
-      </form>
+          <div className="mt-6 flex gap-4">
+            <Button type="submit" disabled={loading}>
+              {loading ? 'Saving...' : 'Save Changes'}
+            </Button>
+            <Button type="button" variant="outline" onClick={() => router.back()}>
+              Cancel
+            </Button>
+          </div>
+        </form>
+
+        <TabsContent value="access" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle>Access Definitions</CardTitle>
+              <CardDescription>
+                Configure the permission entries exposed by this connector's endpoints.
+                Each endpoint gets its own access definition that can be toggled per access group.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <AccessDefinitionsTab connectorId={connectorId} />
+            </CardContent>
+          </Card>
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

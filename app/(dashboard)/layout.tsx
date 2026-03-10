@@ -9,7 +9,9 @@ import { ViewModeSidebar } from '@/components/layout/ViewModeSidebar';
 import { ViewSwitcher } from '@/components/layout/ViewSwitcher';
 import { getOrganizations } from '@/lib/api/organizations';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
+import { usePermissionsSync } from '@/hooks/use-permissions-sync';
 import { cn } from '@/lib/utils';
+import { orgSettingsNavItems, firstPermittedHref } from '@/lib/nav';
 
 export default function DashboardLayout({
   children,
@@ -18,9 +20,11 @@ export default function DashboardLayout({
 }) {
   const router = useRouter();
   const pathname = usePathname();
-  const { admin, isSuperAdmin } = useAuthStore();
+  const { admin, isSuperAdmin, isOrgAdmin, hasPermission } = useAuthStore();
   const { viewMode, selectedOrgId, switchToOrgAdminView } = useAdminViewStore();
   const [isChecking, setIsChecking] = useState(true);
+
+  usePermissionsSync();
 
   useEffect(() => {
     // Check auth on mount
@@ -43,9 +47,12 @@ export default function DashboardLayout({
           if (organizations.length > 0) {
             const firstOrg = organizations[0];
             switchToOrgAdminView(firstOrg.id, firstOrg.name);
-            // If the user is on a super-admin-only or root page, redirect to the org default
+            // If the user is on a super-admin-only or root page, redirect to the first permitted settings nav item
+            // ENABLE_MAIN_NAV — swap orgSettingsNavItems back to orgMainNavItems to restore default landing page
             if (pathname === '/organizations' || pathname === '/') {
-              router.replace('/users');
+              const bypass = isSuperAdmin() || isOrgAdmin();
+              const dest = firstPermittedHref(orgSettingsNavItems, bypass, hasPermission, firstOrg.id);
+              router.replace(dest ?? '/no-permission');
             }
             // Otherwise leave them on their intended page
           } else {
@@ -85,7 +92,9 @@ export default function DashboardLayout({
             "flex-1 overflow-y-auto bg-background p-4 md:p-6",
             viewMode === 'super_admin' && "pt-20 md:pt-6"
           )}>
-            {children}
+            <div className="mx-auto w-full max-w-6xl">
+              {children}
+            </div>
           </main>
         </div>
       </div>
