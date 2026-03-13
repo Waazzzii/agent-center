@@ -38,6 +38,7 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: 'url', label: 'URL' },
   { value: 'email', label: 'Email' },
   { value: 'password', label: 'Password' },
+  { value: 'oauth', label: 'OAuth Login' },
 ];
 
 export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilderProps) {
@@ -299,7 +300,6 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                       <Select
                         value={selectedField.type}
                         onValueChange={(value: FieldType) => {
-                          // Validate: if field is secret, only allow text type
                           if (selectedField.secret && value !== 'text') {
                             toast.error('Secret fields can only be of type "Text"');
                             return;
@@ -320,7 +320,31 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                       </Select>
                     </div>
 
-                    {/* Required */}
+                    {/* OAuth Provider — only when type === oauth */}
+                    {selectedField.type === 'oauth' && (
+                      <div className="space-y-2">
+                        <Label htmlFor="field-provider">OAuth Provider</Label>
+                        <Select
+                          value={selectedField.provider ?? 'google'}
+                          onValueChange={(value) =>
+                            updateField(selectedFieldIndex, { provider: value as 'google' })
+                          }
+                        >
+                          <SelectTrigger id="field-provider">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="google">Google</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <p className="text-xs text-muted-foreground">
+                          Renders an OAuth connect/disconnect button instead of a text input.
+                        </p>
+                      </div>
+                    )}
+
+                    {/* Required — not applicable for oauth */}
+                    {selectedField.type !== 'oauth' && (
                     <div className="flex items-center space-x-2">
                       <Switch
                         id="field-required"
@@ -333,14 +357,15 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                         Required field
                       </Label>
                     </div>
+                    )}
 
-                    {/* Secret */}
+                    {/* Secret — not applicable for oauth */}
+                    {selectedField.type !== 'oauth' && (
                     <div className="flex items-center space-x-2">
                       <Switch
                         id="field-secret"
                         checked={selectedField.secret || false}
                         onCheckedChange={(checked) => {
-                          // Validate: only text fields can be secrets
                           if (checked && selectedField.type !== 'text') {
                             toast.error('Only "Text" type fields can be marked as secret');
                             return;
@@ -352,8 +377,10 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                         Secret field (hidden after entry)
                       </Label>
                     </div>
+                    )}
 
-                    {/* Placeholder */}
+                    {/* Placeholder — not applicable for oauth */}
+                    {selectedField.type !== 'oauth' && (
                     <div className="space-y-2">
                       <Label htmlFor="field-placeholder">Placeholder</Label>
                       <Input
@@ -365,6 +392,7 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                         placeholder="e.g., Enter your API key"
                       />
                     </div>
+                    )}
 
                     {/* Help Text */}
                     <div className="space-y-2">
@@ -381,7 +409,7 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                     </div>
 
                     {/* Default Value */}
-                    {selectedField.type !== 'boolean' && (
+                    {selectedField.type !== 'boolean' && selectedField.type !== 'oauth' && (
                       <div className="space-y-2">
                         <Label htmlFor="field-default">Default Value</Label>
                         <Input

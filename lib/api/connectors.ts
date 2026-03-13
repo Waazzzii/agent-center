@@ -51,3 +51,14 @@ export async function deleteConnector(orgId: string, connectorId: string) {
   await apiClient.delete(`/admin/organizations/${orgId}/connectors/${connectorId}`);
 }
 
+export async function getConnectorOAuthUrl(orgId: string, connectorId: string): Promise<string> {
+  const response = await apiClient.get<{ auth_url: string }>(
+    `/admin/organizations/${orgId}/connectors/${connectorId}/oauth/authorize`
+  );
+  return response.data.auth_url;
+}
+
+export async function disconnectConnectorOAuth(orgId: string, connectorId: string): Promise<void> {
+  await apiClient.delete(`/admin/organizations/${orgId}/connectors/${connectorId}/oauth`);
+}
+

@@ -380,9 +380,14 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
               <CardDescription>Manage which access groups this user belongs to</CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
-              {agLoading ? (
+              {formData.role === 'org_admin' && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 dark:border-blue-900/50 dark:bg-blue-950/30 px-4 py-3 text-sm text-blue-800 dark:text-blue-300">
+                  Administrators have full access to all features by default and are not assigned to access groups.
+                </div>
+              )}
+              {formData.role !== 'org_admin' && agLoading ? (
                 <p className="text-sm text-muted-foreground">Loading...</p>
-              ) : (
+              ) : formData.role !== 'org_admin' ? (
                 <>
                   {userAccessGroups.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No access groups assigned</p>
@@ -455,7 +460,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                     );
                   })()}
                 </>
-              )}
+              ) : null}
             </CardContent>
           </Card>
         </TabsContent>

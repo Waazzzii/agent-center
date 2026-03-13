@@ -5,19 +5,19 @@ import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { usePermission } from '@/lib/hooks/use-permission';
-import { getSkills, deleteSkill, importSkills, type Skill } from '@/lib/api/skills';
+import { getSkills, deleteSkill, importSkills, getSkillUsages, type Skill } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Upload } from 'lucide-react';
+import { Plus, Pencil, Trash2, Upload, ChevronLeft, ChevronRight } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
+
+const PAGE_SIZE = 20;
 
 export default function SkillsPage() {
   const router = useRouter();
@@ -29,6 +29,9 @@ export default function SkillsPage() {
   const { confirm } = useConfirmDialog();
 
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [total, setTotal] = useState(0);
+  const [totalPages, setTotalPages] = useState(1);
+  const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
 
   // Import dialog
@@ -37,16 +40,19 @@ export default function SkillsPage() {
   const [importing, setImporting] = useState(false);
 
   useEffect(() => {
-    if (selectedOrgId) loadSkills();
+    if (selectedOrgId) loadSkills(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId]);
 
-  const loadSkills = async () => {
+  const loadSkills = async (pg = page) => {
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      const data = await getSkills(selectedOrgId);
+      const data = await getSkills(selectedOrgId, { page: pg, limit: PAGE_SIZE });
       setSkills(data.skills);
+      setTotal(data.total);
+      setTotalPages(data.total_pages);
+      setPage(pg);
     } catch (err: any) {
       toast.error(err.message || 'Failed to load skills');
     } finally {
@@ -54,11 +60,45 @@ export default function SkillsPage() {
     }
   };
 
+  const goToPage = (pg: number) => loadSkills(pg);
+
   const handleDelete = async (skillId: string, name: string) => {
     if (!selectedOrgId) return;
+
+    // Fetch usages before confirming
+    let usages: { action_id: string; action_name: string; agent_id: string; agent_name: string }[] = [];
+    try {
+      usages = await getSkillUsages(selectedOrgId, skillId);
+    } catch {
+      // non-fatal — proceed without usage info
+    }
+
+    const description = (
+      <div className="space-y-3">
+        <p>Are you sure you want to delete <span className="font-medium text-foreground">"{name}"</span>? This cannot be undone.</p>
+        {usages.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-xs font-medium text-foreground">Currently assigned to:</p>
+            <ul className="space-y-1">
+              {usages.map((u) => (
+                <li key={u.action_id} className="flex items-baseline gap-1.5 text-xs">
+                  <span className="shrink-0 text-muted-foreground">•</span>
+                  <span>
+                    <span className="font-medium text-foreground">{u.agent_name}</span>
+                    <span className="text-muted-foreground"> → {u.action_name}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+            <p className="text-xs text-muted-foreground">Those steps will lose this skill.</p>
+          </div>
+        )}
+      </div>
+    );
+
     const confirmed = await confirm({
       title: 'Delete Skill',
-      description: `Are you sure you want to delete "${name}"? This cannot be undone.`,
+      description,
       confirmText: 'Delete',
       cancelText: 'Cancel',
       variant: 'destructive',
@@ -67,7 +107,7 @@ export default function SkillsPage() {
     try {
       await deleteSkill(selectedOrgId, skillId);
       toast.success('Skill deleted');
-      await loadSkills();
+      await loadSkills(page);
     } catch (err: any) {
       toast.error(err.message || 'Failed to delete skill');
     }
@@ -90,7 +130,7 @@ export default function SkillsPage() {
       if (result.errors.length) toast.warning(`${result.errors.length} error(s) during import`);
       setImportOpen(false);
       setImportJson('');
-      await loadSkills();
+      await loadSkills(1);
     } catch (err: any) {
       toast.error(err.message || 'Import failed');
     } finally {
@@ -149,7 +189,7 @@ export default function SkillsPage() {
         <Card>
           <CardHeader>
             <CardTitle>Skills</CardTitle>
-            <CardDescription>{skills.length} skill{skills.length !== 1 ? 's' : ''}</CardDescription>
+            <CardDescription>{total} skill{total !== 1 ? 's' : ''}</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveTable
@@ -176,13 +216,6 @@ export default function SkillsPage() {
                   key: 'source',
                   label: 'Source',
                   render: (s) => <Badge variant={sourceVariant[s.source]}>{sourceLabel[s.source]}</Badge>,
-                },
-                {
-                  key: 'synced',
-                  label: 'Anthropic ID',
-                  render: (s) => s.external_ref
-                    ? <span className="text-xs font-mono text-muted-foreground">{s.external_ref.slice(0, 16)}…</span>
-                    : <span className="text-xs text-muted-foreground">—</span>,
                 },
                 {
                   key: 'status',
@@ -217,6 +250,34 @@ export default function SkillsPage() {
                 },
               ]}
             />
+            {totalPages > 1 && !loading && (
+              <div className="flex items-center justify-between border-t px-2 pt-3 mt-3">
+                <span className="text-xs text-muted-foreground">
+                  Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                  {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                    let pg: number;
+                    if (totalPages <= 7) { pg = i + 1; }
+                    else if (page <= 4) { pg = i + 1; if (i === 6) pg = totalPages; if (i === 5) pg = -1; }
+                    else if (page >= totalPages - 3) { pg = i === 0 ? 1 : i === 1 ? -1 : totalPages - (6 - i); }
+                    else { const map = [1, -1, page - 1, page, page + 1, -2, totalPages]; pg = map[i]!; }
+                    if (pg < 0) return <span key={`e${i}`} className="px-1 text-muted-foreground text-sm">…</span>;
+                    return (
+                      <Button key={pg} variant={pg === page ? 'default' : 'outline'} size="sm" className="w-8 h-8 p-0 text-xs" onClick={() => goToPage(pg)}>
+                        {pg}
+                      </Button>
+                    );
+                  })}
+                  <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => goToPage(page + 1)}>
+                    <ChevronRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}

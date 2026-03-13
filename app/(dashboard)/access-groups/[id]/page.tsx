@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { usePermission } from '@/lib/hooks/use-permission';
@@ -25,6 +25,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -40,7 +41,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
-import { ChevronLeft, Save, UserPlus, Trash2, ShieldCheck, Plug } from 'lucide-react';
+import { ChevronLeft, Save, UserPlus, Trash2, ShieldCheck, Plug, Search } from 'lucide-react';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
@@ -236,8 +237,7 @@ function AccessTab({
   );
 
   // Split standard categories from connector categories (connector names start with "Connector - ")
-  // ENABLE_AGENTS_PERMISSIONS — remove the filter below (keep only the startsWith check) to restore Agents category pill
-  const builtinCategories = allCategories.filter((c) => !c.startsWith('Connector - ') && c !== 'Agents');
+  const builtinCategories = allCategories.filter((c) => !c.startsWith('Connector - '));
   const connectorCategories = allCategories.filter((c) => c.startsWith('Connector - '));
   const selectedIsConnector = connectorCategories.includes(selectedCategory);
   // Strip "Connector - " prefix for display in dropdown
@@ -393,6 +393,10 @@ export default function AccessGroupDetailPage() {
   const [saving, setSaving] = useState(false);
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [pendingUserIds, setPendingUserIds] = useState<string[]>([]);
+  const [memberFilter, setMemberFilter] = useState('');
+  const [memberSortKey, setMemberSortKey] = useState<string>('email');
+  const [memberSortDir, setMemberSortDir] = useState<'asc' | 'desc'>('asc');
 
   const initialCategory = searchParams.get('category') ?? 'Administration';
 
@@ -428,12 +432,17 @@ export default function AccessGroupDetailPage() {
     if (!selectedOrgId || !accessGroup) return;
     try {
       setSaving(true);
+      // Build a complete access map from all known definitions so stale/removed
+      // permissions are explicitly set to false rather than silently persisting.
+      const fullAccess = Object.fromEntries(
+        definitions.map((d) => [d.key, access[d.key] ?? false])
+      );
       await Promise.all([
         updateAccessGroup(selectedOrgId, accessGroupId, {
           name: name.trim(),
           description: description.trim() || undefined,
         }),
-        updateAccessGroupAccess(selectedOrgId, accessGroupId, access),
+        updateAccessGroupAccess(selectedOrgId, accessGroupId, fullAccess),
       ]);
       toast.success('Changes saved');
     } catch {
@@ -482,25 +491,68 @@ export default function AccessGroupDetailPage() {
     } catch {
       toast.error('Failed to load users');
     }
+    setPendingUserIds([]);
+    setSearchQuery('');
     setAddMemberOpen(true);
   };
 
-  const handleAddMember = async (userId: string) => {
-    if (!selectedOrgId) return;
+  const handleAddMembers = async () => {
+    if (!selectedOrgId || pendingUserIds.length === 0) return;
     try {
-      await addUsersToAccessGroup(selectedOrgId, accessGroupId, [userId]);
-      const user = orgUsers.find((u) => u.id === userId);
-      if (user) setMembers((prev) => [...prev, { id: user.id, email: user.email }]);
-      setOrgUsers((prev) => prev.filter((u) => u.id !== userId));
-      toast.success('User added');
+      await addUsersToAccessGroup(selectedOrgId, accessGroupId, pendingUserIds);
+      const now = new Date().toISOString();
+      const newMembers = pendingUserIds.flatMap((id) => {
+        const user = orgUsers.find((u) => u.id === id);
+        return user ? [{ id: user.id, email: user.email, granted_at: now }] : [];
+      });
+      setMembers((prev) => [...prev, ...newMembers]);
+      setOrgUsers((prev) => prev.filter((u) => !pendingUserIds.includes(u.id)));
+      setPendingUserIds([]);
+      setAddMemberOpen(false);
+      toast.success(`${newMembers.length} user${newMembers.length !== 1 ? 's' : ''} added`);
     } catch {
-      toast.error('Failed to add user');
+      toast.error('Failed to add users');
     }
   };
 
   const filteredOrgUsers = orgUsers.filter(
     (u) => !searchQuery || u.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
+
+  const allFilteredSelected = filteredOrgUsers.length > 0 && filteredOrgUsers.every((u) => pendingUserIds.includes(u.id));
+  const someFilteredSelected = !allFilteredSelected && filteredOrgUsers.some((u) => pendingUserIds.includes(u.id));
+
+  const toggleSelectAll = () => {
+    if (allFilteredSelected) {
+      setPendingUserIds((prev) => prev.filter((id) => !filteredOrgUsers.some((u) => u.id === id)));
+    } else {
+      const toAdd = filteredOrgUsers.map((u) => u.id).filter((id) => !pendingUserIds.includes(id));
+      setPendingUserIds((prev) => [...prev, ...toAdd]);
+    }
+  };
+
+  const handleMemberSort = (key: string) => {
+    if (memberSortKey === key) {
+      setMemberSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setMemberSortKey(key);
+      setMemberSortDir('asc');
+    }
+  };
+
+  const displayedMembers = useMemo(() => {
+    let result = members;
+    if (memberFilter) {
+      const q = memberFilter.toLowerCase();
+      result = result.filter((m) => m.email?.toLowerCase().includes(q));
+    }
+    return [...result].sort((a, b) => {
+      const valA = memberSortKey === 'granted_at' ? (a.granted_at ?? '') : (a.email ?? '');
+      const valB = memberSortKey === 'granted_at' ? (b.granted_at ?? '') : (b.email ?? '');
+      const cmp = valA < valB ? -1 : valA > valB ? 1 : 0;
+      return memberSortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [members, memberFilter, memberSortKey, memberSortDir]);
 
   if (!permitted) return <NoPermissionContent />;
 
@@ -578,12 +630,25 @@ export default function AccessGroupDetailPage() {
               </Button>
             </CardHeader>
             <CardContent>
+              <div className="relative mb-3">
+                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+                <Input
+                  placeholder="Filter members…"
+                  value={memberFilter}
+                  onChange={(e) => setMemberFilter(e.target.value)}
+                  className="pl-8"
+                />
+              </div>
               <ResponsiveTable
-                data={members}
+                data={displayedMembers}
+                sortKey={memberSortKey}
+                sortDir={memberSortDir}
+                onSort={handleMemberSort}
                 columns={[
                   {
                     key: 'email',
                     label: 'User',
+                    sortable: true,
                     render: (m) => (
                       <div className="flex items-center gap-2">
                         <span className="text-sm">{m.email}</span>
@@ -593,7 +658,7 @@ export default function AccessGroupDetailPage() {
                       </div>
                     ),
                   },
-                  { key: 'granted_at', label: 'Since', render: (m) => <span className="text-xs text-muted-foreground">{new Date(m.granted_at).toLocaleDateString()}</span> },
+                  { key: 'granted_at', label: 'Since', sortable: true, render: (m) => <span className="text-xs text-muted-foreground">{m.granted_at ? new Date(m.granted_at).toLocaleDateString() : '—'}</span> },
                   {
                     key: 'actions',
                     label: '',
@@ -617,7 +682,7 @@ export default function AccessGroupDetailPage() {
                     ),
                   },
                 ]}
-                emptyMessage="No members yet."
+                emptyMessage={memberFilter ? 'No members match your filter.' : 'No members yet.'}
               />
             </CardContent>
           </Card>
@@ -668,8 +733,8 @@ export default function AccessGroupDetailPage() {
       <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Add User to {accessGroup.name}</DialogTitle>
-            <DialogDescription>Select a user to apply this access group.</DialogDescription>
+            <DialogTitle>Add Users to {accessGroup.name}</DialogTitle>
+            <DialogDescription>Select one or more users to add to this access group.</DialogDescription>
           </DialogHeader>
           <Input
             placeholder="Search by email…"
@@ -677,25 +742,70 @@ export default function AccessGroupDetailPage() {
             onChange={(e) => setSearchQuery(e.target.value)}
             className="mt-2"
           />
-          <div className="max-h-64 overflow-y-auto divide-y mt-2 border rounded-md">
-            {filteredOrgUsers.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">No users available.</p>
-            ) : (
-              filteredOrgUsers.map((u) => (
-                <button
-                  key={u.id}
-                  className="flex w-full items-center justify-between px-3 py-2.5 hover:bg-muted text-sm"
-                  disabled={!canUpdate}
-                  onClick={() => handleAddMember(u.id)}
-                >
-                  <span>{u.email}</span>
-                  <UserPlus className="h-4 w-4 text-muted-foreground" />
-                </button>
-              ))
+          <div className="border rounded-md mt-2 overflow-hidden">
+            {filteredOrgUsers.length > 0 && (
+              <div
+                role="button"
+                tabIndex={0}
+                className="flex w-full items-center gap-3 px-3 py-2 bg-muted/50 border-b text-sm font-medium hover:bg-muted cursor-pointer"
+                onClick={toggleSelectAll}
+                onKeyDown={(e) => e.key === 'Enter' && toggleSelectAll()}
+              >
+                <Checkbox
+                  checked={allFilteredSelected || (someFilteredSelected ? 'indeterminate' : false)}
+                  onCheckedChange={toggleSelectAll}
+                  onClick={(e) => e.stopPropagation()}
+                />
+                <span>{allFilteredSelected ? 'Deselect all' : 'Select all'}</span>
+                {pendingUserIds.length > 0 && (
+                  <span className="ml-auto text-xs text-muted-foreground">{pendingUserIds.length} selected</span>
+                )}
+              </div>
             )}
+            <div className="max-h-56 overflow-y-auto divide-y">
+              {filteredOrgUsers.length === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">No users available.</p>
+              ) : (
+                filteredOrgUsers.map((u) => (
+                  <div
+                    key={u.id}
+                    role="button"
+                    tabIndex={0}
+                    className="flex w-full items-center gap-3 px-3 py-2.5 hover:bg-muted text-sm cursor-pointer"
+                    aria-disabled={!canUpdate}
+                    onClick={() =>
+                      canUpdate && setPendingUserIds((prev) =>
+                        prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
+                      )
+                    }
+                    onKeyDown={(e) =>
+                      e.key === 'Enter' && canUpdate && setPendingUserIds((prev) =>
+                        prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
+                      )
+                    }
+                  >
+                    <Checkbox
+                      checked={pendingUserIds.includes(u.id)}
+                      disabled={!canUpdate}
+                      onCheckedChange={() =>
+                        setPendingUserIds((prev) =>
+                          prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
+                        )
+                      }
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                    <span>{u.email}</span>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setAddMemberOpen(false)}>Done</Button>
+          <DialogFooter className="mt-2">
+            <Button variant="outline" onClick={() => setAddMemberOpen(false)}>Cancel</Button>
+            <Button onClick={handleAddMembers} disabled={pendingUserIds.length === 0 || !canUpdate}>
+              <UserPlus className="h-4 w-4 mr-2" />
+              Add{pendingUserIds.length > 0 ? ` (${pendingUserIds.length})` : ''}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

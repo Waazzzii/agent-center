@@ -5,14 +5,14 @@ import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { usePermission } from '@/lib/hooks/use-permission';
-import { getAgents, deleteAgent, type Agent } from '@/lib/api/agents';
+import { getAgents, deleteAgent, runAgent, type Agent } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, RefreshCw } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 
 export default function AgentsPage() {
@@ -21,11 +21,13 @@ export default function AgentsPage() {
   const permitted = useRequirePermission('agents_read');
   const canCreate = usePermission('agents_create');
   const canUpdate = usePermission('agents_update');
+  const canExecute = usePermission('agents_execute');
   const canDelete = usePermission('agents_delete');
   const { confirm } = useConfirmDialog();
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [runningId, setRunningId] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedOrgId) loadAgents();
@@ -42,6 +44,19 @@ export default function AgentsPage() {
       toast.error(err.message || 'Failed to load agents');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleRun = async (agentId: string, name: string) => {
+    if (!selectedOrgId) return;
+    try {
+      setRunningId(agentId);
+      await runAgent(selectedOrgId, agentId);
+      toast.success(`"${name}" triggered successfully`);
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to run agent');
+    } finally {
+      setRunningId(null);
     }
   };
 
@@ -78,12 +93,12 @@ export default function AgentsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Agents</h1>
+          <h1 className="text-2xl md:text-3xl font-bold">Agentic Workflows</h1>
           <p className="text-sm text-muted-foreground">Automated workflows powered by LLMs and your connected systems</p>
         </div>
         <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/agents/create')}>
           <Plus className="mr-2 h-4 w-4" />
-          New Agent
+          New Workflow
         </Button>
       </div>
 
@@ -96,8 +111,8 @@ export default function AgentsPage() {
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle>Agents</CardTitle>
-            <CardDescription>{agents.length} agent{agents.length !== 1 ? 's' : ''}</CardDescription>
+            <CardTitle>Agentic Workflows</CardTitle>
+            <CardDescription>{agents.length} workflow{agents.length !== 1 ? 's' : ''}</CardDescription>
           </CardHeader>
           <CardContent>
             <ResponsiveTable
@@ -137,6 +152,11 @@ export default function AgentsPage() {
                   label: 'Actions',
                   desktopRender: (a) => (
                     <div className="flex items-center justify-end gap-2">
+                      <Button variant="ghost" size="sm" disabled={!canExecute || runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
+                        {runningId === a.id
+                          ? <RefreshCw className="h-4 w-4 animate-spin" />
+                          : <Play className="h-4 w-4 text-green-600" />}
+                      </Button>
                       <Button variant="ghost" size="sm" disabled={!canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }}>
                         <Pencil className="h-4 w-4" />
                       </Button>
@@ -147,7 +167,10 @@ export default function AgentsPage() {
                   ),
                   render: (a) => (
                     <>
-                      <Button variant="outline" size="sm" disabled={!canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l">
+                      <Button variant="outline" size="sm" disabled={!canExecute || runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }} className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l">
+                        {runningId === a.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 text-green-600" />}
+                      </Button>
+                      <Button variant="outline" size="sm" disabled={!canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} className="flex-1 rounded-none border-r-0 border-t-0 border-l">
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button variant="outline" size="sm" disabled={!canDelete} title={!canDelete ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }} className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10">

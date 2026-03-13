@@ -14,11 +14,12 @@ export interface AgentAction {
   id: string;
   agent_id: string;
   name: string;
-  action_type: 'prompt' | 'hitl';
+  action_type: 'agent' | 'approval';
   prompt?: string | null;
   connector_ids?: string[] | null;
   model: string;
-  hitl_instructions?: string | null;
+  skill_ids?: string[];
+  approval_instructions?: string | null;
   notify_user_id?: string | null;
   prior_action_id?: string | null;
   next_action_id?: string | null;
@@ -30,7 +31,7 @@ export interface AgentAction {
 export interface AgentTrigger {
   id: string;
   agent_id: string;
-  trigger_type: 'webhook' | 'cron' | 'manual' | 'hitl';
+  trigger_type: 'webhook' | 'cron' | 'manual';
   config: Record<string, unknown>;
   is_active: boolean;
   created_at: string;
@@ -45,19 +46,20 @@ export interface AgentWebhookKey {
   created_at: string;
 }
 
-export interface AgentHitlItem {
+export interface AgentApprovalItem {
   id: string;
-  agent_id: string;
+  execution_log_id: string;
   action_id: string;
-  execution_run_id?: string | null;
-  context: Record<string, unknown>;
-  status: 'pending' | 'approved' | 'denied';
-  decided_by?: string | null;
-  decided_at?: string | null;
-  metadata: Record<string, unknown>;
-  created_at: string;
-  agent_name?: string;
-  action_name?: string;
+  action_name: string;
+  action_type: string;
+  status: 'awaiting_approval' | 'approved' | 'denied';
+  output: string | null;
+  executed_by: string | null;
+  started_at: string;
+  completed_at: string | null;
+  agent_id: string;
+  agent_name: string;
+  approval_instructions: string | null;
 }
 
 export interface AgentDetail extends Agent {
@@ -139,39 +141,95 @@ export async function deleteTrigger(orgId: string, agentId: string, triggerId: s
 }
 
 export async function generateWebhookKey(orgId: string, agentId: string, triggerId: string) {
-  const res = await apiClient.post<{ rawKey: string; record: AgentWebhookKey }>(`/admin/organizations/${orgId}/agents/${agentId}/triggers/${triggerId}/webhook-keys`);
+  const res = await apiClient.post<{ raw_key: string; key: AgentWebhookKey }>(`/admin/organizations/${orgId}/agents/${agentId}/triggers/${triggerId}/webhook-key`);
   return res.data;
 }
 
-export async function listWebhookKeys(orgId: string, agentId: string, triggerId: string) {
-  const res = await apiClient.get<AgentWebhookKey[]>(`/admin/organizations/${orgId}/agents/${agentId}/triggers/${triggerId}/webhook-keys`);
+export async function getWebhookKey(orgId: string, agentId: string, triggerId: string) {
+  const res = await apiClient.get<{ key: AgentWebhookKey | null }>(`/admin/organizations/${orgId}/agents/${agentId}/triggers/${triggerId}/webhook-key`);
+  return res.data.key;
+}
+
+export async function runAgent(orgId: string, agentId: string) {
+  const res = await apiClient.post(`/admin/organizations/${orgId}/agents/${agentId}/run`);
   return res.data;
 }
 
-export async function revokeWebhookKey(orgId: string, agentId: string, triggerId: string, keyId: string) {
-  await apiClient.delete(`/admin/organizations/${orgId}/agents/${agentId}/triggers/${triggerId}/webhook-keys/${keyId}`);
+// ─── Approvals ────────────────────────────────────────────────
+
+export interface ApprovalsListResponse {
+  items: AgentApprovalItem[];
+  total: number;
+  page: number;
+  total_pages: number;
 }
 
-// ─── HITL ─────────────────────────────────────────────────────
-
-export async function getPendingHitl(orgId: string) {
-  const res = await apiClient.get<{ items: AgentHitlItem[] }>(`/admin/organizations/${orgId}/hitl`);
+export async function getApprovals(
+  orgId: string,
+  params?: { status?: string; page?: number; limit?: number }
+) {
+  const res = await apiClient.get<ApprovalsListResponse>(`/admin/organizations/${orgId}/approvals`, { params });
   return res.data;
 }
 
-export async function approveHitl(orgId: string, hitlId: string) {
-  const res = await apiClient.post<AgentHitlItem>(`/admin/organizations/${orgId}/hitl/${hitlId}/approve`);
+export async function approveApproval(orgId: string, approvalId: string) {
+  const res = await apiClient.post<AgentApprovalItem>(`/admin/organizations/${orgId}/approvals/${approvalId}/approve`);
   return res.data;
 }
 
-export async function denyHitl(orgId: string, hitlId: string) {
-  const res = await apiClient.post<AgentHitlItem>(`/admin/organizations/${orgId}/hitl/${hitlId}/deny`);
+export async function denyApproval(orgId: string, approvalId: string) {
+  const res = await apiClient.post<AgentApprovalItem>(`/admin/organizations/${orgId}/approvals/${approvalId}/deny`);
   return res.data;
 }
 
 // ─── Execution History ────────────────────────────────────────
 
-export async function getExecutionHistory(orgId: string, params?: { from?: string; to?: string; agent_id?: string; user_id?: string; action?: string; limit?: number }) {
-  const res = await apiClient.get(`/admin/organizations/${orgId}/execution-history`, { params });
+export interface ExecutionRun {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  trigger_type: 'webhook' | 'cron' | 'manual';
+  status: 'executing' | 'completed' | 'failed' | 'awaiting_approval';
+  error_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number;
+  actions: ExecutionAction[];
+}
+
+export interface ExecutionAction {
+  id: string;
+  action_id: string;
+  action_name: string;
+  action_type: 'agent' | 'approval';
+  status: string;
+  output: string | null;
+  error_message: string | null;
+  executed_by: string | null;
+  started_at: string;
+  completed_at: string | null;
+}
+
+export interface ExecutionHistoryResponse {
+  runs: ExecutionRun[];
+  total: number;
+  page: number;
+  page_size: number;
+  total_pages: number;
+}
+
+export async function getExecutionHistory(
+  orgId: string,
+  params?: {
+    from?: string;
+    to?: string;
+    agent_id?: string;
+    status?: string;
+    trigger_type?: string;
+    page?: number;
+    limit?: number;
+  }
+): Promise<ExecutionHistoryResponse> {
+  const res = await apiClient.get<ExecutionHistoryResponse>(`/admin/organizations/${orgId}/execution-history`, { params });
   return res.data;
 }

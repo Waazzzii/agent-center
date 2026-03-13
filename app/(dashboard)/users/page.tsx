@@ -34,6 +34,8 @@ export default function UsersPage() {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [userToDelete, setUserToDelete] = useState<User | null>(null);
   const [userSearch, setUserSearch] = useState('');
+  const [sortKey, setSortKey] = useState<string>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   useEffect(() => {
     if (!admin) {
@@ -93,9 +95,18 @@ export default function UsersPage() {
     await loadUsers();
   };
 
+  const handleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key);
+      setSortDir('asc');
+    }
+  };
+
   const filteredUsers = useMemo(() => {
     const query = userSearch.toLowerCase().trim();
-    return users.filter((user) => {
+    const filtered = users.filter((user) => {
       if (!query) return true;
       const displayName =
         user.display_name ||
@@ -108,7 +119,23 @@ export default function UsersPage() {
         user.phone?.toLowerCase().includes(query)
       );
     });
-  }, [users, userSearch]);
+    return [...filtered].sort((a, b) => {
+      let valA: string;
+      let valB: string;
+      switch (sortKey) {
+        case 'email':   valA = a.email ?? ''; valB = b.email ?? ''; break;
+        case 'phone':   valA = a.phone ?? ''; valB = b.phone ?? ''; break;
+        case 'role':    valA = a.role ?? '';  valB = b.role ?? '';  break;
+        case 'status':  valA = String(a.is_active); valB = String(b.is_active); break;
+        case 'created': valA = a.created_at ?? ''; valB = b.created_at ?? ''; break;
+        default: // name
+          valA = (a.display_name || (a.first_name || a.last_name ? `${a.first_name || ''} ${a.last_name || ''}`.trim() : a.email)) ?? '';
+          valB = (b.display_name || (b.first_name || b.last_name ? `${b.first_name || ''} ${b.last_name || ''}`.trim() : b.email)) ?? '';
+      }
+      const cmp = valA.toLowerCase() < valB.toLowerCase() ? -1 : valA.toLowerCase() > valB.toLowerCase() ? 1 : 0;
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [users, userSearch, sortKey, sortDir]);
 
   if (!admin || loading) {
     return (
@@ -174,10 +201,15 @@ export default function UsersPage() {
                 getRowKey={(user) => user.id}
                 onRowClick={(user) => router.push(`/users/${user.id}/edit`)}
                 emptyMessage={userSearch ? 'No matching users found' : 'No users found in this organization.'}
+                sortKey={sortKey}
+                sortDir={sortDir}
+                onSort={handleSort}
                 columns={[
                   {
                     key: 'name',
                     label: 'Name',
+                    sortable: true,
+                    thClassName: 'w-[22%]',
                     render: (user) => {
                       const displayName =
                         user.display_name ||
@@ -190,11 +222,15 @@ export default function UsersPage() {
                   {
                     key: 'email',
                     label: 'Email',
+                    sortable: true,
+                    thClassName: 'w-[24%]',
                     render: (user) => user.email,
                   },
                   {
                     key: 'phone',
                     label: 'Phone',
+                    sortable: true,
+                    thClassName: 'w-[14%]',
                     render: (user) => (
                       <span className="text-muted-foreground">{user.phone || '—'}</span>
                     ),
@@ -202,6 +238,8 @@ export default function UsersPage() {
                   {
                     key: 'role',
                     label: 'Role',
+                    sortable: true,
+                    thClassName: 'w-[13%]',
                     render: (user) => (
                       <span className={cn(
                         'inline-block rounded-full px-2 py-0.5 text-xs font-medium',
@@ -216,6 +254,8 @@ export default function UsersPage() {
                   {
                     key: 'status',
                     label: 'Status',
+                    sortable: true,
+                    thClassName: 'w-[11%]',
                     render: (user) =>
                       user.is_active ? (
                         <span className="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/30 px-2 py-1 text-xs font-medium text-green-800 dark:text-green-400">
@@ -230,6 +270,8 @@ export default function UsersPage() {
                   {
                     key: 'created',
                     label: 'Created',
+                    sortable: true,
+                    thClassName: 'w-[11%]',
                     render: (user) => new Date(user.created_at).toLocaleDateString(),
                   },
                   {

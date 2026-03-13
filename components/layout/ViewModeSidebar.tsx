@@ -6,7 +6,7 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { AdminRole, BYPASS_PERMISSION_ROLES } from '@/types/api.types';
+import { AdminRole } from '@/types/api.types';
 import {
   Building2,
   Plug,
@@ -30,6 +30,7 @@ import {
   CheckCircle,
   ChevronLeft,
   ShieldCheck,
+  History,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -65,12 +66,14 @@ const superAdminNavItems: NavItem[] = [
 
 // Merge icons onto shared nav items so they work in the sidebar
 const MAIN_ICONS: Record<string, React.ElementType> = {
-  '/agents': Bot,
-  '/hitl':   CheckCircle,
-  '/skills': Wand2,
+  '/agents':        Bot,
+  '/agent-history': History,
+  '/approvals':     CheckCircle,
+  '/skills':        Wand2,
 };
 const SETTINGS_ICONS: Record<string, React.ElementType> = {
   '/access-groups':  ShieldCheck,
+  '/ai-agent':       Bot,
   '/audit-logs':     FileText,
   '/knowledge-base': BookOpen,
   '/connectors':     Plug,
@@ -83,7 +86,7 @@ const orgMainNavItems: NavItem[] = mainItems.map((i) => ({ ...i, icon: MAIN_ICON
 const orgSettingsNavItems: NavItem[] = settingsItems.map((i) => ({ ...i, icon: SETTINGS_ICONS[i.href] ?? Building2 }));
 
 // Paths that belong to the settings panel (triggers settings mode)
-const SETTINGS_PATHS = ['/users', '/connectors', '/access-groups', '/oauth-clients', '/knowledge-base', '/audit-logs', '/organization'];
+const SETTINGS_PATHS = ['/users', '/connectors', '/access-groups', '/oauth-clients', '/knowledge-base', '/audit-logs', '/organization', '/ai-agent'];
 
 export function ViewModeSidebar() {
   const pathname = usePathname();
@@ -249,8 +252,7 @@ export function ViewModeSidebar() {
           {/* Settings panel header */}
           {viewMode === 'org_admin' && settingsMode && (
             <div className="border-b px-2 py-2">
-              {/* ENABLE_MAIN_NAV — uncomment the block below to restore the Back button */}
-              {/* <Button
+              <Button
                 variant="ghost"
                 size="sm"
                 className="w-full justify-start gap-2 text-muted-foreground"
@@ -261,7 +263,7 @@ export function ViewModeSidebar() {
                   <ChevronLeft className="h-4 w-4" />
                   Back
                 </Link>
-              </Button> */}
+              </Button>
               <div className="px-3 pt-1 pb-0.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                 Settings
               </div>

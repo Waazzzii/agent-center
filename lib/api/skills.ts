@@ -13,9 +13,29 @@ export interface Skill {
   updated_at: string;
 }
 
-export async function getSkills(orgId: string) {
-  const res = await apiClient.get<{ skills: Skill[]; total: number }>(`/admin/organizations/${orgId}/skills`);
+export interface SkillsPage {
+  skills: Skill[];
+  total: number;
+  page: number;
+  limit: number;
+  total_pages: number;
+}
+
+export async function getSkills(orgId: string, params?: { page?: number; limit?: number }) {
+  const res = await apiClient.get<SkillsPage>(`/admin/organizations/${orgId}/skills`, { params });
   return res.data;
+}
+
+export interface SkillUsage {
+  action_id: string;
+  action_name: string;
+  agent_id: string;
+  agent_name: string;
+}
+
+export async function getSkillUsages(orgId: string, skillId: string) {
+  const res = await apiClient.get<{ actions: SkillUsage[] }>(`/admin/organizations/${orgId}/skills/${skillId}/usages`);
+  return res.data.actions;
 }
 
 export async function getSkill(orgId: string, skillId: string) {

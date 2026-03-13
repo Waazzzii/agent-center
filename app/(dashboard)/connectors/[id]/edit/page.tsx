@@ -16,7 +16,6 @@ import { DynamicConnectorForm } from '@/components/dynamic-connector-form';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ArrowLeft, ExternalLink, Trash2 } from 'lucide-react';
@@ -43,10 +42,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     connector_key: string;
   } | null>(null);
   const [formData, setFormData] = useState({
-    configuration: '',
-    secrets: '',
     is_enabled: true,
-    updateSecrets: false,
   });
 
   useEffect(() => {
@@ -80,10 +76,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         connector_key: connectorData.connector_key,
       });
       setFormData({
-        configuration: JSON.stringify(connectorData.configuration || {}, null, 2),
-        secrets: '',
         is_enabled: connectorData.is_enabled,
-        updateSecrets: false,
       });
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to load connector';
@@ -123,54 +116,6 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
-    if (!selectedOrgId) {
-      toast.error('No organization selected');
-      return;
-    }
-
-    let parsedConfig: Record<string, any> | undefined;
-    let parsedSecrets: Record<string, string> | undefined;
-
-    if (formData.configuration.trim()) {
-      try {
-        parsedConfig = JSON.parse(formData.configuration);
-      } catch (e) {
-        toast.error('Invalid JSON in configuration');
-        return;
-      }
-    }
-
-    if (formData.updateSecrets && formData.secrets.trim()) {
-      try {
-        parsedSecrets = JSON.parse(formData.secrets);
-      } catch (e) {
-        toast.error('Invalid JSON in secrets');
-        return;
-      }
-    }
-
-    try {
-      setLoading(true);
-
-      await updateConnector(selectedOrgId, connectorId, {
-        config: parsedConfig,
-        secrets: formData.updateSecrets ? parsedSecrets : undefined,
-        is_enabled: formData.is_enabled,
-      });
-
-      toast.success('Connector updated successfully');
-      await loadConnector();
-    } catch (error: any) {
-      const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
-      toast.error(errorMessage);
-    } finally {
-      setLoading(false);
-    }
-  };
-
   const handleDeleteConnector = async () => {
     if (!selectedOrgId || !connectorInfo) return;
 
@@ -193,6 +138,8 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       toast.error(errorMessage);
     }
   };
+
+  const schema = baseConnector?.configuration_schema;
 
   if (!permitted) return <NoPermissionContent />;
 
@@ -245,11 +192,11 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {baseConnector?.configuration_schema && connector ? (
+          {schema && schema.fields.length > 0 && connector ? (
             <div className="space-y-6">
               <DynamicConnectorForm
                 key={`${connectorId}-${connector.updated_at}`}
-                schema={baseConnector.configuration_schema}
+                schema={schema}
                 initialValues={connector.configuration}
                 existingSecrets={connector.secret_info?.secret_fields || []}
                 maskedSecrets={
@@ -313,74 +260,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
               </div>
             </div>
           ) : (
-            <form onSubmit={handleSubmit} className="space-y-6">
-              {(() => {
-                const hasExistingConfig = Object.keys(connector?.configuration || {}).length > 0;
-                const hasExistingSecrets = (connector?.secret_info?.secret_fields || []).length > 0;
-                return (
-                  <div className="space-y-4">
-                    {hasExistingConfig && (
-                      <div className="space-y-2">
-                        <Label htmlFor="configuration">Configuration (JSON)</Label>
-                        <Textarea
-                          id="configuration"
-                          value={formData.configuration}
-                          onChange={(e) => setFormData({ ...formData, configuration: e.target.value })}
-                          placeholder='{"api_url": "https://api.example.com", "timeout": 30}'
-                          rows={10}
-                          className="font-mono text-sm"
-                          disabled={!canUpdate}
-                        />
-                        <p className="text-sm text-muted-foreground">
-                          Custom configuration as JSON object
-                        </p>
-                      </div>
-                    )}
-
-                    {hasExistingSecrets && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between mb-2">
-                          <Label htmlFor="secrets">Secrets (JSON)</Label>
-                          <div className="flex items-center gap-2">
-                            <Label htmlFor="updateSecrets" className="text-sm font-normal cursor-pointer">
-                              Update secrets
-                            </Label>
-                            <Switch
-                              id="updateSecrets"
-                              checked={formData.updateSecrets}
-                              disabled={!canUpdate}
-                              onCheckedChange={(checked) => setFormData({ ...formData, updateSecrets: checked })}
-                            />
-                          </div>
-                        </div>
-                        {formData.updateSecrets ? (
-                          <>
-                            <Textarea
-                              id="secrets"
-                              value={formData.secrets}
-                              onChange={(e) => setFormData({ ...formData, secrets: e.target.value })}
-                              placeholder='{"api_key": "your-key", "api_secret": "your-secret"}'
-                              rows={8}
-                              className="font-mono text-sm"
-                              disabled={!canUpdate}
-                            />
-                            <p className="text-sm text-muted-foreground">
-                              Enter new secrets as JSON object (will be encrypted)
-                            </p>
-                          </>
-                        ) : (
-                          <div className="rounded-lg border p-4 bg-muted/50">
-                            <p className="text-sm text-muted-foreground">
-                              Secrets are hidden for security. Toggle "Update secrets" to change them.
-                            </p>
-                          </div>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
+            <div className="space-y-6">
               <div className="flex items-center justify-between rounded-lg border p-4">
                 <div className="space-y-0.5">
                   <Label htmlFor="is_enabled" className="text-base">Enable Connector</Label>
@@ -390,21 +270,22 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                 </div>
                 <Switch
                   id="is_enabled"
-                  checked={formData.is_enabled}
+                  checked={connector?.is_enabled ?? formData.is_enabled}
                   disabled={!canUpdate}
-                  onCheckedChange={(checked) => setFormData({ ...formData, is_enabled: checked })}
+                  onCheckedChange={async (checked) => {
+                    if (!selectedOrgId) return;
+                    try {
+                      await updateConnector(selectedOrgId, connectorId, { is_enabled: checked });
+                      toast.success('Connector status updated');
+                      await loadConnector();
+                    } catch (error: any) {
+                      const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
+                      toast.error(errorMessage);
+                    }
+                  }}
                 />
               </div>
-
-              <div className="flex gap-4">
-                <Button type="submit" disabled={loading || !canUpdate}>
-                  {loading ? 'Saving...' : 'Save Changes'}
-                </Button>
-                <Button type="button" variant="outline" onClick={() => router.push('/connectors')}>
-                  Cancel
-                </Button>
-              </div>
-            </form>
+            </div>
           )}
         </CardContent>
       </Card>

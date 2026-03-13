@@ -11,15 +11,16 @@ export interface NavItem {
 
 /** Main org nav — shown in the regular (non-settings) panel, alphabetical */
 export const orgMainNavItems: NavItem[] = [
-  // ENABLE_AGENTS_SKILLS_APPROVALS — uncomment the three lines below to restore nav items
-  // { label: 'Agents',    href: '/agents', permissionKeys: ['agents_read'] },
-  // { label: 'Approvals', href: '/hitl',   permissionKeys: ['hitl_read'] },
-  // { label: 'Skills',    href: '/skills', permissionKeys: ['skills_read'] },
+  { label: 'Agentic Workflows', href: '/agents',         permissionKeys: ['agents_read'] },
+  { label: 'Agent History',    href: '/agent-history',  permissionKeys: ['agents_read'] },
+  { label: 'Approvals',        href: '/approvals',      permissionKeys: ['approvals_read'] },
+  { label: 'Skills',         href: '/skills',         permissionKeys: ['skills_read'] },
 ];
 
 /** Settings nav — shown in the settings panel, alphabetical */
 export const orgSettingsNavItems: NavItem[] = [
   { label: 'Access Groups',   href: '/access-groups',  permissionKeys: ['access_groups_read'] },
+  { label: 'AI Agent',        href: '/ai-agent',       permissionKeys: ['agents_read'] },
   { label: 'Audit Logs',      href: '/audit-logs',     permissionKeys: ['audit_logs_read'] },
   { label: 'Knowledge Base',  href: '/knowledge-base', permissionKeys: ['knowledgebase_admin_read'] },
   { label: 'MCP Connections', href: '/connectors',     permissionKeys: ['connectors_read'] },

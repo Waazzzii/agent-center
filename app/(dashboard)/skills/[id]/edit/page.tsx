@@ -3,16 +3,15 @@
 import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { getSkill, updateSkill, pushSkillToAnthropic, type Skill } from '@/lib/api/skills';
+import { getSkill, updateSkill, type Skill } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
-import { ArrowLeft, Cloud, Copy } from 'lucide-react';
+import { ArrowLeft } from 'lucide-react';
 
 export default function EditSkillPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: skillId } = use(params);
@@ -27,11 +26,6 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
-
-  // Push to Anthropic dialog
-  const [pushOpen, setPushOpen] = useState(false);
-  const [pushApiKey, setPushApiKey] = useState('');
-  const [pushing, setPushing] = useState(false);
 
   useEffect(() => {
     if (selectedOrgId && skillId) loadSkill();
@@ -73,22 +67,6 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
       toast.error(err.response?.data?.message || err.message || 'Failed to save skill');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const handlePush = async () => {
-    if (!selectedOrgId || !pushApiKey.trim()) return;
-    try {
-      setPushing(true);
-      const result = await pushSkillToAnthropic(selectedOrgId, skillId, pushApiKey.trim());
-      toast.success(`Pushed to Anthropic — ID: ${result.external_ref}`);
-      setPushOpen(false);
-      setPushApiKey('');
-      await loadSkill();
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || err.message || 'Push failed');
-    } finally {
-      setPushing(false);
     }
   };
 
@@ -148,52 +126,6 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
         </CardContent>
       </Card>
 
-      {/* Anthropic Sync Card */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2"><Cloud className="h-4 w-4" /> Anthropic Prompt Library</CardTitle>
-          <CardDescription>Push this skill to your Anthropic Prompt Library for use in Claude projects.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {skill?.external_ref && (
-            <div className="space-y-1">
-              <Label>Anthropic Prompt ID</Label>
-              <div className="flex items-center gap-2">
-                <Input value={skill.external_ref} readOnly className="font-mono text-sm bg-muted" />
-                <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(skill.external_ref!); toast.success('Copied'); }}>
-                  <Copy className="h-4 w-4" />
-                </Button>
-              </div>
-            </div>
-          )}
-          <Button variant="outline" onClick={() => setPushOpen(true)}>
-            <Cloud className="mr-2 h-4 w-4" />
-            {skill?.external_ref ? 'Update in Anthropic' : 'Push to Anthropic'}
-          </Button>
-        </CardContent>
-      </Card>
-
-      {/* Push dialog */}
-      <Dialog open={pushOpen} onOpenChange={setPushOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Push to Anthropic</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">Enter your Anthropic API key to push this skill to the Prompt Library.</p>
-            <div className="space-y-1">
-              <Label>Anthropic API Key</Label>
-              <Input type="password" placeholder="sk-ant-..." value={pushApiKey} onChange={(e) => setPushApiKey(e.target.value)} />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setPushOpen(false); setPushApiKey(''); }}>Cancel</Button>
-            <Button onClick={handlePush} disabled={pushing || !pushApiKey.trim()}>
-              {pushing ? 'Pushing…' : 'Push'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

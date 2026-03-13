@@ -10,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 
 interface Column<T> {
   key: string;
@@ -18,6 +19,9 @@ interface Column<T> {
   desktopRender?: (item: T) => React.ReactNode;
   hideOnMobile?: boolean;
   mobileLabel?: string;
+  mobileFullWidth?: boolean;
+  sortable?: boolean;
+  thClassName?: string;
 }
 
 interface ResponsiveTableProps<T> {
@@ -33,6 +37,9 @@ interface ResponsiveTableProps<T> {
   showCheckboxes?: boolean;
   selectedIds?: string[];
   onToggleSelect?: (id: string) => void;
+  sortKey?: string;
+  sortDir?: 'asc' | 'desc';
+  onSort?: (key: string) => void;
 }
 
 export function ResponsiveTable<T>({
@@ -47,6 +54,9 @@ export function ResponsiveTable<T>({
   showCheckboxes = false,
   selectedIds = [],
   onToggleSelect,
+  sortKey,
+  sortDir,
+  onSort,
 }: ResponsiveTableProps<T>) {
   const [detailItem, setDetailItem] = React.useState<T | null>(null);
 
@@ -79,9 +89,21 @@ export function ResponsiveTable<T>({
               {columns.map((column) => (
                 <th
                   key={column.key}
-                  className="text-foreground h-10 px-2 text-left align-middle font-medium"
+                  className={cn('text-foreground h-10 px-2 text-left align-middle font-medium', column.thClassName)}
                 >
-                  {column.label}
+                  {column.sortable && onSort ? (
+                    <button
+                      className="flex items-center gap-1 hover:text-foreground/80 select-none"
+                      onClick={() => onSort(column.key)}
+                    >
+                      {column.label}
+                      {sortKey === column.key ? (
+                        sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
+                      ) : (
+                        <ArrowUpDown className="h-3 w-3 opacity-40" />
+                      )}
+                    </button>
+                  ) : column.label}
                 </th>
               ))}
             </tr>
@@ -109,11 +131,15 @@ export function ResponsiveTable<T>({
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className="p-2 align-middle overflow-hidden"
+                      className={cn('p-2 align-middle', !column.desktopRender && 'overflow-hidden')}
                     >
-                      <div className="truncate">
-                        {column.desktopRender ? column.desktopRender(item) : column.render(item)}
-                      </div>
+                      {column.desktopRender ? (
+                        column.desktopRender(item)
+                      ) : (
+                        <div className="truncate">
+                          {column.render(item)}
+                        </div>
+                      )}
                     </td>
                   ))}
                 </tr>
@@ -130,17 +156,18 @@ export function ResponsiveTable<T>({
           const visibleColumns = columns.filter((column) => !column.hideOnMobile);
           const actionsColumn = visibleColumns.find((col) => col.key === 'actions');
           const dataColumns = visibleColumns.filter((col) => col.key !== 'actions');
+          const actionsFullWidth = actionsColumn?.mobileFullWidth ?? false;
 
           return (
             <Card
               key={itemId}
               onClick={() => handleRowClick(item)}
               className={cn(
-                'p-4 transition-colors',
+                'transition-colors',
                 isClickable && 'cursor-pointer hover:bg-muted/50'
               )}
             >
-              <div className="flex items-stretch gap-3">
+              <div className={cn('flex gap-3 p-4', !actionsFullWidth && 'items-stretch')}>
                 {showCheckboxes && (
                   <Checkbox
                     checked={selectedIds.includes(itemId)}
@@ -150,7 +177,7 @@ export function ResponsiveTable<T>({
                   />
                 )}
 
-                <div className="flex-1 min-w-0 space-y-3 py-1 pr-4">
+                <div className="flex-1 min-w-0 space-y-3">
                   <div className="flex flex-wrap gap-x-4 gap-y-2">
                     {dataColumns.map((column) => (
                       <div key={column.key} className="flex-1 min-w-[120px] overflow-hidden">
@@ -161,9 +188,15 @@ export function ResponsiveTable<T>({
                       </div>
                     ))}
                   </div>
+
+                  {actionsFullWidth && actionsColumn && (
+                    <div onClick={(e) => e.stopPropagation()}>
+                      {actionsColumn.render(item)}
+                    </div>
+                  )}
                 </div>
 
-                {actionsColumn && (
+                {!actionsFullWidth && actionsColumn && (
                   <div className="flex flex-col w-12 -mr-4 -my-4" onClick={(e) => e.stopPropagation()}>
                     {actionsColumn.render(item)}
                   </div>

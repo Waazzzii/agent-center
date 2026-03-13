@@ -242,7 +242,10 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
 
     try {
       setLoading(true);
-      await updateConnector(connectorId, formData);
+      const payload = Object.fromEntries(
+        Object.entries(formData).filter(([, v]) => v !== null)
+      ) as Parameters<typeof updateConnector>[1];
+      await updateConnector(connectorId, payload);
       toast.success('Connector updated successfully');
       router.push('/connectors-catalog');
     } catch (error: any) {
@@ -279,7 +282,8 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
       <Tabs defaultValue="basic" className="w-full">
         <TabsList>
           <TabsTrigger value="basic">Basic Details</TabsTrigger>
-          <TabsTrigger value="schema">Custom Configuration</TabsTrigger>
+          <TabsTrigger value="schema">MCP</TabsTrigger>
+          <TabsTrigger value="agent">Agent</TabsTrigger>
           <TabsTrigger value="access">Access Definitions</TabsTrigger>
         </TabsList>
 
@@ -384,9 +388,9 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
           <TabsContent value="schema" className="mt-6">
             <Card className="max-w-full">
               <CardHeader>
-                <CardTitle>Configuration Schema</CardTitle>
+                <CardTitle>MCP Schema</CardTitle>
                 <CardDescription>
-                  Define custom fields that organizations will fill when configuring this connector
+                  Define custom fields that organizations fill when configuring this connector for MCP access
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -396,6 +400,53 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                 />
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="agent" className="mt-6 space-y-6">
+            <Card className="max-w-2xl">
+              <CardHeader>
+                <CardTitle>Agent Authentication</CardTitle>
+                <CardDescription>
+                  Configure how the AI Agent authenticates with this connector and what org admins see in the AI Agent → Connectors tab
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="agent_auth_type">Agent Auth Type</Label>
+                  <Select
+                    value={formData.agent_auth_type || 'none'}
+                    onValueChange={(v) => setFormData({ ...formData, agent_auth_type: v as 'none' | 'google_oauth' })}
+                  >
+                    <SelectTrigger id="agent_auth_type">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None (no extra auth required)</SelectItem>
+                      <SelectItem value="google_oauth">Google OAuth (account login required)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Whether org admins need to connect an account for the agent to use this connector.
+                    <strong> None</strong> = the connector works with existing credentials.
+                    <strong> Google OAuth</strong> = org admins must log in with a Google account in the AI Agent → Connectors tab.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="agent_instruction">Instruction for Org Admins</Label>
+                  <textarea
+                    id="agent_instruction"
+                    className="w-full min-h-[80px] rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    value={formData.agent_instruction || ''}
+                    onChange={(e) => setFormData({ ...formData, agent_instruction: e.target.value })}
+                    placeholder="e.g. Log in to the Google account your agent will use to send and read emails on behalf of your organization."
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Shown to org admins below the connector name in the AI Agent → Connectors tab. Leave empty for connectors that need no explanation (e.g. "No additional configuration needed").
+                  </p>
+                </div>
+              </CardContent>
+            </Card>
+
           </TabsContent>
 
           <div className="mt-6 flex gap-4">

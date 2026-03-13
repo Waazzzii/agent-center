@@ -17,7 +17,7 @@ interface ConfirmDialogProps {
   onOpenChange: (open: boolean) => void;
   onConfirm: () => void;
   title?: string;
-  description?: string;
+  description?: React.ReactNode;
   confirmText?: string;
   cancelText?: string;
   variant?: 'default' | 'destructive';
@@ -50,8 +50,10 @@ export function ConfirmDialog({
             )}
             <DialogTitle className="text-left">{title}</DialogTitle>
           </div>
-          <DialogDescription className="text-left pt-2">
-            {description}
+          <DialogDescription asChild>
+            <div className="text-muted-foreground text-sm text-left pt-2">
+              {description}
+            </div>
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="gap-2 sm:gap-2">
@@ -77,7 +79,7 @@ export function ConfirmDialog({
 
 interface UseConfirmDialogOptions {
   title?: string;
-  description?: string;
+  description?: React.ReactNode;
   confirmText?: string;
   cancelText?: string;
   variant?: 'default' | 'destructive';

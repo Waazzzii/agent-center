@@ -2,17 +2,18 @@
 
 import { use, useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import {
   getAgent, updateAgent, deleteAgent,
   createAction, updateAction, deleteAction, reorderActions,
-  createTrigger, updateTrigger, deleteTrigger,
-  generateWebhookKey, listWebhookKeys, revokeWebhookKey,
-  getPendingHitl, approveHitl, denyHitl,
-  getExecutionHistory,
-  type AgentDetail, type AgentAction, type AgentTrigger, type AgentWebhookKey, type AgentHitlItem,
+  createTrigger, deleteTrigger,
+  generateWebhookKey, getWebhookKey,
+  getApprovals, runAgent,
+  type AgentDetail, type AgentAction, type AgentTrigger, type AgentWebhookKey,
 } from '@/lib/api/agents';
 import { getConnectors } from '@/lib/api/connectors';
+import { getSkills, type Skill } from '@/lib/api/skills';
 import type { OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,13 +23,10 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Checkbox } from '@/components/ui/checkbox';
-import { Switch } from '@/components/ui/switch';
-import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { ArrowLeft, Plus, Pencil, Trash2, Copy, RefreshCw, CheckCircle, XCircle, ChevronDown, ChevronUp, Webhook, Clock, Play, Link2 } from 'lucide-react';
+import { ArrowLeft, Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical, Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Search } from 'lucide-react';
+import { cn } from '@/lib/utils';
 
 // ─── Cron description helper ──────────────────────────────────
 
@@ -111,6 +109,116 @@ function nextFirings(expr: string, count = 3): string[] {
   return results;
 }
 
+// ─── Multi-select picker ──────────────────────────────────────
+
+interface PickerOption { id: string; label: string; subLabel?: string }
+
+function MultiSelectPicker({
+  label,
+  description,
+  addLabel,
+  options,
+  selectedIds,
+  onAdd,
+  onRemove,
+  pillClass,
+}: {
+  label: string;
+  description?: string;
+  addLabel: string;
+  options: PickerOption[];
+  selectedIds: string[];
+  onAdd: (id: string) => void;
+  onRemove: (id: string) => void;
+  pillClass?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState('');
+
+  const selected = options.filter((o) => selectedIds.includes(o.id));
+  const unselected = options.filter((o) => !selectedIds.includes(o.id));
+  const filtered = unselected.filter((o) =>
+    o.label.toLowerCase().includes(search.toLowerCase()) ||
+    (o.subLabel ?? '').toLowerCase().includes(search.toLowerCase())
+  );
+
+  const pillBase = 'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium';
+
+  return (
+    <div className="space-y-1.5">
+      <Label>{label}</Label>
+      {description && <p className="text-xs text-muted-foreground">{description}</p>}
+
+      {/* Pills + Add button on the same row */}
+      <div className="flex flex-wrap gap-1.5 items-center">
+        {selected.map((item) => (
+          <span key={item.id} className={cn(pillBase, pillClass ?? 'bg-secondary text-secondary-foreground border-border')}>
+            {item.label}
+            <button type="button" onClick={() => onRemove(item.id)} className="rounded-sm opacity-60 hover:opacity-100 transition-opacity">
+              <X className="h-3 w-3" />
+            </button>
+          </span>
+        ))}
+
+        {unselected.length > 0 && !open && (
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className={cn(pillBase, 'border-dashed text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-colors cursor-pointer bg-transparent')}
+          >
+            <Plus className="h-3 w-3" />{addLabel}
+          </button>
+        )}
+
+        {options.length === 0 && (
+          <p className="text-xs text-muted-foreground italic">No {label.toLowerCase()} available.</p>
+        )}
+      </div>
+
+      {/* Search dropdown — shown below when open */}
+      {open && (
+        <div className="rounded-md border shadow-sm bg-background">
+          <div className="flex items-center border-b px-2 gap-1.5">
+            <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+            <input
+              autoFocus
+              placeholder="Search…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') { setOpen(false); setSearch(''); } }}
+              className="flex-1 bg-transparent py-2 text-xs outline-none placeholder:text-muted-foreground"
+            />
+            <button type="button" onClick={() => { setOpen(false); setSearch(''); }}>
+              <X className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
+            </button>
+          </div>
+          <div className="max-h-44 overflow-y-auto">
+            {filtered.length === 0 ? (
+              <p className="px-3 py-2.5 text-xs text-muted-foreground">No matches</p>
+            ) : (
+              filtered.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  className="w-full text-left px-3 py-2 text-xs hover:bg-muted transition-colors flex items-baseline gap-1.5"
+                  onClick={() => {
+                    onAdd(item.id);
+                    setSearch('');
+                    if (filtered.length <= 1) { setOpen(false); }
+                  }}
+                >
+                  <span className="font-medium">{item.label}</span>
+                  {item.subLabel && <span className="text-muted-foreground truncate">{item.subLabel}</span>}
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────
 
 export default function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -122,30 +230,38 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [actions, setActions] = useState<AgentAction[]>([]);
   const [triggers, setTriggers] = useState<AgentTrigger[]>([]);
-  const [hitlItems, setHitlItems] = useState<AgentHitlItem[]>([]);
-  const [history, setHistory] = useState<any[]>([]);
+  const [pendingHitlCount, setPendingHitlCount] = useState(0);
   const [connectors, setConnectors] = useState<OrganizationConnector[]>([]);
-  const [webhookKeys, setWebhookKeys] = useState<Record<string, AgentWebhookKey[]>>({});
+  const [skills, setSkills] = useState<Skill[]>([]);
+  const [webhookKey, setWebhookKey] = useState<AgentWebhookKey | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Action dialog
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [editingAction, setEditingAction] = useState<AgentAction | null>(null);
-  const [actionForm, setActionForm] = useState({ name: '', action_type: 'prompt' as 'prompt' | 'hitl', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], hitl_instructions: '' });
+  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '' });
   const [savingAction, setSavingAction] = useState(false);
 
   // Trigger dialog
   const [triggerDialogOpen, setTriggerDialogOpen] = useState(false);
-  const [triggerForm, setTriggerForm] = useState({ trigger_type: 'manual' as string, cron_expr: '0 9 * * *', description: '' });
+  const [triggerForm, setTriggerForm] = useState({ trigger_type: 'webhook' as string, cron_expr: '0 9 * * *', description: '' });
   const [savingTrigger, setSavingTrigger] = useState(false);
 
   // Generated webhook key reveal
   const [newRawKey, setNewRawKey] = useState<string | null>(null);
 
+  // Drag-and-drop reorder state
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [dropIndex, setDropIndex] = useState<number | null>(null);
+
+  // Manual run
+  const [runningAgent, setRunningAgent] = useState(false);
+
   // Agent edit
   const [editingAgent, setEditingAgent] = useState(false);
   const [agentName, setAgentName] = useState('');
   const [agentDesc, setAgentDesc] = useState('');
+  const [agentActive, setAgentActive] = useState(true);
 
   useEffect(() => {
     if (selectedOrgId && agentId) loadAll();
@@ -156,18 +272,28 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      const [agentData, connData, hitlData] = await Promise.all([
+      let [agentData, connData, hitlData, skillsData] = await Promise.all([
         getAgent(selectedOrgId, agentId),
         getConnectors(selectedOrgId),
-        getPendingHitl(selectedOrgId),
+        getApprovals(selectedOrgId),
+        getSkills(selectedOrgId),
       ]);
+      // Ensure a manual trigger always exists as the default fallback
+      if (agentData.triggers.length === 0) {
+        await createTrigger(selectedOrgId, agentId, { trigger_type: 'manual' });
+        agentData = await getAgent(selectedOrgId, agentId);
+      }
       setAgent(agentData);
       setAgentName(agentData.name);
       setAgentDesc(agentData.description ?? '');
+      setAgentActive(agentData.is_active);
       setActions(agentData.actions.sort((a, b) => a.order_index - b.order_index));
       setTriggers(agentData.triggers);
+      const webhookTrigger = agentData.triggers.find((t) => t.trigger_type === 'webhook');
+      if (webhookTrigger) loadWebhookKey(webhookTrigger.id);
       setConnectors(connData.connectors);
-      setHitlItems(hitlData.items.filter((h) => h.agent_id === agentId));
+      setSkills(skillsData.skills.filter((s) => s.is_active));
+      setPendingHitlCount(hitlData.items.filter((h) => h.agent_id === agentId && h.status === 'awaiting_approval').length);
     } catch (err: any) {
       toast.error('Failed to load agent');
       router.push('/agents');
@@ -176,21 +302,11 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     }
   }, [selectedOrgId, agentId, router]);
 
-  const loadHistory = async () => {
+  const loadWebhookKey = async (triggerId: string) => {
     if (!selectedOrgId) return;
     try {
-      const data = await getExecutionHistory(selectedOrgId, { agent_id: agentId });
-      setHistory(data.runs ?? []);
-    } catch {
-      setHistory([]);
-    }
-  };
-
-  const loadWebhookKeys = async (triggerId: string) => {
-    if (!selectedOrgId) return;
-    try {
-      const keys = await listWebhookKeys(selectedOrgId, agentId, triggerId);
-      setWebhookKeys((prev) => ({ ...prev, [triggerId]: keys }));
+      const key = await getWebhookKey(selectedOrgId, agentId, triggerId);
+      setWebhookKey(key);
     } catch { /* silent */ }
   };
 
@@ -198,7 +314,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   const openNewAction = () => {
     setEditingAction(null);
-    setActionForm({ name: '', action_type: 'prompt', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], hitl_instructions: '' });
+    setActionForm({ name: '', action_type: 'agent', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '' });
     setActionDialogOpen(true);
   };
 
@@ -210,7 +326,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       prompt: action.prompt ?? '',
       model: action.model ?? 'claude-sonnet-4-6',
       connector_ids: action.connector_ids ?? [],
-      hitl_instructions: action.hitl_instructions ?? '',
+      skill_ids: action.skill_ids ?? [],
+      approval_instructions: action.approval_instructions ?? '',
     });
     setActionDialogOpen(true);
   };
@@ -222,12 +339,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       const payload = {
         name: actionForm.name.trim(),
         action_type: actionForm.action_type,
-        ...(actionForm.action_type === 'prompt' ? {
+        ...(actionForm.action_type === 'agent' ? {
           prompt: actionForm.prompt.trim(),
           model: actionForm.model,
           connector_ids: actionForm.connector_ids,
+          skill_ids: actionForm.skill_ids,
         } : {
-          hitl_instructions: actionForm.hitl_instructions.trim(),
+          approval_instructions: actionForm.approval_instructions.trim(),
         }),
       };
       if (editingAction) {
@@ -259,21 +377,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
-  const moveAction = async (index: number, direction: 'up' | 'down') => {
-    if (!selectedOrgId) return;
-    const newActions = [...actions];
-    const swapIdx = direction === 'up' ? index - 1 : index + 1;
-    if (swapIdx < 0 || swapIdx >= newActions.length) return;
-    [newActions[index], newActions[swapIdx]] = [newActions[swapIdx]!, newActions[index]!];
-    setActions(newActions);
-    try {
-      await reorderActions(selectedOrgId, agentId, newActions.map((a) => a.id));
-    } catch (err: any) {
-      toast.error('Reorder failed');
-      await loadAll();
-    }
-  };
-
   // ── Triggers ──
 
   const handleSaveTrigger = async () => {
@@ -283,10 +386,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       const config: Record<string, unknown> = {};
       if (triggerForm.trigger_type === 'cron') config.cron_expr = triggerForm.cron_expr;
       if (triggerForm.description) config.description = triggerForm.description;
-      await createTrigger(selectedOrgId, agentId, { trigger_type: triggerForm.trigger_type, config });
+      const trigger = await createTrigger(selectedOrgId, agentId, { trigger_type: triggerForm.trigger_type, config });
       toast.success('Trigger created');
       setTriggerDialogOpen(false);
       await loadAll();
+      // Webhook triggers require a key — generate and reveal it immediately
+      if (trigger.trigger_type === 'webhook') {
+        const keyResult = await generateWebhookKey(selectedOrgId, agentId, trigger.id);
+        setWebhookKey(keyResult.key);
+        setNewRawKey(keyResult.raw_key);
+      }
     } catch (err: any) {
       toast.error(err.response?.data?.message || err.message || 'Failed to create trigger');
     } finally {
@@ -296,24 +405,32 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   const handleDeleteTrigger = async (triggerId: string) => {
     if (!selectedOrgId) return;
-    const confirmed = await confirm({ title: 'Delete Trigger', description: 'Delete this trigger?', confirmText: 'Delete', cancelText: 'Cancel', variant: 'destructive' });
+    const deletedTrigger = triggers.find(t => t.id === triggerId);
+    const confirmed = await confirm({ title: 'Remove Trigger', description: 'Remove this trigger? The agent will fall back to Manual Only.', confirmText: 'Remove', cancelText: 'Cancel', variant: 'destructive' });
     if (!confirmed) return;
     try {
       await deleteTrigger(selectedOrgId, agentId, triggerId);
-      toast.success('Trigger deleted');
+      // Always ensure a manual trigger exists as the fallback
+      if (deletedTrigger?.trigger_type !== 'manual') {
+        await createTrigger(selectedOrgId, agentId, { trigger_type: 'manual' });
+      }
+      toast.success('Trigger removed — defaulted to Manual Only');
       await loadAll();
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete trigger');
+      toast.error(err.message || 'Failed to remove trigger');
     }
   };
 
-  const handleToggleTrigger = async (trigger: AgentTrigger) => {
+  const handleRunAgent = async () => {
     if (!selectedOrgId) return;
     try {
-      await updateTrigger(selectedOrgId, agentId, trigger.id, { is_active: !trigger.is_active });
-      await loadAll();
+      setRunningAgent(true);
+      await runAgent(selectedOrgId, agentId);
+      toast.success('Agent run started — execution will be logged as Manual');
     } catch (err: any) {
-      toast.error(err.message || 'Failed to toggle trigger');
+      toast.error(err.response?.data?.message || err.message || 'Failed to run agent');
+    } finally {
+      setRunningAgent(false);
     }
   };
 
@@ -321,49 +438,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       const result = await generateWebhookKey(selectedOrgId, agentId, triggerId);
-      setNewRawKey(result.rawKey);
-      await loadWebhookKeys(triggerId);
+      setNewRawKey(result.raw_key);
+      setWebhookKey(result.key);
     } catch (err: any) {
       toast.error(err.message || 'Failed to generate key');
-    }
-  };
-
-  const handleRevokeKey = async (triggerId: string, keyId: string) => {
-    if (!selectedOrgId) return;
-    const confirmed = await confirm({ title: 'Revoke Key', description: 'Revoke this webhook key? It will stop working immediately.', confirmText: 'Revoke', cancelText: 'Cancel', variant: 'destructive' });
-    if (!confirmed) return;
-    try {
-      await revokeWebhookKey(selectedOrgId, agentId, triggerId, keyId);
-      toast.success('Key revoked');
-      await loadWebhookKeys(triggerId);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to revoke key');
-    }
-  };
-
-  // ── HITL ──
-
-  const handleApprove = async (hitlId: string) => {
-    if (!selectedOrgId) return;
-    try {
-      await approveHitl(selectedOrgId, hitlId);
-      toast.success('Approved — agent will resume');
-      await loadAll();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to approve');
-    }
-  };
-
-  const handleDeny = async (hitlId: string) => {
-    if (!selectedOrgId) return;
-    const confirmed = await confirm({ title: 'Deny Approval', description: 'Deny this approval request? The agent execution will stop.', confirmText: 'Deny', cancelText: 'Cancel', variant: 'destructive' });
-    if (!confirmed) return;
-    try {
-      await denyHitl(selectedOrgId, hitlId);
-      toast.success('Denied — agent execution stopped');
-      await loadAll();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to deny');
     }
   };
 
@@ -372,7 +450,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const handleSaveAgent = async () => {
     if (!selectedOrgId) return;
     try {
-      await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined });
+      await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined, is_active: agentActive });
       toast.success('Agent updated');
       setEditingAgent(false);
       await loadAll();
@@ -381,8 +459,28 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
-  const triggerIcon = { webhook: <Webhook className="h-4 w-4" />, cron: <Clock className="h-4 w-4" />, manual: <Play className="h-4 w-4" />, hitl: <Link2 className="h-4 w-4" /> };
-  const triggerLabel = { webhook: 'Webhook', cron: 'Cron Schedule', manual: 'Manual', hitl: 'After HITL Complete' };
+  const triggerIcon = { webhook: <Webhook className="h-4 w-4" />, cron: <Clock className="h-4 w-4" />, manual: <Play className="h-4 w-4" /> };
+  const triggerLabel = { webhook: 'Webhook', cron: 'Cron Schedule', manual: 'Manual Only' };
+
+  // Only one trigger is supported in the UI
+  // Prefer webhook/cron over manual — manual is just the fallback
+  const trigger = triggers.find(t => t.trigger_type !== 'manual') ?? triggers.find(t => t.trigger_type === 'manual') ?? null;
+
+  const handleDropAction = async (dropIdx: number) => {
+    if (dragIndex === null || dragIndex === dropIdx) return;
+    const newActions = [...actions];
+    const [dragged] = newActions.splice(dragIndex, 1);
+    newActions.splice(dropIdx, 0, dragged!);
+    setActions(newActions);
+    setDragIndex(null);
+    setDropIndex(null);
+    try {
+      await reorderActions(selectedOrgId!, agentId, newActions.map((a) => a.id));
+    } catch {
+      toast.error('Reorder failed');
+      await loadAll();
+    }
+  };
 
   if (loading || !agent) {
     return (
@@ -395,223 +493,245 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-4">
-        <Button variant="ghost" size="sm" onClick={() => router.push('/agents')}>
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="sm" onClick={() => router.push('/agents')} className="shrink-0 mt-0.5">
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
-        <div className="flex-1">
-          {editingAgent ? (
-            <div className="flex items-center gap-2">
-              <Input value={agentName} onChange={(e) => setAgentName(e.target.value)} className="text-xl font-bold h-auto py-1 max-w-xs" />
-              <Button size="sm" onClick={handleSaveAgent} disabled={!agentName.trim()}>Save</Button>
-              <Button size="sm" variant="outline" onClick={() => { setEditingAgent(false); setAgentName(agent.name); setAgentDesc(agent.description ?? ''); }}>Cancel</Button>
-            </div>
-          ) : (
-            <div className="flex items-center gap-2">
+
+        <div className="flex-1 min-w-0">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-bold">{agent.name}</h1>
               <Badge variant={agent.is_active ? 'default' : 'secondary'}>{agent.is_active ? 'Active' : 'Inactive'}</Badge>
-              <Button variant="ghost" size="sm" onClick={() => setEditingAgent(true)}><Pencil className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditingAgent(true)}>
+                <Pencil className="h-3.5 w-3.5" />
+              </Button>
             </div>
-          )}
-          {!editingAgent && agent.description && <p className="text-sm text-muted-foreground">{agent.description}</p>}
+            {agent.description && <p className="text-sm text-muted-foreground mt-0.5">{agent.description}</p>}
+          </div>
+        </div>
+
+        {/* Quick links — top right */}
+        <div className="flex items-center gap-2 shrink-0">
+          <Button
+            variant="outline"
+            size="sm"
+            className="h-8 text-xs gap-1.5"
+            disabled={runningAgent || !agent.is_active}
+            onClick={handleRunAgent}
+            title="Runs the agent manually — logged as Manual trigger"
+          >
+            {runningAgent
+              ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
+              : <PlayCircle className="h-3.5 w-3.5 text-green-600" />}
+            Run Now
+          </Button>
+          <Link
+            href="/approvals"
+            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted/50 transition-colors"
+          >
+            <CheckCircle2 className="h-3.5 w-3.5 text-orange-500" />
+            View Approvals
+            {pendingHitlCount > 0 && (
+              <Badge variant="destructive" className="ml-0.5 h-4 px-1 text-xs">{pendingHitlCount}</Badge>
+            )}
+          </Link>
+          <Link
+            href={`/agent-history?agent_id=${agentId}`}
+            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted/50 transition-colors"
+          >
+            <History className="h-3.5 w-3.5 text-muted-foreground" />
+            History
+          </Link>
         </div>
       </div>
 
-      <Tabs defaultValue="actions">
-        <TabsList>
-          <TabsTrigger value="actions">Actions ({actions.length})</TabsTrigger>
-          <TabsTrigger value="triggers">Triggers ({triggers.length})</TabsTrigger>
-          <TabsTrigger value="hitl">HITL Approvals {hitlItems.filter(h => h.status === 'pending').length > 0 && <Badge variant="destructive" className="ml-1 text-xs">{hitlItems.filter(h => h.status === 'pending').length}</Badge>}</TabsTrigger>
-          <TabsTrigger value="history" onClick={loadHistory}>History</TabsTrigger>
-        </TabsList>
+      {/* ── Workflow Builder ─────────────────────────────────── */}
+      <div className="max-w-2xl space-y-0">
 
-        {/* ── Actions Tab ─────────────────────────────────────── */}
-        <TabsContent value="actions" className="mt-4 space-y-4">
-          <div className="flex justify-end">
-            <Button size="sm" onClick={openNewAction}><Plus className="mr-2 h-4 w-4" />Add Action</Button>
-          </div>
-          {actions.length === 0 ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground">No actions yet. Add one to build your agent workflow.</CardContent></Card>
+        {/* Trigger */}
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-2 px-1">Trigger</p>
+          {trigger ? (
+            <Card className="border-primary/40 bg-primary/5 dark:bg-primary/10">
+              <CardContent className="py-3 px-4">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-lg bg-primary/15 text-primary mt-0.5 shrink-0">
+                    {triggerIcon[trigger.trigger_type as keyof typeof triggerIcon]}
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-sm">{triggerLabel[trigger.trigger_type as keyof typeof triggerLabel]}</span>
+                    </div>
+                    {trigger.trigger_type === 'manual' && (
+                      <div className="mt-1.5 space-y-2">
+                        <p className="text-xs text-muted-foreground">This agent can only be run manually. Manual executions are always available regardless of trigger type — add a Webhook or Cron trigger to also automate runs.</p>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setTriggerDialogOpen(true)}>
+                          <Plus className="mr-1.5 h-3 w-3" />Add Webhook or Cron trigger
+                        </Button>
+                      </div>
+                    )}
+                    {trigger.trigger_type === 'cron' && (
+                      <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
+                        <code className="bg-background border px-1.5 py-0.5 rounded font-mono">{String(trigger.config.cron_expr ?? '')}</code>
+                        <span>{describeCron(String(trigger.config.cron_expr ?? ''))}</span>
+                      </p>
+                    )}
+                    {trigger.trigger_type === 'webhook' && (
+                      <div className="mt-2 space-y-3">
+                        {/* URL */}
+                        <div className="flex items-center gap-2">
+                          <code className="text-xs bg-background border px-2 py-1 rounded flex-1 truncate font-mono">
+                            {`https://api.wazzi.io/webhooks/agents/${trigger.id}`}
+                          </code>
+                          <Button variant="outline" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => { navigator.clipboard.writeText(`https://api.wazzi.io/webhooks/agents/${trigger.id}`); toast.success('URL copied'); }}>
+                            <Copy className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        {/* Call instructions */}
+                        <div className="rounded-md bg-muted/60 border px-3 py-2 space-y-1.5">
+                          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">How to trigger</p>
+                          <pre className="text-xs text-foreground whitespace-pre-wrap break-all leading-relaxed">{`POST https://api.wazzi.io/webhooks/agents/${trigger.id}\nX-Wazzi-Key: <your-api-key>`}</pre>
+                          <p className="text-xs text-muted-foreground">Optionally pass a JSON body — it will be available as the initial input to the first action.</p>
+                        </div>
+                        {/* Key management */}
+                        <div className="space-y-1.5">
+                          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">API Key</p>
+                          <div className="flex items-center gap-2 text-xs">
+                            <code className="bg-background border px-2 py-1 rounded font-mono flex-1">
+                              {webhookKey ? <>{webhookKey.key_prefix}… <span className="text-muted-foreground">(created {new Date(webhookKey.created_at).toLocaleDateString()})</span></> : <span className="text-muted-foreground">Loading…</span>}
+                            </code>
+                            <Button variant="outline" size="sm" className="h-6 text-xs px-2 shrink-0" onClick={() => handleGenerateKey(trigger.id)}>
+                              <RefreshCw className="mr-1 h-3 w-3" />Regenerate
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  {trigger.trigger_type !== 'manual' && (
+                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => handleDeleteTrigger(trigger.id)}>
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
           ) : (
-            <div className="space-y-2">
+            <Card className="border-dashed border-2 border-primary/30 hover:border-primary/50 transition-colors">
+              <CardContent className="py-6 flex flex-col items-center gap-3">
+                <div className="p-3 rounded-full bg-muted">
+                  <Play className="h-5 w-5 text-muted-foreground" />
+                </div>
+                <div className="text-center">
+                  <p className="text-sm font-medium">No trigger set</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Choose how this agent is initiated</p>
+                </div>
+                <Button size="sm" onClick={() => setTriggerDialogOpen(true)}>
+                  <Plus className="mr-1.5 h-3.5 w-3.5" />Select Trigger
+                </Button>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+
+        {/* Connector: trigger → actions */}
+        <div className="flex justify-center py-1">
+          <div className="flex flex-col items-center">
+            <div className="w-px h-5 bg-border" />
+            <ArrowDown className="h-3.5 w-3.5 text-muted-foreground -mt-px" />
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div>
+          <div className="flex items-center justify-between mb-2 px-1">
+            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Actions</p>
+            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={openNewAction}>
+              <Plus className="mr-1.5 h-3.5 w-3.5" />Add Action
+            </Button>
+          </div>
+
+          {actions.length === 0 ? (
+            <Card className="border-dashed border-2">
+              <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                No actions yet. Add one to build your workflow.
+              </CardContent>
+            </Card>
+          ) : (
+            <div>
               {actions.map((action, idx) => (
                 <div key={action.id}>
-                  <Card className="group">
-                    <CardContent className="py-3 px-4">
-                      <div className="flex items-start gap-3">
-                        <div className="flex flex-col gap-1 pt-1">
-                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => moveAction(idx, 'up')} disabled={idx === 0}><ChevronUp className="h-3 w-3" /></Button>
-                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" onClick={() => moveAction(idx, 'down')} disabled={idx === actions.length - 1}><ChevronDown className="h-3 w-3" /></Button>
+                  <Card
+                    className={cn(
+                      'group transition-all duration-150 cursor-default',
+                      dragIndex === idx && 'opacity-40 scale-[0.98]',
+                      dropIndex === idx && dragIndex !== idx && 'ring-2 ring-primary ring-offset-1',
+                    )}
+                    draggable
+                    onDragStart={() => setDragIndex(idx)}
+                    onDragOver={(e) => { e.preventDefault(); setDropIndex(idx); }}
+                    onDragEnd={() => { setDragIndex(null); setDropIndex(null); }}
+                    onDrop={() => handleDropAction(idx)}
+                  >
+                    <CardContent className="py-2.5 px-3">
+                      <div className="flex items-center gap-3">
+                        {/* Drag handle */}
+                        <div className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <GripVertical className="h-4 w-4" />
                         </div>
+                        {/* Step number */}
+                        <div className={cn(
+                          'w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm font-bold select-none',
+                          action.action_type === 'approval'
+                            ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                            : 'bg-primary/10 text-primary'
+                        )}>
+                          {idx + 1}
+                        </div>
+                        {/* Content */}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="text-xs text-muted-foreground font-mono">{idx + 1}</span>
-                            <span className="font-medium">{action.name}</span>
-                            <Badge variant={action.action_type === 'hitl' ? 'outline' : 'secondary'} className={action.action_type === 'hitl' ? 'border-orange-400 text-orange-600' : ''}>
-                              {action.action_type === 'hitl' ? 'HITL Gate' : 'Prompt'}
+                            <span className="font-medium text-sm">{action.name}</span>
+                            <Badge variant={action.action_type === 'approval' ? 'outline' : 'secondary'} className={cn('text-xs', action.action_type === 'approval' && 'border-orange-400 text-orange-600')}>
+                              {action.action_type === 'approval' ? 'Approval' : 'Agent'}
                             </Badge>
-                            {action.action_type === 'prompt' && action.connector_ids && action.connector_ids.length > 0 && (
-                              <Badge variant="outline">{action.connector_ids.length} connector{action.connector_ids.length !== 1 ? 's' : ''}</Badge>
+                            {action.action_type === 'agent' && action.connector_ids && action.connector_ids.length > 0 && (
+                              <Badge variant="outline" className="text-xs">{action.connector_ids.length} connector{action.connector_ids.length !== 1 ? 's' : ''}</Badge>
+                            )}
+                            {action.action_type === 'agent' && action.skill_ids && action.skill_ids.length > 0 && (
+                              <Badge variant="outline" className="text-xs border-purple-400 text-purple-600 dark:text-purple-400">{action.skill_ids.length} skill{action.skill_ids.length !== 1 ? 's' : ''}</Badge>
                             )}
                           </div>
-                          <p className="text-sm text-muted-foreground mt-1 truncate max-w-lg">
-                            {action.action_type === 'prompt' ? (action.prompt ?? '—') : (action.hitl_instructions ?? '—')}
+                          <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                            {action.action_type === 'agent' ? (action.prompt ?? '—') : (action.approval_instructions ?? '—')}
                           </p>
                         </div>
-                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                          <Button variant="ghost" size="sm" onClick={() => openEditAction(action)}><Pencil className="h-4 w-4" /></Button>
-                          <Button variant="ghost" size="sm" onClick={() => handleDeleteAction(action.id, action.name)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                        {/* Edit / Delete */}
+                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditAction(action)}>
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleDeleteAction(action.id, action.name)}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
                         </div>
                       </div>
                     </CardContent>
                   </Card>
                   {idx < actions.length - 1 && (
-                    <div className="flex justify-center py-1"><div className="h-5 w-0.5 bg-border" /></div>
+                    <div className="flex justify-center py-1">
+                      <div className="w-px h-4 bg-border" />
+                    </div>
                   )}
                 </div>
               ))}
             </div>
           )}
-        </TabsContent>
+        </div>
+      </div>
 
-        {/* ── Triggers Tab ────────────────────────────────────── */}
-        <TabsContent value="triggers" className="mt-4 space-y-4">
-          <div className="flex justify-end">
-            <Button size="sm" onClick={() => setTriggerDialogOpen(true)}><Plus className="mr-2 h-4 w-4" />Add Trigger</Button>
-          </div>
-          {triggers.length === 0 ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground">No triggers yet. Add one to control when this agent runs.</CardContent></Card>
-          ) : (
-            <div className="space-y-3">
-              {triggers.map((t) => (
-                <Card key={t.id}>
-                  <CardContent className="py-3 px-4">
-                    <div className="flex items-start gap-3">
-                      <div className="mt-1 text-muted-foreground">{triggerIcon[t.trigger_type]}</div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium">{triggerLabel[t.trigger_type]}</span>
-                          <Badge variant={t.is_active ? 'default' : 'secondary'}>{t.is_active ? 'Active' : 'Inactive'}</Badge>
-                        </div>
-                        {t.trigger_type === 'cron' && (
-                          <p className="text-sm text-muted-foreground mt-1">
-                            <code className="text-xs bg-muted px-1 py-0.5 rounded">{String(t.config.cron_expr ?? '')}</code>
-                            {' — '}{describeCron(String(t.config.cron_expr ?? ''))}
-                          </p>
-                        )}
-                        {t.trigger_type === 'webhook' && (
-                          <div className="mt-2 space-y-2">
-                            <div className="flex items-center gap-2">
-                              <code className="text-xs bg-muted px-2 py-1 rounded flex-1 truncate">
-                                {`https://api.wazzi.io/webhooks/agents/${t.id}`}
-                              </code>
-                              <Button variant="outline" size="sm" onClick={() => navigator.clipboard.writeText(`https://api.wazzi.io/webhooks/agents/${t.id}`)}>
-                                <Copy className="h-3 w-3" />
-                              </Button>
-                            </div>
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <Button variant="outline" size="sm" onClick={() => { loadWebhookKeys(t.id); handleGenerateKey(t.id); }}>
-                                <RefreshCw className="mr-1 h-3 w-3" />Generate API Key
-                              </Button>
-                            </div>
-                            {webhookKeys[t.id] && webhookKeys[t.id]!.length > 0 && (
-                              <div className="space-y-1">
-                                {webhookKeys[t.id]!.map((k) => (
-                                  <div key={k.id} className="flex items-center gap-2 text-xs">
-                                    <code className="bg-muted px-2 py-1 rounded">{k.key_prefix}…</code>
-                                    <span className="text-muted-foreground">{new Date(k.created_at).toLocaleDateString()}</span>
-                                    <Button variant="ghost" size="sm" className="h-6 text-xs text-destructive" onClick={() => handleRevokeKey(t.id, k.id)}>Revoke</Button>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        <Switch checked={t.is_active} onCheckedChange={() => handleToggleTrigger(t)} />
-                        <Button variant="ghost" size="sm" onClick={() => handleDeleteTrigger(t.id)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
-                      </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        {/* ── HITL Tab ─────────────────────────────────────────── */}
-        <TabsContent value="hitl" className="mt-4 space-y-4">
-          <div className="flex justify-end">
-            <Button variant="outline" size="sm" onClick={loadAll}><RefreshCw className="mr-2 h-4 w-4" />Refresh</Button>
-          </div>
-          {hitlItems.length === 0 ? (
-            <Card><CardContent className="py-12 text-center text-muted-foreground">No pending approvals.</CardContent></Card>
-          ) : (
-            <div className="space-y-3">
-              {hitlItems.map((h) => (
-                <Card key={h.id} className={h.status === 'pending' ? 'border-orange-300' : ''}>
-                  <CardContent className="py-3 px-4">
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium text-sm">{h.action_name ?? 'HITL Gate'}</span>
-                          <Badge variant={h.status === 'pending' ? 'outline' : h.status === 'approved' ? 'default' : 'secondary'} className={h.status === 'pending' ? 'border-orange-400 text-orange-600' : ''}>
-                            {h.status}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground">{new Date(h.created_at).toLocaleString()}</span>
-                        </div>
-                        {!!h.context.instructions && <p className="text-sm mt-1 text-muted-foreground">{String(h.context.instructions)}</p>}
-                        {!!h.context.previous_output && (
-                          <details className="mt-1">
-                            <summary className="text-xs text-muted-foreground cursor-pointer">Previous step output</summary>
-                            <pre className="text-xs bg-muted p-2 rounded mt-1 overflow-auto max-h-32">{String(h.context.previous_output).slice(0, 500)}</pre>
-                          </details>
-                        )}
-                      </div>
-                      {h.status === 'pending' && (
-                        <div className="flex gap-2 shrink-0">
-                          <Button size="sm" onClick={() => handleApprove(h.id)}><CheckCircle className="mr-1 h-4 w-4" />Approve</Button>
-                          <Button size="sm" variant="destructive" onClick={() => handleDeny(h.id)}><XCircle className="mr-1 h-4 w-4" />Deny</Button>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
-
-        {/* ── History Tab ──────────────────────────────────────── */}
-        <TabsContent value="history" className="mt-4">
-          {history.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center">
-                <p className="text-muted-foreground">No execution history found.</p>
-                <p className="text-xs text-muted-foreground mt-1">Requires LANGCHAIN_API_KEY to be configured.</p>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card>
-              <CardHeader><CardTitle>Execution History</CardTitle><CardDescription>Last 30 days from LangSmith</CardDescription></CardHeader>
-              <CardContent>
-                <div className="space-y-2">
-                  {history.map((run: any) => (
-                    <div key={run.id} className="flex items-center gap-3 py-2 border-b last:border-0">
-                      <Badge variant={run.status === 'success' ? 'default' : run.status === 'error' ? 'destructive' : 'secondary'}>{run.status}</Badge>
-                      <span className="text-sm font-medium flex-1">{run.name}</span>
-                      <span className="text-xs text-muted-foreground">{run.latency_ms ? `${(run.latency_ms / 1000).toFixed(1)}s` : '—'}</span>
-                      <span className="text-xs text-muted-foreground">{run.start_time ? new Date(run.start_time).toLocaleString() : '—'}</span>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
-      </Tabs>
 
       {/* ── Action Dialog ─────────────────────────────────────── */}
       <Dialog open={actionDialogOpen} onOpenChange={setActionDialogOpen}>
@@ -626,16 +746,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             </div>
             <div className="space-y-1">
               <Label>Type</Label>
-              <Select value={actionForm.action_type} onValueChange={(v) => setActionForm(f => ({ ...f, action_type: v as 'prompt' | 'hitl' }))}>
+              <Select value={actionForm.action_type} onValueChange={(v) => setActionForm(f => ({ ...f, action_type: v as 'agent' | 'approval' }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="prompt">Prompt Action</SelectItem>
-                  <SelectItem value="hitl">HITL Approval Gate</SelectItem>
+                  <SelectItem value="agent">Agent</SelectItem>
+                  <SelectItem value="approval">Approval</SelectItem>
                 </SelectContent>
               </Select>
             </div>
 
-            {actionForm.action_type === 'prompt' && (
+            {actionForm.action_type === 'agent' && (
               <>
                 <div className="space-y-1">
                   <Label>Prompt / Instructions <span className="text-destructive">*</span></Label>
@@ -652,41 +772,37 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </SelectContent>
                   </Select>
                 </div>
-                {connectors.length > 0 && (
-                  <div className="space-y-1">
-                    <Label>Connectors</Label>
-                    <div className="space-y-2 rounded-md border p-3 max-h-40 overflow-y-auto">
-                      {connectors.map((c) => (
-                        <div key={c.id} className="flex items-center gap-2">
-                          <Checkbox
-                            id={`conn-${c.id}`}
-                            checked={actionForm.connector_ids.includes(c.id)}
-                            onCheckedChange={(checked) => {
-                              setActionForm(f => ({
-                                ...f,
-                                connector_ids: checked ? [...f.connector_ids, c.id] : f.connector_ids.filter(id => id !== c.id),
-                              }));
-                            }}
-                          />
-                          <label htmlFor={`conn-${c.id}`} className="text-sm cursor-pointer">{(c as any).connector_name ?? c.id}</label>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                <MultiSelectPicker
+                  label="Connectors"
+                  addLabel="Add Connector"
+                  options={connectors.map((c) => ({ id: c.id, label: (c as any).connector_name ?? c.id }))}
+                  selectedIds={actionForm.connector_ids}
+                  onAdd={(id) => setActionForm((f) => ({ ...f, connector_ids: [...f.connector_ids, id] }))}
+                  onRemove={(id) => setActionForm((f) => ({ ...f, connector_ids: f.connector_ids.filter((x) => x !== id) }))}
+                />
+                <MultiSelectPicker
+                  label="Skills"
+                  description="Selected skills are combined and sent as the system prompt for this step."
+                  addLabel="Add Skill"
+                  options={skills.map((s) => ({ id: s.id, label: s.name, subLabel: s.description ?? undefined }))}
+                  selectedIds={actionForm.skill_ids}
+                  onAdd={(id) => setActionForm((f) => ({ ...f, skill_ids: [...f.skill_ids, id] }))}
+                  onRemove={(id) => setActionForm((f) => ({ ...f, skill_ids: f.skill_ids.filter((x) => x !== id) }))}
+                  pillClass="bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/30 dark:text-purple-400 dark:border-purple-800"
+                />
               </>
             )}
 
-            {actionForm.action_type === 'hitl' && (
+            {actionForm.action_type === 'approval' && (
               <div className="space-y-1">
                 <Label>Instructions for Approver</Label>
-                <Textarea placeholder="Describe what the approver needs to review and decide…" value={actionForm.hitl_instructions} onChange={(e) => setActionForm(f => ({ ...f, hitl_instructions: e.target.value }))} rows={4} className="text-sm" />
+                <Textarea placeholder="Describe what the approver needs to review and decide…" value={actionForm.approval_instructions} onChange={(e) => setActionForm(f => ({ ...f, approval_instructions: e.target.value }))} rows={4} className="text-sm" />
               </div>
             )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setActionDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSaveAction} disabled={savingAction || !actionForm.name.trim() || (actionForm.action_type === 'prompt' && !actionForm.prompt.trim())}>
+            <Button onClick={handleSaveAction} disabled={savingAction || !actionForm.name.trim() || (actionForm.action_type === 'agent' && !actionForm.prompt.trim())}>
               {savingAction ? 'Saving…' : editingAction ? 'Update' : 'Add Action'}
             </Button>
           </DialogFooter>
@@ -705,8 +821,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <SelectContent>
                   <SelectItem value="webhook">Webhook</SelectItem>
                   <SelectItem value="cron">Cron Schedule</SelectItem>
-                  <SelectItem value="manual">Manual</SelectItem>
-                  <SelectItem value="hitl">After HITL Complete</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -734,17 +848,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             )}
 
-            {triggerForm.trigger_type === 'manual' && (
-              <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-                Manual triggers can be fired from the agent detail page.
-              </div>
-            )}
-
-            {triggerForm.trigger_type === 'hitl_complete' && (
-              <div className="rounded-md bg-muted p-3 text-sm text-muted-foreground">
-                This agent will automatically continue after any HITL approval in its chain is completed.
-              </div>
-            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setTriggerDialogOpen(false)}>Cancel</Button>
@@ -755,12 +858,51 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         </DialogContent>
       </Dialog>
 
+      {/* ── Edit Agent Dialog ─────────────────────────────────── */}
+      <Dialog open={editingAgent} onOpenChange={(o) => { if (!o) { setEditingAgent(false); setAgentName(agent.name); setAgentDesc(agent.description ?? ''); setAgentActive(agent.is_active); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Agent</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Name <span className="text-destructive">*</span></Label>
+              <Input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Agent name" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Description</Label>
+              <Textarea value={agentDesc} onChange={(e) => setAgentDesc(e.target.value)} placeholder="Optional description…" rows={3} />
+            </div>
+            <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+              <div>
+                <p className="text-sm font-medium">Status</p>
+                <p className="text-xs text-muted-foreground">{agentActive ? 'Agent is active and will run triggers' : 'Agent is inactive and will not run'}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setAgentActive((v) => !v)}
+                className={cn(
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
+                  agentActive ? 'bg-primary' : 'bg-muted-foreground/30'
+                )}
+              >
+                <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentActive ? 'translate-x-5' : 'translate-x-0.5')} />
+              </button>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setEditingAgent(false); setAgentName(agent.name); setAgentDesc(agent.description ?? ''); setAgentActive(agent.is_active); }}>Cancel</Button>
+            <Button onClick={handleSaveAgent} disabled={!agentName.trim()}>Save Changes</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* ── Raw Key Reveal Dialog ─────────────────────────────── */}
       <Dialog open={!!newRawKey} onOpenChange={(o) => { if (!o) setNewRawKey(null); }}>
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>API Key Generated</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <div className="rounded-md bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive font-medium">
+            <div className="rounded-md bg-orange-50 border border-orange-200 p-3 text-sm text-orange-600 font-medium dark:bg-orange-950/30 dark:border-orange-800 dark:text-orange-400">
               ⚠ Copy this key now. It will not be shown again.
             </div>
             <div className="flex items-center gap-2">

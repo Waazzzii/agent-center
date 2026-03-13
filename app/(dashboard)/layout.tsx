@@ -11,7 +11,7 @@ import { getOrganizations } from '@/lib/api/organizations';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 import { usePermissionsSync } from '@/hooks/use-permissions-sync';
 import { cn } from '@/lib/utils';
-import { orgSettingsNavItems, firstPermittedHref } from '@/lib/nav';
+import { orgMainNavItems, firstPermittedHref } from '@/lib/nav';
 
 export default function DashboardLayout({
   children,
@@ -31,7 +31,7 @@ export default function DashboardLayout({
     if (!admin) {
       // Persist the intended destination so the callback can redirect there after login
       if (typeof window !== 'undefined') {
-        sessionStorage.setItem('post_login_redirect', pathname);
+        sessionStorage.setItem('post_login_redirect', window.location.pathname + window.location.search);
       }
       router.replace('/login');
       return;
@@ -47,11 +47,10 @@ export default function DashboardLayout({
           if (organizations.length > 0) {
             const firstOrg = organizations[0];
             switchToOrgAdminView(firstOrg.id, firstOrg.name);
-            // If the user is on a super-admin-only or root page, redirect to the first permitted settings nav item
-            // ENABLE_MAIN_NAV — swap orgSettingsNavItems back to orgMainNavItems to restore default landing page
+            // If the user is on a super-admin-only or root page, redirect to the first permitted main nav item
             if (pathname === '/organizations' || pathname === '/') {
               const bypass = isSuperAdmin() || isOrgAdmin();
-              const dest = firstPermittedHref(orgSettingsNavItems, bypass, hasPermission, firstOrg.id);
+              const dest = firstPermittedHref(orgMainNavItems, bypass, hasPermission, firstOrg.id);
               router.replace(dest ?? '/no-permission');
             }
             // Otherwise leave them on their intended page

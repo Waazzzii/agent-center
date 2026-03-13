@@ -69,7 +69,8 @@ export type FieldType =
   | 'select'
   | 'url'
   | 'email'
-  | 'password';
+  | 'password'
+  | 'oauth';
 
 export interface ConnectorSchemaField {
   key: string;                      // Field identifier (e.g., "api_key")
@@ -80,6 +81,8 @@ export interface ConnectorSchemaField {
   default?: string | number | boolean; // Default value
   placeholder?: string;             // Input placeholder text
   helpText?: string;                // Description/help text below field
+  /** OAuth provider — only relevant when type === 'oauth' */
+  provider?: 'google';
 
   // For 'select' type
   options?: Array<{
@@ -99,6 +102,7 @@ export interface ConnectorSchemaField {
 export interface ConnectorConfigSchema {
   fields: ConnectorSchemaField[];
   version?: string; // For future schema versioning
+  oauth?: boolean;  // True for connectors that use OAuth (e.g. Gmail)
 }
 
 // Base connector definition (catalog)
@@ -111,10 +115,21 @@ export interface Connector {
   documentation_url?: string;
   available_endpoints: string[];
   configuration_schema?: ConnectorConfigSchema;
+  /** How the agent authenticates with this connector */
+  agent_auth_type?: 'none' | 'google_oauth';
+  /** Instruction shown to org admins in the AI Agent → Connectors tab */
+  agent_instruction?: string | null;
   is_active: boolean;
   is_public: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export interface AgentAuthorizationStatus {
+  is_authorized: boolean;
+  authorized_by_email: string | null;
+  connected_at: string | null;
+  last_refreshed_at: string | null;
 }
 
 // Token health status enum
@@ -138,6 +153,12 @@ export interface OrganizationConnector {
     health_status?: TokenHealthStatus;  // Current health status
     // Note: Error details are in audit_log, not sent to frontend
   } | null;
+  /** How the agent authenticates with this connector */
+  agent_auth_type?: 'none' | 'google_oauth';
+  /** Instruction shown to org admins in the AI Agent → Connectors tab */
+  agent_instruction?: string | null;
+  /** Agent-specific OAuth state (oauth_connected, connected_email, token_expiry) */
+  agent_config: Record<string, any>;
   is_enabled: boolean;
   created_at: string;
   updated_at: string;
@@ -264,6 +285,8 @@ export interface CreateConnectorDto {
   documentation_url?: string;
   available_endpoints?: string[];
   configuration_schema?: ConnectorConfigSchema;
+  agent_auth_type?: 'none' | 'google_oauth';
+  agent_instruction?: string;
   is_active?: boolean;
   is_public?: boolean;
 }
@@ -276,6 +299,8 @@ export interface UpdateConnectorDto {
   documentation_url?: string;
   available_endpoints?: string[];
   configuration_schema?: ConnectorConfigSchema;
+  agent_auth_type?: 'none' | 'google_oauth';
+  agent_instruction?: string;
   is_active?: boolean;
   is_public?: boolean;
 }
