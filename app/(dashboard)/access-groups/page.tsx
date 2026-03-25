@@ -294,8 +294,8 @@ export default function AccessGroupsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-semibold">Access Groups</h1>
-          <p className="text-sm text-muted-foreground mt-1">
+          <h1 className="text-3xl font-bold">Access Groups</h1>
+          <p className="text-muted-foreground">
             Permission presets scoped to a functional category — assign multiple groups per user.
           </p>
         </div>

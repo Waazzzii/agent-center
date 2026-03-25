@@ -93,8 +93,8 @@ export default function AgentsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Agentic Workflows</h1>
-          <p className="text-sm text-muted-foreground">Automated workflows powered by LLMs and your connected systems</p>
+          <h1 className="text-3xl font-bold">Agentic Workflows</h1>
+          <p className="text-muted-foreground">Automated workflows powered by LLMs and your connected systems</p>
         </div>
         <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/agents/create')}>
           <Plus className="mr-2 h-4 w-4" />

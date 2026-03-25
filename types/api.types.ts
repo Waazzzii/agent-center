@@ -349,12 +349,12 @@ export interface APIError {
 }
 
 // ============================================================================
-// Knowledge Base settings — mirrors the `kb` table (one instance per org)
+// Product settings — shared across all products (kb, ac, etc.)
 // ============================================================================
 
 export type DomainProvisioningStatus = 'verifying' | 'active' | 'failed';
 
-/** Provider-agnostic provisioning config stored in kb.auto_domain_config / custom_domain_config */
+/** Provider-agnostic provisioning config stored in organization_products.auto_domain_config / custom_domain_config */
 export interface DomainConfig {
   status?: DomainProvisioningStatus;
   status_updated_at?: string;
@@ -371,51 +371,44 @@ export interface DomainConfig {
   };
 }
 
-export interface KbOrgSettings {
+/** Shared fields from organization_products — common to all products */
+export interface OrgProductSettings {
   id: string;
   organization_id: string;
   is_enabled: boolean;
-  /** Display name shown to visitors — falls back to org name if not set */
   name: string | null;
-  /** Auto-generated: "{org_slug}-kb.wazzi.io" — always available, never removed */
-  auto_domain: string;
-  /** Optional custom domain entered by the org admin */
+  auto_domain: string | null;
   custom_domain: string | null;
-  /** Provisioning state for the auto-assigned domain */
   auto_domain_config: DomainConfig;
-  /** Provisioning state for the custom domain (DNS is user-managed) */
   custom_domain_config: DomainConfig;
-  /** Which of the 4 standard portals are enabled for this KB instance */
-  vendor_enabled: boolean;
-  internal_enabled: boolean;
-  owner_enabled: boolean;
-  guest_enabled: boolean;
-  /** Custom CSS injected into the portal <head> to override CSS variables */
   custom_theme: string | null;
-  /** GCS object path of the uploaded logo, null if no logo has been set */
   logo_storage_path: string | null;
+  favicon_storage_path: string | null;
   created_at: string;
   updated_at: string;
 }
 
-/** Shape returned by POST /provision-domain */
-export interface ProvisionDomainResult {
-  domain: string;
-  domain_type: 'wazzi' | 'custom';
-  cname_target: string;
-  dns_instructions: {
-    type: 'CNAME';
-    name: string;
-    value: string;
-    auto_provisioned: boolean;
-    note: string;
-  };
-  provisioning: {
-    vercel: { registered: boolean; error?: string };
-    dns?: { cname_active: boolean; record_id?: string; error?: string };
-  };
-  vercel_status: Record<string, unknown> | null;
-  settings: KbOrgSettings;
+/** KB settings — shared product fields, no extra KB-specific fields anymore */
+export type KbOrgSettings = OrgProductSettings;
+
+/** Admin Center settings — same shared fields, no portal flags */
+export type CenterOrgSettings = OrgProductSettings;
+
+export interface KbPortal {
+  id: string;
+  organization_id: string;
+  name: string;
+  slug: string;
+  access_level: 'public' | 'public_noindex' | 'authenticated';
+  default_language: string;
+  supported_languages: string[];
+  description: string | null;
+  seo_crawlable: boolean;
+  header_cta_label: string | null;
+  header_cta_url: string | null;
+  enabled: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 /** Live Vercel domain verification status (returned alongside settings) */

@@ -7,8 +7,8 @@ export default function UsageReportsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Usage Reports</h1>
-        <p className="text-sm text-muted-foreground mt-1">Monitor API usage, connector activity, and user statistics</p>
+        <h1 className="text-3xl font-bold">Usage Reports</h1>
+        <p className="text-muted-foreground">Monitor API usage, connector activity, and user statistics</p>
       </div>
 
       <Card>

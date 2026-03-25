@@ -164,8 +164,8 @@ export default function SkillsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Skills</h1>
-          <p className="text-sm text-muted-foreground">Reusable prompt instructions synced with the Anthropic Prompt Library</p>
+          <h1 className="text-3xl font-bold">Skills</h1>
+          <p className="text-muted-foreground">Reusable prompt instructions synced with the Anthropic Prompt Library</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined}>

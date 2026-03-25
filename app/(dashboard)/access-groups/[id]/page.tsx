@@ -575,7 +575,7 @@ export default function AccessGroupDetailPage() {
             <ChevronLeft className="h-5 w-5" />
           </Button>
           <ShieldCheck className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-2xl font-semibold">{name || accessGroup.name}</h1>
+          <h1 className="text-3xl font-bold">{name || accessGroup.name}</h1>
         </div>
         <Button
           variant="destructive"

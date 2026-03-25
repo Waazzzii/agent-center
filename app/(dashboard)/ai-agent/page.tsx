@@ -207,8 +207,8 @@ export default function AiAgentPage() {
   if (!permitted) return <NoPermissionContent />;
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6">
+    <div className="space-y-6">
+      <div>
         <h1 className="text-3xl font-bold">AI Agent</h1>
         <p className="text-muted-foreground">Manage AI Agent settings for {selectedOrgName}</p>
       </div>

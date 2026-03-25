@@ -122,8 +122,8 @@ export default function OAuthClientsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">OAuth Clients</h1>
-          <p className="text-sm md:text-base text-muted-foreground">
+          <h1 className="text-3xl font-bold">OAuth Clients</h1>
+          <p className="text-muted-foreground">
             {isReadOnly
               ? 'View OAuth 2.0 clients for your organization'
               : 'Manage OAuth 2.0 clients — Connectors (Claude / MCP) and Platform clients (Admin UI, KB Portal)'

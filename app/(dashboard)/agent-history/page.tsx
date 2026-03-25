@@ -388,8 +388,8 @@ export default function AgentHistoryPage() {
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Agent History</h1>
-          <p className="text-sm text-muted-foreground">Execution logs for all agent runs</p>
+          <h1 className="text-3xl font-bold">Agent History</h1>
+          <p className="text-muted-foreground">Execution logs for all agent runs</p>
         </div>
         <Button variant="outline" onClick={() => loadHistory(page)} disabled={loading || !selectedOrgId}>
           <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} />

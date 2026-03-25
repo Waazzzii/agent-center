@@ -7,8 +7,8 @@ export default function BillingPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Billing</h1>
-        <p className="text-sm text-muted-foreground mt-1">Manage your subscription and payment details</p>
+        <h1 className="text-3xl font-bold">Billing</h1>
+        <p className="text-muted-foreground">Manage your subscription and payment details</p>
       </div>
 
       <Card>

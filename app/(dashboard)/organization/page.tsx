@@ -106,8 +106,8 @@ export default function SettingsPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Organization</h1>
-        <p className="text-sm text-muted-foreground mt-1">Manage settings for {selectedOrgName}</p>
+        <h1 className="text-3xl font-bold">Organization</h1>
+        <p className="text-muted-foreground">Manage settings for {selectedOrgName}</p>
       </div>
 
       <Card>

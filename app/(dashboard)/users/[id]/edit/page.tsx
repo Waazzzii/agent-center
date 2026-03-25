@@ -230,8 +230,8 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
             Back
           </Button>
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold">{formData.email}</h1>
-            <p className="text-sm md:text-base text-muted-foreground">
+            <h1 className="text-3xl font-bold">{formData.email}</h1>
+            <p className="text-muted-foreground">
               {formData.display_name || `${formData.first_name || ''} ${formData.last_name || ''}`.trim() || 'User details'}
             </p>
           </div>

@@ -154,8 +154,8 @@ export default function UsersPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Users</h1>
-          <p className="text-sm md:text-base text-muted-foreground">Manage users within this organization</p>
+          <h1 className="text-3xl font-bold">Users</h1>
+          <p className="text-muted-foreground">Manage users within this organization</p>
         </div>
         <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => setCreateModalOpen(true)} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />

@@ -7,6 +7,7 @@ export interface NavItem {
   label: string;
   href: string;
   permissionKeys?: string[];
+  children?: NavItem[];
 }
 
 /** Main org nav — shown in the regular (non-settings) panel, alphabetical */
@@ -19,14 +20,43 @@ export const orgMainNavItems: NavItem[] = [
 
 /** Settings nav — shown in the settings panel, alphabetical */
 export const orgSettingsNavItems: NavItem[] = [
-  { label: 'Access Groups',   href: '/access-groups',  permissionKeys: ['access_groups_read'] },
-  { label: 'AI Agent',        href: '/ai-agent',       permissionKeys: ['agents_read'] },
-  { label: 'Audit Logs',      href: '/audit-logs',     permissionKeys: ['audit_logs_read'] },
-  { label: 'Knowledge Base',  href: '/knowledge-base', permissionKeys: ['knowledgebase_admin_read'] },
-  { label: 'MCP Connections', href: '/connectors',     permissionKeys: ['connectors_read'] },
-  { label: 'OAuth Clients',   href: '/oauth-clients',  permissionKeys: ['oauth_clients_read'] },
+  {
+    label: 'Access',
+    href: '/access-groups',
+    permissionKeys: ['access_groups_read', 'users_read'],
+    children: [
+      { label: 'Users',   href: '/users',         permissionKeys: ['users_read'] },
+      { label: 'Groups',  href: '/access-groups', permissionKeys: ['access_groups_read'] },
+    ],
+  },
+  {
+    label: 'AI',
+    href: '/ai-agent',
+    permissionKeys: ['agents_read', 'connectors_read'],
+    children: [
+      { label: 'Agent',  href: '/ai-agent',    permissionKeys: ['agents_read'] },
+      { label: 'MCP',    href: '/connectors',  permissionKeys: ['connectors_read'] },
+    ],
+  },
+  {
+    label: 'Audit',
+    href: '/audit-logs',
+    permissionKeys: ['audit_logs_read', 'oauth_clients_read'],
+    children: [
+      { label: 'Logs',   href: '/audit-logs',    permissionKeys: ['audit_logs_read'] },
+      { label: 'OAuth',  href: '/oauth-clients', permissionKeys: ['oauth_clients_read'] },
+    ],
+  },
+  {
+    label: 'Centers',
+    href: '/centers',
+    permissionKeys: ['knowledgebase_admin_read', 'center_admin'],
+    children: [
+      { label: 'Knowledge Base',  href: '/knowledge-base',         permissionKeys: ['knowledgebase_admin_read'] },
+      { label: 'Administration',  href: '/centers/admin',          permissionKeys: ['center_admin'] },
+    ],
+  },
   { label: 'Organization',    href: '/organization',   permissionKeys: ['organization_read'] },
-  { label: 'Users',           href: '/users',          permissionKeys: ['users_read'] },
 ];
 
 /**
@@ -45,6 +75,12 @@ export function firstPermittedHref(
   orgId: string
 ): string | null {
   for (const item of items) {
+    // If item has children, recurse into them first
+    if (item.children?.length) {
+      const childHref = firstPermittedHref(item.children, bypass, hasPermFn, orgId);
+      if (childHref) return childHref;
+      continue;
+    }
     if (bypass) return item.href;
     if (!item.permissionKeys) return item.href;
     if (item.permissionKeys.some((k) => hasPermFn(orgId, k))) return item.href;

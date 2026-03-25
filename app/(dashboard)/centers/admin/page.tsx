@@ -6,9 +6,9 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { usePermission } from '@/lib/hooks/use-permission';
 import {
-  getKbSettings,
-  updateKbSettings,
-} from '@/lib/api/kb-settings';
+  getCenterSettings,
+  updateCenterSettings,
+} from '@/lib/api/center-settings';
 import {
   provisionProductDomain,
   checkProductDomain,
@@ -16,35 +16,22 @@ import {
   type ProductDomainProvisionResult,
 } from '@/lib/api/product-domains';
 import {
-  fetchKbLogoBlob,
-  uploadKbLogo,
-  deleteKbLogo,
-  uploadKbFavicon,
-  fetchKbFaviconBlob,
-  deleteKbFavicon,
-} from '@/lib/api/kb-logos';
-import {
-  listKbPortals,
-  createKbPortal,
-  updateKbPortal,
-  deleteKbPortal,
-  seedDefaultKbPortals,
-  type KbPortal,
-  type CreatePortalDto,
-} from '@/lib/api/kb-portals';
-import type { KbOrgSettings, DomainProvisioningStatus } from '@/types/api.types';
+  fetchCenterLogoBlob,
+  uploadCenterLogo,
+  deleteCenterLogo,
+  uploadCenterFavicon,
+  fetchCenterFaviconBlob,
+  deleteCenterFavicon,
+} from '@/lib/api/center-logos';
+import type { CenterOrgSettings, DomainProvisioningStatus } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
-import { Switch } from '@/components/ui/switch';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { BookOpen, Copy, Check, Globe, ExternalLink, AlertCircle, Settings, Palette, Upload, ChevronDown, ChevronUp, Loader2, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Globe, Copy, Check, ExternalLink, AlertCircle, Settings, Palette, Upload, ChevronDown, ChevronUp, Loader2 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { Alert, AlertDescription } from '@/components/ui/alert';
@@ -52,42 +39,23 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 // ── Constants ─────────────────────────────────────────────────────────────────
 
 const POLL_INTERVAL_MS = 30_000;
-
-const ACCESS_LEVEL_LABELS: Record<string, string> = {
-  public: 'Public (indexed)',
-  public_noindex: 'Public (no-index)',
-  authenticated: 'Authenticated only',
-};
-
-const SUPPORTED_LANGUAGES = ['en', 'es', 'fr', 'de', 'pt', 'nl', 'it', 'pl', 'sv', 'da', 'no', 'fi'];
-
-const PORTAL_EMPTY_FORM: CreatePortalDto = {
-  name: '',
-  slug: '',
-  access_level: 'public',
-  default_language: 'en',
-  supported_languages: ['en'],
-  description: '',
-  seo_crawlable: false,
-  enabled: true,
-};
 const MAX_VERIFY_MS    = 30 * 60_000;
 
-const KB_CSS_VARIABLES = [
-  { name: '--background',       description: 'Page background' },
-  { name: '--foreground',       description: 'Primary text' },
-  { name: '--card',             description: 'Card surfaces' },
-  { name: '--primary',          description: 'Brand / links' },
+const CENTER_CSS_VARIABLES = [
+  { name: '--background',         description: 'Page background' },
+  { name: '--foreground',         description: 'Primary text' },
+  { name: '--card',               description: 'Card surfaces' },
+  { name: '--primary',            description: 'Brand / links' },
   { name: '--primary-foreground', description: 'Text on primary' },
-  { name: '--secondary',        description: 'Secondary surfaces' },
-  { name: '--muted',            description: 'Subtle backgrounds' },
-  { name: '--muted-foreground', description: 'Subdued text' },
-  { name: '--accent',           description: 'Accent / highlights' },
-  { name: '--border',           description: 'Borders & dividers' },
-  { name: '--radius',           description: 'Corner radius' },
+  { name: '--secondary',          description: 'Secondary surfaces' },
+  { name: '--muted',              description: 'Subtle backgrounds' },
+  { name: '--muted-foreground',   description: 'Subdued text' },
+  { name: '--accent',             description: 'Accent / highlights' },
+  { name: '--border',             description: 'Borders & dividers' },
+  { name: '--radius',             description: 'Corner radius' },
 ] as const;
 
-const KB_THEME_DEFAULTS = `/*
+const CENTER_THEME_DEFAULTS = `/*
  * ─── Custom Theme CSS — Wazzi Defaults Reference ─────────────────────────
  *
  * All values below are the current Wazzi defaults — change only what you
@@ -114,67 +82,43 @@ const KB_THEME_DEFAULTS = `/*
   --ring: oklch(0.7 0.24 295);             /* Keyboard focus outline — usually matches primary */
 
   /* ── Admin sidebar (light mode) ─────────────────────────────────────── */
-  --sidebar: oklch(0.98 0.01 295);              /* Sidebar background colour */
-  --sidebar-foreground: oklch(0.145 0 0);       /* Sidebar text and icon colour */
-  --sidebar-primary: oklch(0.7 0.24 295);       /* Active nav item highlight background */
-  --sidebar-primary-foreground: oklch(1 0 0);   /* Text on active nav item */
-  --sidebar-accent: oklch(0.95 0.02 295);       /* Hovered nav item background */
-  --sidebar-accent-foreground: oklch(0.145 0 0); /* Text on hovered nav item */
-  --sidebar-border: oklch(0.9 0.02 295);        /* Dividers between sidebar sections */
-  --sidebar-ring: oklch(0.7 0.24 295);          /* Focus ring inside the sidebar */
+  --sidebar: oklch(0.98 0.01 295);
+  --sidebar-foreground: oklch(0.145 0 0);
+  --sidebar-primary: oklch(0.7 0.24 295);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.95 0.02 295);
+  --sidebar-accent-foreground: oklch(0.145 0 0);
+  --sidebar-border: oklch(0.9 0.02 295);
+  --sidebar-ring: oklch(0.7 0.24 295);
 
   /* ── Charts ──────────────────────────────────────────────────────────── */
-  --chart-1: oklch(0.7 0.24 295);          /* Primary chart series — bar fill, line colour */
-  --chart-2: oklch(0.6 0.22 250);          /* Secondary chart series */
-  --chart-3: oklch(0.7 0.2 35);            /* Tertiary chart series */
-  --chart-4: oklch(0.75 0.2 280);          /* Fourth chart series */
-  --chart-5: oklch(0.65 0.18 260);         /* Fifth chart series */
+  --chart-1: oklch(0.7 0.24 295);
+  --chart-2: oklch(0.6 0.22 250);
+  --chart-3: oklch(0.7 0.2 35);
+  --chart-4: oklch(0.75 0.2 280);
+  --chart-5: oklch(0.65 0.18 260);
 }
 
 .dark {
-  /* ── Primary brand colour (dark mode) ───────────────────────────────── */
-  --primary: oklch(0.78 0.2 295);          /* Lightened for legibility on dark backgrounds */
-  --primary-foreground: oklch(0.145 0 0);  /* Dark text on the lighter primary surface */
-
-  /* ── Accent colour (dark mode) ───────────────────────────────────────── */
-  --accent: oklch(0.75 0.16 35);           /* Lightened accent for dark mode */
-  --accent-foreground: oklch(0.145 0 0);   /* Dark text on the lighter accent surface */
-
-  /* ── Focus ring (dark mode) ──────────────────────────────────────────── */
-  --ring: oklch(0.78 0.2 295);             /* Lighter focus ring for dark backgrounds */
-
-  /* ── Admin sidebar (dark mode) ───────────────────────────────────────── */
-  --sidebar: oklch(0.18 0 0);                    /* Sidebar background — neutral dark gray */
-  --sidebar-foreground: oklch(0.985 0 0);        /* Light text on dark sidebar */
-  --sidebar-primary: oklch(0.32 0.06 295);       /* Brand icon box bg — dark muted purple */
-  --sidebar-primary-foreground: oklch(0.985 0 0); /* Icon colour on brand icon bg */
-  --sidebar-accent: oklch(0.25 0 0);             /* Hovered nav item background */
-  --sidebar-accent-foreground: oklch(0.985 0 0); /* Text on hovered nav item */
-  --sidebar-border: oklch(1 0 0 / 10%);          /* Subtle sidebar dividers */
+  --primary: oklch(0.78 0.2 295);
+  --primary-foreground: oklch(0.145 0 0);
+  --accent: oklch(0.75 0.16 35);
+  --accent-foreground: oklch(0.145 0 0);
+  --ring: oklch(0.78 0.2 295);
+  --sidebar: oklch(0.18 0 0);
+  --sidebar-foreground: oklch(0.985 0 0);
+  --sidebar-primary: oklch(0.32 0.06 295);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.25 0 0);
+  --sidebar-accent-foreground: oklch(0.985 0 0);
+  --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.78 0.2 295);
-
-  /* ── Charts (dark mode) ──────────────────────────────────────────────── */
-  --chart-1: oklch(0.78 0.2 295);          /* Lightened for visibility on dark backgrounds */
+  --chart-1: oklch(0.78 0.2 295);
   --chart-2: oklch(0.7 0.18 250);
   --chart-3: oklch(0.75 0.16 35);
   --chart-4: oklch(0.82 0.16 280);
   --chart-5: oklch(0.75 0.14 260);
 }`;
-
-// ── Access level badge ────────────────────────────────────────────────────────
-
-function AccessLevelBadge({ level }: { level: string }) {
-  const variants: Record<string, string> = {
-    public: 'bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200',
-    public_noindex: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200',
-    authenticated: 'bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200',
-  };
-  return (
-    <span className={cn('inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium', variants[level] ?? '')}>
-      {ACCESS_LEVEL_LABELS[level] ?? level}
-    </span>
-  );
-}
 
 // ── Domain status badge ───────────────────────────────────────────────────────
 
@@ -208,24 +152,21 @@ function DomainStatusBadge({ status }: { status: DomainProvisioningStatus | 'iss
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
-export default function KnowledgeBasePage() {
+export default function AdministrationPage() {
   const router = useRouter();
   const { selectedOrgId, selectedOrgName, isOrgAdminView } = useAdminViewStore();
-  const permitted = useRequirePermission(['knowledgebase_admin_read', 'knowledgebase_admin_update']);
-  const canCreate = usePermission('knowledgebase_admin_create');
-  const canUpdate = usePermission('knowledgebase_admin_update');
-  const canDelete = usePermission('knowledgebase_admin_delete');
-  const { confirm } = useConfirmDialog();
+  const permitted = useRequirePermission(['center_admin', 'knowledgebase_admin_read']);
+  const canUpdate = usePermission('center_admin');
 
-  const [kbSettings, setKbSettings] = useState<KbOrgSettings | null>(null);
+  const [settings, setSettings]   = useState<CenterOrgSettings | null>(null);
   const [logoUrlFromApi, setLogoUrlFromApi] = useState<string | null>(null);
-  const [kbLoading, setKbLoading]   = useState(false);
-  const [kbSaving, setKbSaving]     = useState(false);
+  const [loading, setLoading]     = useState(false);
+  const [saving, setSaving]       = useState(false);
   const [customDomainInput, setCustomDomainInput] = useState('');
   const [copiedDomain, setCopiedDomain]           = useState<string | null>(null);
 
   // Theme tab state
-  const [kbNameInput, setKbNameInput]       = useState('');
+  const [nameInput, setNameInput]           = useState('');
   const [customThemeInput, setCustomThemeInput] = useState('');
   const [themeTabSaving, setThemeTabSaving] = useState(false);
   const [themeTabSaved, setThemeTabSaved]   = useState(false);
@@ -239,26 +180,17 @@ export default function KnowledgeBasePage() {
   const logoInputRef = useRef<HTMLInputElement>(null);
 
   // Favicon state
-  const [faviconUrl, setFaviconUrl]               = useState<string | null>(null);
-  const [faviconLoading, setFaviconLoading]         = useState(false);
-  const [faviconUploading, setFaviconUploading]     = useState(false);
-  const [faviconDeleting, setFaviconDeleting]       = useState(false);
-  const [faviconUrlFromApi, setFaviconUrlFromApi]   = useState<string | null>(null);
+  const [faviconUrl, setFaviconUrl]             = useState<string | null>(null);
+  const [faviconLoading, setFaviconLoading]     = useState(false);
+  const [faviconUploading, setFaviconUploading] = useState(false);
+  const [faviconDeleting, setFaviconDeleting]   = useState(false);
+  const [faviconUrlFromApi, setFaviconUrlFromApi] = useState<string | null>(null);
   const faviconInputRef = useRef<HTMLInputElement>(null);
 
   const [autoDomainStatus, setAutoDomainStatus]     = useState<DomainProvisioningStatus | 'issuing' | null>(null);
   const [customDomainStatus, setCustomDomainStatus] = useState<DomainProvisioningStatus | 'issuing' | null>(null);
 
   const [lastProvision, setLastProvision] = useState<ProductDomainProvisionResult | null>(null);
-
-  // Portals state
-  const [portals, setPortals] = useState<KbPortal[]>([]);
-  const [portalsLoading, setPortalsLoading] = useState(false);
-  const [portalSaving, setPortalSaving] = useState<string | null>(null);
-  const [portalDialogOpen, setPortalDialogOpen] = useState(false);
-  const [editingPortal, setEditingPortal] = useState<KbPortal | null>(null);
-  const [portalForm, setPortalForm] = useState<CreatePortalDto>(PORTAL_EMPTY_FORM);
-  const [portalDialogSaving, setPortalDialogSaving] = useState(false);
 
   const pollRef        = useRef<ReturnType<typeof setInterval> | null>(null);
   const verifyStartRef = useRef<number>(0);
@@ -274,8 +206,8 @@ export default function KnowledgeBasePage() {
   const startPolling = (type: 'auto' | 'custom', elapsedAlreadyMs = 0) => {
     if (!selectedOrgId) return;
     stopPolling();
-    pollingTypeRef.current  = type;
-    verifyStartRef.current  = Date.now() - elapsedAlreadyMs;
+    pollingTypeRef.current = type;
+    verifyStartRef.current = Date.now() - elapsedAlreadyMs;
 
     const setStatus = type === 'auto' ? setAutoDomainStatus : setCustomDomainStatus;
     const orgId     = selectedOrgId;
@@ -284,16 +216,16 @@ export default function KnowledgeBasePage() {
       if (Date.now() - verifyStartRef.current >= MAX_VERIFY_MS) {
         stopPolling();
         setStatus('failed');
-        try { await setProductDomainStatus(orgId, 'kb', type, 'failed'); } catch { /* best-effort */ }
+        try { await setProductDomainStatus(orgId, 'ac', type, 'failed'); } catch { /* best-effort */ }
         return;
       }
       try {
-        const result = await checkProductDomain(orgId, 'kb', type);
+        const result = await checkProductDomain(orgId, 'ac', type);
         if (result.reachable) {
           stopPolling();
           setStatus('active');
-          const fresh = await getKbSettings(orgId);
-          setKbSettings(fresh.settings);
+          const fresh = await getCenterSettings(orgId);
+          setSettings(fresh.settings);
         }
       } catch { /* ignore transient errors */ }
     };
@@ -308,8 +240,7 @@ export default function KnowledgeBasePage() {
 
   useEffect(() => {
     if (!isOrgAdminView() || !selectedOrgId) { router.push('/organizations'); return; }
-    loadKbSettings();
-    loadPortals();
+    loadSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId, isOrgAdminView]);
 
@@ -321,7 +252,7 @@ export default function KnowledgeBasePage() {
     const loadLogo = async () => {
       setLogoLoading(true);
       try {
-        const url = await fetchKbLogoBlob(selectedOrgId);
+        const url = await fetchCenterLogoBlob(selectedOrgId);
         if (!cancelled) { setLogoUrl(url); setLogoLoading(false); }
       } catch {
         if (!cancelled) { setLogoUrl(null); setLogoLoading(false); }
@@ -343,7 +274,7 @@ export default function KnowledgeBasePage() {
     const loadFavicon = async () => {
       try {
         setFaviconLoading(true);
-        const url = await fetchKbFaviconBlob(selectedOrgId);
+        const url = await fetchCenterFaviconBlob(selectedOrgId);
         if (!cancelled) setFaviconUrl(url);
       } catch { /* failed to load */ }
       finally { if (!cancelled) setFaviconLoading(false); }
@@ -356,16 +287,16 @@ export default function KnowledgeBasePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId, faviconUrlFromApi]);
 
-  const loadKbSettings = async () => {
+  const loadSettings = async () => {
     if (!selectedOrgId) return;
     try {
-      setKbLoading(true);
-      const data = await getKbSettings(selectedOrgId);
-      setKbSettings(data.settings);
+      setLoading(true);
+      const data = await getCenterSettings(selectedOrgId);
+      setSettings(data.settings);
       setLogoUrlFromApi(data.logo_url);
       setFaviconUrlFromApi(data.favicon_url ?? null);
       setCustomDomainInput(data.settings.custom_domain || '');
-      setKbNameInput(data.settings.name || '');
+      setNameInput(data.settings.name || '');
       setCustomThemeInput(data.settings.custom_theme || '');
 
       const autoStatus   = data.settings.auto_domain_config?.status   ?? null;
@@ -384,9 +315,9 @@ export default function KnowledgeBasePage() {
         else markFailed('custom', selectedOrgId, setCustomDomainStatus);
       }
     } catch (error: any) {
-      console.warn('Failed to load KB settings:', error.message);
+      console.warn('Failed to load Administration settings:', error.message);
     } finally {
-      setKbLoading(false);
+      setLoading(false);
     }
   };
 
@@ -396,7 +327,7 @@ export default function KnowledgeBasePage() {
     setStatus: (s: DomainProvisioningStatus) => void
   ) => {
     setStatus('failed');
-    try { await setProductDomainStatus(orgId, 'kb', type, 'failed'); } catch { /* best-effort */ }
+    try { await setProductDomainStatus(orgId, 'ac', type, 'failed'); } catch { /* best-effort */ }
   };
 
   // ── Logo handlers ──────────────────────────────────────────────────────────
@@ -406,14 +337,14 @@ export default function KnowledgeBasePage() {
     if (!file || !selectedOrgId) return;
     setLogoUploading(true);
     try {
-      const uploadResult = await uploadKbLogo(selectedOrgId, file);
+      const uploadResult = await uploadCenterLogo(selectedOrgId, file);
       setLogoUrlFromApi(uploadResult.logo_url);
       toast.success('Logo uploaded');
       if (logoUrl) URL.revokeObjectURL(logoUrl);
       setLogoUrl(null);
       setLogoLoading(true);
       try {
-        const url = await fetchKbLogoBlob(selectedOrgId);
+        const url = await fetchCenterLogoBlob(selectedOrgId);
         setLogoUrl(url);
       } catch { /* fetch failed after upload */ }
       finally { setLogoLoading(false); }
@@ -429,7 +360,7 @@ export default function KnowledgeBasePage() {
     if (!selectedOrgId) return;
     setLogoDeleting(true);
     try {
-      await deleteKbLogo(selectedOrgId);
+      await deleteCenterLogo(selectedOrgId);
       if (logoUrl) URL.revokeObjectURL(logoUrl);
       setLogoUrl(null);
       setLogoUrlFromApi(null);
@@ -448,14 +379,14 @@ export default function KnowledgeBasePage() {
     if (!file || !selectedOrgId) return;
     setFaviconUploading(true);
     try {
-      const uploadResult = await uploadKbFavicon(selectedOrgId, file);
+      const uploadResult = await uploadCenterFavicon(selectedOrgId, file);
       setFaviconUrlFromApi(uploadResult.favicon_url);
       toast.success('Favicon uploaded');
       if (faviconUrl) URL.revokeObjectURL(faviconUrl);
       setFaviconUrl(null);
       setFaviconLoading(true);
       try {
-        const url = await fetchKbFaviconBlob(selectedOrgId);
+        const url = await fetchCenterFaviconBlob(selectedOrgId);
         setFaviconUrl(url);
       } catch { /* fetch failed after upload */ }
       finally { setFaviconLoading(false); }
@@ -471,7 +402,7 @@ export default function KnowledgeBasePage() {
     if (!selectedOrgId) return;
     setFaviconDeleting(true);
     try {
-      await deleteKbFavicon(selectedOrgId);
+      await deleteCenterFavicon(selectedOrgId);
       if (faviconUrl) URL.revokeObjectURL(faviconUrl);
       setFaviconUrl(null);
       setFaviconUrlFromApi(null);
@@ -485,19 +416,19 @@ export default function KnowledgeBasePage() {
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
-  const handleKbToggle = async (enabled: boolean) => {
+  const handleToggle = async (enabled: boolean) => {
     if (!selectedOrgId) return;
     try {
-      setKbSaving(true);
+      setSaving(true);
       const enablePayload = enabled ? {
         is_enabled: true,
-        ...(!kbSettings?.name && selectedOrgName ? { name: selectedOrgName } : {}),
+        ...(!settings?.name && selectedOrgName ? { name: selectedOrgName } : {}),
       } : { is_enabled: false };
 
-      const data = await updateKbSettings(selectedOrgId, enablePayload);
-      setKbSettings(data.settings);
+      const data = await updateCenterSettings(selectedOrgId, enablePayload);
+      setSettings(data.settings);
       if (enabled && data.settings.name) {
-        setKbNameInput(data.settings.name);
+        setNameInput(data.settings.name);
         setCustomThemeInput(data.settings.custom_theme || '');
       }
 
@@ -506,9 +437,9 @@ export default function KnowledgeBasePage() {
         if (!currentStatus || currentStatus === 'failed') {
           setAutoDomainStatus('issuing');
           try {
-            const result = await provisionProductDomain(selectedOrgId, 'kb', 'auto');
+            const result = await provisionProductDomain(selectedOrgId, 'ac', 'auto');
             setLastProvision(result);
-            setKbSettings(result.settings as KbOrgSettings);
+            setSettings(result.settings);
             const next = result.settings.auto_domain_config?.status ?? null;
             setAutoDomainStatus(next);
             if (next === 'verifying') startPolling('auto');
@@ -520,16 +451,16 @@ export default function KnowledgeBasePage() {
           setAutoDomainStatus('verifying');
           startPolling('auto');
         }
-        toast.success('Knowledge Base enabled');
+        toast.success('Administration enabled');
       } else {
         stopPolling();
         setAutoDomainStatus(data.settings.auto_domain_config?.status ?? null);
-        toast.success('Knowledge Base disabled');
+        toast.success('Administration disabled');
       }
     } catch (error: any) {
-      toast.error(error.response?.data?.message || error.message || 'Failed to update KB settings');
+      toast.error(error.response?.data?.message || error.message || 'Failed to update settings');
     } finally {
-      setKbSaving(false);
+      setSaving(false);
     }
   };
 
@@ -538,11 +469,11 @@ export default function KnowledgeBasePage() {
     const domain = customDomainInput.trim().toLowerCase().replace(/^https?:\/\//, '');
     if (!domain) { toast.error('Please enter a domain'); return; }
     try {
-      setKbSaving(true);
+      setSaving(true);
       setCustomDomainStatus('issuing');
-      const result = await provisionProductDomain(selectedOrgId, 'kb', 'custom', domain);
+      const result = await provisionProductDomain(selectedOrgId, 'ac', 'custom', domain);
       setLastProvision(result);
-      setKbSettings(result.settings as KbOrgSettings);
+      setSettings(result.settings);
       setCustomDomainInput(domain);
       const next = result.settings.custom_domain_config?.status ?? null;
       setCustomDomainStatus(next);
@@ -552,17 +483,17 @@ export default function KnowledgeBasePage() {
       setCustomDomainStatus(null);
       toast.error(error.response?.data?.message || error.message || 'Failed to save custom domain');
     } finally {
-      setKbSaving(false);
+      setSaving(false);
     }
   };
 
   const handleRemoveCustomDomain = async () => {
     if (!selectedOrgId) return;
     try {
-      setKbSaving(true);
+      setSaving(true);
       if (pollingTypeRef.current === 'custom') stopPolling();
-      const data = await updateKbSettings(selectedOrgId, { custom_domain: null });
-      setKbSettings(data.settings);
+      const data = await updateCenterSettings(selectedOrgId, { custom_domain: null });
+      setSettings(data.settings);
       setCustomDomainInput('');
       setCustomDomainStatus(null);
       setLastProvision(null);
@@ -570,7 +501,7 @@ export default function KnowledgeBasePage() {
     } catch (error: any) {
       toast.error(error.response?.data?.message || error.message || 'Failed to remove custom domain');
     } finally {
-      setKbSaving(false);
+      setSaving(false);
     }
   };
 
@@ -578,9 +509,9 @@ export default function KnowledgeBasePage() {
     if (!selectedOrgId) return;
     setAutoDomainStatus('issuing');
     try {
-      const result = await provisionProductDomain(selectedOrgId, 'kb', 'auto');
+      const result = await provisionProductDomain(selectedOrgId, 'ac', 'auto');
       setLastProvision(result);
-      setKbSettings(result.settings as KbOrgSettings);
+      setSettings(result.settings);
       const next = result.settings.auto_domain_config?.status ?? null;
       setAutoDomainStatus(next);
       if (next === 'verifying') startPolling('auto');
@@ -592,11 +523,11 @@ export default function KnowledgeBasePage() {
     try {
       setThemeTabSaving(true);
       setThemeTabSaved(false);
-      const data = await updateKbSettings(selectedOrgId, {
-        name: kbNameInput.trim() || null,
+      const data = await updateCenterSettings(selectedOrgId, {
+        name: nameInput.trim() || null,
         custom_theme: customThemeInput.trim() || null,
       });
-      setKbSettings(data.settings);
+      setSettings(data.settings);
       setThemeTabSaved(true);
       toast.success('Theme settings saved');
       setTimeout(() => setThemeTabSaved(false), 3000);
@@ -604,126 +535,6 @@ export default function KnowledgeBasePage() {
       toast.error(error.response?.data?.message || error.message || 'Failed to save theme settings');
     } finally {
       setThemeTabSaving(false);
-    }
-  };
-
-  // ── Portal handlers ────────────────────────────────────────────────────────
-
-  const autoSlug = (name: string) =>
-    name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
-
-  const loadPortals = async () => {
-    if (!selectedOrgId) return;
-    try {
-      setPortalsLoading(true);
-      const data = await listKbPortals(selectedOrgId);
-      setPortals(data);
-    } catch {
-      toast.error('Failed to load portals');
-    } finally {
-      setPortalsLoading(false);
-    }
-  };
-
-  const handlePortalToggleEnabled = async (portal: KbPortal, enabled: boolean) => {
-    if (!selectedOrgId) return;
-    setPortalSaving(portal.id);
-    try {
-      const updated = await updateKbPortal(selectedOrgId, portal.id, { enabled });
-      setPortals((prev) => prev.map((p) => (p.id === portal.id ? updated : p)));
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message ?? 'Failed to update portal');
-    } finally {
-      setPortalSaving(null);
-    }
-  };
-
-  const [portalSeeding, setPortalSeeding] = useState(false);
-  const handleSeedDefaultPortals = async () => {
-    if (!selectedOrgId) return;
-    setPortalSeeding(true);
-    try {
-      const seeded = await seedDefaultKbPortals(selectedOrgId);
-      setPortals(seeded);
-      toast.success('Default portals created');
-    } catch {
-      toast.error('Failed to create default portals');
-    } finally {
-      setPortalSeeding(false);
-    }
-  };
-
-  const handlePortalOpenCreate = () => {
-    setEditingPortal(null);
-    setPortalForm(PORTAL_EMPTY_FORM);
-    setPortalDialogOpen(true);
-  };
-
-  const handlePortalOpenEdit = (portal: KbPortal) => {
-    setEditingPortal(portal);
-    setPortalForm({
-      name: portal.name,
-      slug: portal.slug,
-      access_level: portal.access_level,
-      default_language: portal.default_language,
-      supported_languages: portal.supported_languages,
-      description: portal.description ?? '',
-      seo_crawlable: portal.seo_crawlable,
-      enabled: portal.enabled,
-    });
-    setPortalDialogOpen(true);
-  };
-
-  const handlePortalDialogSave = async () => {
-    if (!selectedOrgId || !portalForm.name.trim() || !portalForm.slug.trim()) {
-      toast.error('Name and slug are required');
-      return;
-    }
-    setPortalDialogSaving(true);
-    try {
-      const payload = {
-        ...portalForm,
-        description: portalForm.description || null,
-      };
-      if (editingPortal) {
-        const updated = await updateKbPortal(selectedOrgId, editingPortal.id, payload);
-        setPortals((prev) => prev.map((p) => (p.id === editingPortal.id ? updated : p)));
-        toast.success('Portal updated');
-      } else {
-        const created = await createKbPortal(selectedOrgId, payload);
-        setPortals((prev) => [...prev, created]);
-        toast.success('Portal created');
-      }
-      setPortalDialogOpen(false);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message ?? 'Failed to save portal');
-    } finally {
-      setPortalDialogSaving(false);
-    }
-  };
-
-  const handlePortalDelete = async (portal: KbPortal) => {
-    if (!selectedOrgId) return;
-    const confirmed = await confirm({
-      title: `Delete "${portal.name}"?`,
-      description: (
-        <span>
-          All categories and articles inside this portal will be <strong>permanently deleted</strong> and cannot be recovered. This action cannot be undone.
-        </span>
-      ),
-      confirmText: 'Delete Portal',
-      variant: 'destructive',
-    });
-    if (!confirmed) return;
-    setPortalSaving(portal.id);
-    try {
-      await deleteKbPortal(selectedOrgId, portal.id);
-      setPortals((prev) => prev.filter((p) => p.id !== portal.id));
-      toast.success('Portal deleted');
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message ?? 'Failed to delete portal');
-    } finally {
-      setPortalSaving(null);
     }
   };
 
@@ -735,15 +546,15 @@ export default function KnowledgeBasePage() {
 
   // ── Derived values ─────────────────────────────────────────────────────────
 
-  const isKbEnabled = kbSettings?.is_enabled ?? false;
-  const isKbLive    = isKbEnabled && autoDomainStatus === 'active';
-  const displayName = kbSettings?.name || selectedOrgName;
+  const isEnabled   = settings?.is_enabled ?? false;
+  const isLive      = isEnabled && autoDomainStatus === 'active';
+  const displayName = settings?.name || selectedOrgName;
 
   const cnameTarget =
     lastProvision?.cname_target ??
-    kbSettings?.auto_domain_config?.dns?.provisioned_at
-      ? kbSettings?.auto_domain_config?.dns?.record_id
-      : null;
+    (settings?.auto_domain_config?.dns?.provisioned_at
+      ? settings?.auto_domain_config?.dns?.record_id
+      : null);
 
   const customDnsInstructions =
     lastProvision?.domain_type === 'custom' ? lastProvision.dns_instructions : null;
@@ -755,26 +566,26 @@ export default function KnowledgeBasePage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">Knowledge Base</h1>
-        <p className="text-muted-foreground">Manage Knowledge Base settings for {displayName}</p>
+        <h1 className="text-3xl font-bold">Administration</h1>
+        <p className="text-muted-foreground">Manage the Administration Center for {displayName}</p>
       </div>
 
-      {kbLoading ? (
+      {loading ? (
         <div className="flex items-center justify-center py-12">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
         </div>
-      ) : !isKbEnabled ? (
+      ) : !isEnabled ? (
 
         /* ── Disabled state ───────────────────────────────────────────────── */
         <Card>
           <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-            <BookOpen className="h-12 w-12 text-muted-foreground mb-4" />
-            <h3 className="text-lg font-semibold mb-2">Knowledge Base is disabled</h3>
+            <Globe className="h-12 w-12 text-muted-foreground mb-4" />
+            <h3 className="text-lg font-semibold mb-2">Administration Center is disabled</h3>
             <p className="text-sm text-muted-foreground mb-6 max-w-sm">
-              Enable the Knowledge Base to provision a self-service portal for {selectedOrgName}.
+              Enable the Administration Center to provision a management portal for {selectedOrgName}.
             </p>
-            <Button onClick={() => handleKbToggle(true)} disabled={kbSaving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
-              {kbSaving ? 'Enabling…' : 'Enable Knowledge Base'}
+            <Button onClick={() => handleToggle(true)} disabled={saving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+              {saving ? 'Enabling…' : 'Enable Administration'}
             </Button>
           </CardContent>
         </Card>
@@ -784,7 +595,7 @@ export default function KnowledgeBasePage() {
         /* ── Enabled state ────────────────────────────────────────────────── */
         <Tabs defaultValue="settings" className="w-full">
           <div className="flex items-center justify-between">
-            <TabsList className="grid w-full max-w-sm grid-cols-3">
+            <TabsList className="grid w-full max-w-xs grid-cols-2">
               <TabsTrigger value="settings">
                 <Settings className="h-4 w-4 mr-2" />
                 Settings
@@ -793,16 +604,12 @@ export default function KnowledgeBasePage() {
                 <Palette className="h-4 w-4 mr-2" />
                 Theme
               </TabsTrigger>
-              <TabsTrigger value="portals">
-                <Globe className="h-4 w-4 mr-2" />
-                Portals
-              </TabsTrigger>
             </TabsList>
             <Button
               variant="outline"
               size="sm"
-              onClick={() => handleKbToggle(false)}
-              disabled={kbSaving || !canUpdate}
+              onClick={() => handleToggle(false)}
+              disabled={saving || !canUpdate}
               title={!canUpdate ? "You don't have permission to perform this action" : undefined}
             >
               Disable
@@ -812,19 +619,19 @@ export default function KnowledgeBasePage() {
           {/* ── Settings Tab ─────────────────────────────────────────────── */}
           <TabsContent value="settings" className="mt-6 space-y-6">
 
-            {isKbLive && kbSettings && (
+            {isLive && settings && settings.auto_domain && (
               <Alert>
-                <BookOpen className="h-4 w-4" />
+                <Globe className="h-4 w-4" />
                 <AlertDescription className="flex flex-wrap items-center gap-x-1">
-                  Your Knowledge Base is live at{' '}
-                  <a href={`https://${kbSettings.auto_domain}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">
-                    {kbSettings.auto_domain}
+                  Your Administration Center is live at{' '}
+                  <a href={`https://${settings.auto_domain}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">
+                    {settings.auto_domain}
                   </a>
-                  {customDomainStatus === 'active' && kbSettings.custom_domain && (
+                  {customDomainStatus === 'active' && settings.custom_domain && (
                     <>
                       {' '}and{' '}
-                      <a href={`https://${kbSettings.custom_domain}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">
-                        {kbSettings.custom_domain}
+                      <a href={`https://${settings.custom_domain}`} target="_blank" rel="noopener noreferrer" className="font-medium underline">
+                        {settings.custom_domain}
                       </a>
                     </>
                   )}
@@ -850,21 +657,23 @@ export default function KnowledgeBasePage() {
                   <p className="text-xs text-muted-foreground">
                     Auto-generated from your organization slug. Always available — cannot be removed.
                   </p>
-                  {kbSettings && (
+                  {settings?.auto_domain ? (
                     <div className="flex items-center gap-2">
                       <div className="flex flex-1 items-center rounded-md border bg-muted px-3 py-2 text-sm font-mono">
                         <Globe className="mr-2 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                        {kbSettings.auto_domain}
+                        {settings.auto_domain}
                       </div>
-                      <Button variant="outline" size="sm" onClick={() => copyToClipboard(kbSettings.auto_domain ?? '')}>
-                        {copiedDomain === kbSettings.auto_domain ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+                      <Button variant="outline" size="sm" onClick={() => copyToClipboard(settings.auto_domain!)}>
+                        {copiedDomain === settings.auto_domain ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
                       </Button>
                       <Button variant="outline" size="sm" asChild>
-                        <a href={`https://${kbSettings.auto_domain}`} target="_blank" rel="noopener noreferrer">
+                        <a href={`https://${settings.auto_domain}`} target="_blank" rel="noopener noreferrer">
                           <ExternalLink className="h-4 w-4" />
                         </a>
                       </Button>
                     </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Domain will appear here once provisioned.</p>
                   )}
                   {autoDomainStatus === 'verifying' && (
                     <p className="text-xs text-muted-foreground">
@@ -877,9 +686,9 @@ export default function KnowledgeBasePage() {
                       <button className="underline" onClick={handleRetryAutoDomain}>try again</button>.
                     </p>
                   )}
-                  {cnameTarget && autoDomainStatus !== 'active' && kbSettings && (
+                  {cnameTarget && autoDomainStatus !== 'active' && settings?.auto_domain && (
                     <div className="rounded-md bg-muted px-3 py-2 font-mono text-xs text-muted-foreground">
-                      CNAME: {kbSettings.auto_domain} → {cnameTarget}
+                      CNAME: {settings.auto_domain} → {cnameTarget}
                     </div>
                   )}
                 </div>
@@ -890,11 +699,11 @@ export default function KnowledgeBasePage() {
                     <DomainStatusBadge status={customDomainStatus} />
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Enter your own domain (e.g. <code>help.yourcompany.com</code>). After saving, add the CNAME record shown below at your DNS provider.
+                    Enter your own domain (e.g. <code>admin.yourcompany.com</code>). After saving, add the CNAME record shown below at your DNS provider.
                   </p>
                   <div className="flex gap-2">
                     <Input
-                      placeholder="help.yourcompany.com"
+                      placeholder="admin.yourcompany.com"
                       value={customDomainInput}
                       onChange={(e) => setCustomDomainInput(e.target.value.toLowerCase().replace(/^https?:\/\//, ''))}
                       className="font-mono text-sm"
@@ -902,19 +711,19 @@ export default function KnowledgeBasePage() {
                     />
                     <Button
                       onClick={handleSaveCustomDomain}
-                      disabled={kbSaving || !customDomainInput.trim() || customDomainInput.trim() === kbSettings?.custom_domain || !canUpdate}
+                      disabled={saving || !customDomainInput.trim() || customDomainInput.trim() === settings?.custom_domain || !canUpdate}
                       title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                     >
-                      {kbSaving ? 'Saving…' : kbSettings?.custom_domain ? 'Update' : 'Save'}
+                      {saving ? 'Saving…' : settings?.custom_domain ? 'Update' : 'Save'}
                     </Button>
-                    {kbSettings?.custom_domain && (
-                      <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={kbSaving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+                    {settings?.custom_domain && (
+                      <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={saving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
                         Remove
                       </Button>
                     )}
                   </div>
 
-                  {kbSettings?.custom_domain && customDnsInstructions && (
+                  {settings?.custom_domain && customDnsInstructions && (
                     <div className="rounded-md bg-muted p-3 text-xs space-y-1.5">
                       <p className="font-medium">Add this DNS record at your provider:</p>
                       <div className="font-mono space-y-0.5">
@@ -954,19 +763,19 @@ export default function KnowledgeBasePage() {
 
             <Card>
               <CardHeader>
-                <CardTitle>Knowledge Base Name</CardTitle>
+                <CardTitle>Administration Center Name</CardTitle>
                 <CardDescription>
-                  Set a display name shown to visitors of your Knowledge Base portal.
+                  Set a display name shown on the Administration Center portal.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <div className="space-y-2">
-                  <Label htmlFor="kb-name">Name</Label>
+                  <Label htmlFor="center-name">Name</Label>
                   <Input
-                    id="kb-name"
-                    placeholder={selectedOrgName || 'Knowledge Base'}
-                    value={kbNameInput}
-                    onChange={(e) => setKbNameInput(e.target.value)}
+                    id="center-name"
+                    placeholder={selectedOrgName || 'Administration Center'}
+                    value={nameInput}
+                    onChange={(e) => setNameInput(e.target.value)}
                     disabled={!canUpdate}
                   />
                   <p className="text-xs text-muted-foreground">
@@ -980,7 +789,7 @@ export default function KnowledgeBasePage() {
             <Card>
               <CardHeader>
                 <CardTitle>Logo</CardTitle>
-                <CardDescription>Upload a logo to display on your Knowledge Base portal.</CardDescription>
+                <CardDescription>Upload a logo to display on your Administration Center portal.</CardDescription>
               </CardHeader>
               <CardContent>
                 <input ref={logoInputRef} type="file" accept="image/png,image/jpeg,image/svg+xml" className="hidden" onChange={handleLogoUpload} />
@@ -991,7 +800,7 @@ export default function KnowledgeBasePage() {
                   </div>
                 ) : logoUrl ? (
                   <div className="flex items-center gap-4">
-                    <img src={logoUrl} alt="KB Logo" className="h-16 max-w-[200px] object-contain rounded border p-2 bg-white" />
+                    <img src={logoUrl} alt="Admin Logo" className="h-16 max-w-[200px] object-contain rounded border p-2 bg-white" />
                     <Button variant="outline" size="sm" onClick={handleLogoDelete} disabled={logoDeleting || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
                       {logoDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
                     </Button>
@@ -1013,7 +822,7 @@ export default function KnowledgeBasePage() {
             <Card>
               <CardHeader>
                 <CardTitle>Favicon</CardTitle>
-                <CardDescription>Upload a favicon to display in the browser tab for your Knowledge Base.</CardDescription>
+                <CardDescription>Upload a favicon to display in the browser tab for your Administration Center.</CardDescription>
               </CardHeader>
               <CardContent>
                 <input ref={faviconInputRef} type="file" accept="image/png,image/jpeg,image/svg+xml,image/x-icon,image/vnd.microsoft.icon" className="hidden" onChange={handleFaviconUpload} />
@@ -1024,7 +833,7 @@ export default function KnowledgeBasePage() {
                   </div>
                 ) : faviconUrl ? (
                   <div className="flex items-center gap-4">
-                    <img src={faviconUrl} alt="KB Favicon" className="h-12 w-12 object-contain rounded border p-2 bg-white" />
+                    <img src={faviconUrl} alt="Admin Favicon" className="h-12 w-12 object-contain rounded border p-2 bg-white" />
                     <Button variant="outline" size="sm" onClick={handleFaviconDelete} disabled={faviconDeleting || !canUpdate}>
                       {faviconDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
                     </Button>
@@ -1047,7 +856,7 @@ export default function KnowledgeBasePage() {
               <CardHeader>
                 <CardTitle>Custom Theme CSS</CardTitle>
                 <CardDescription>
-                  Override CSS variables to brand the public portal. Changes apply globally across all portal pages.
+                  Override CSS variables to brand the Administration Center portal.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -1063,7 +872,7 @@ export default function KnowledgeBasePage() {
                 {showVarsRef && (
                   <div className="rounded-lg border bg-muted/50 p-3">
                     <div className="grid grid-cols-2 gap-x-6 gap-y-1.5 sm:grid-cols-3">
-                      {KB_CSS_VARIABLES.map(({ name, description }) => (
+                      {CENTER_CSS_VARIABLES.map(({ name, description }) => (
                         <div key={name} className="flex items-baseline gap-2 min-w-0">
                           <code className="shrink-0 text-xs font-mono text-primary">{name}</code>
                           <span className="truncate text-xs text-muted-foreground">{description}</span>
@@ -1081,7 +890,7 @@ export default function KnowledgeBasePage() {
                     <span className="ml-2 text-xs text-slate-400 dark:text-[#8a9bb0] font-mono">custom-theme.css</span>
                     <button
                       type="button"
-                      onClick={() => setCustomThemeInput(KB_THEME_DEFAULTS)}
+                      onClick={() => setCustomThemeInput(CENTER_THEME_DEFAULTS)}
                       disabled={!canUpdate}
                       className="ml-auto text-xs text-slate-400 dark:text-[#8a9bb0] hover:text-slate-600 dark:hover:text-slate-300 transition-colors disabled:pointer-events-none disabled:opacity-40"
                     >
@@ -1128,259 +937,9 @@ export default function KnowledgeBasePage() {
             </div>
 
           </TabsContent>
-
-          {/* ── Portals Tab ───────────────────────────────────────────────── */}
-          <TabsContent value="portals" className="mt-6">
-            <div className="mb-4 flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">Audience-specific portals (e.g. Vendor, Internal, Guest)</p>
-              {canCreate && (
-                <Button onClick={handlePortalOpenCreate} size="sm" className="gap-2">
-                  <Plus className="h-4 w-4" />
-                  New Portal
-                </Button>
-              )}
-            </div>
-            {portalsLoading ? (
-              <div className="flex items-center justify-center py-12">
-                <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-              </div>
-            ) : portals.length === 0 ? (
-              <Card>
-                <CardContent className="flex flex-col items-center justify-center py-16 text-center">
-                  <Globe className="h-12 w-12 text-muted-foreground mb-4" />
-                  <h3 className="text-lg font-semibold mb-2">No portals yet</h3>
-                  <p className="text-sm text-muted-foreground mb-6 max-w-sm">
-                    Portals are audience-specific sections of your Knowledge Base (e.g. Vendor, Internal, Guest).
-                  </p>
-                  {canCreate && (
-                    <div className="flex flex-col sm:flex-row gap-3">
-                      <Button onClick={handleSeedDefaultPortals} disabled={portalSeeding} className="gap-2">
-                        {portalSeeding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-                        Create Default Portals
-                      </Button>
-                      <Button variant="outline" onClick={handlePortalOpenCreate} className="gap-2">
-                        <Plus className="h-4 w-4" />
-                        Create Custom Portal
-                      </Button>
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            ) : (
-              <div className="space-y-3">
-                {portals.map((portal) => (
-                  <Card key={portal.id} className={cn(!portal.enabled && 'opacity-60')}>
-                    <CardContent className="flex items-center gap-4 py-4">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="font-medium">{portal.name}</span>
-                          <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{portal.slug}</code>
-                          <AccessLevelBadge level={portal.access_level} />
-                          {!portal.enabled && (
-                            <span className="text-xs text-muted-foreground">(disabled)</span>
-                          )}
-                        </div>
-                        {portal.description && (
-                          <p className="text-xs text-muted-foreground mt-0.5 truncate">{portal.description}</p>
-                        )}
-                        <p className="text-xs text-muted-foreground mt-0.5">
-                          Language: {portal.default_language} · {portal.seo_crawlable ? 'Indexed' : 'No-index'}
-                        </p>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {canUpdate && (
-                          <Switch
-                            checked={portal.enabled}
-                            disabled={portalSaving === portal.id}
-                            onCheckedChange={(v) => handlePortalToggleEnabled(portal, v)}
-                          />
-                        )}
-                        {canUpdate && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handlePortalOpenEdit(portal)}
-                            disabled={portalSaving === portal.id}
-                          >
-                            <Pencil className="h-4 w-4" />
-                          </Button>
-                        )}
-                        {canDelete && (
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => handlePortalDelete(portal)}
-                            disabled={portalSaving === portal.id}
-                            className="text-destructive hover:text-destructive"
-                          >
-                            {portalSaving === portal.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
-                          </Button>
-                        )}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ))}
-              </div>
-            )}
-          </TabsContent>
-
         </Tabs>
 
       )}
-
-      {/* ── Portal Create/Edit Dialog ──────────────────────────────────────── */}
-      <Dialog open={portalDialogOpen} onOpenChange={setPortalDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editingPortal ? 'Edit Portal' : 'Create Portal'}</DialogTitle>
-            <DialogDescription>
-              {editingPortal ? 'Update portal settings.' : 'Add an audience-specific portal to the Knowledge Base.'}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="portal-name">Name *</Label>
-                <Input
-                  id="portal-name"
-                  placeholder="Vendor"
-                  value={portalForm.name}
-                  onChange={(e) => {
-                    const name = e.target.value;
-                    setPortalForm((f) => ({
-                      ...f,
-                      name,
-                      ...(!editingPortal && { slug: autoSlug(name) }),
-                    }));
-                  }}
-                />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="portal-slug">Slug *</Label>
-                <Input
-                  id="portal-slug"
-                  placeholder="vendor"
-                  value={portalForm.slug}
-                  onChange={(e) => setPortalForm((f) => ({ ...f, slug: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') }))}
-                />
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Access Level</Label>
-              <Select
-                value={portalForm.access_level}
-                onValueChange={(v) => setPortalForm((f) => ({ ...f, access_level: v as any }))}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="public">Public (indexed by search engines)</SelectItem>
-                  <SelectItem value="public_noindex">Public (no search engine index)</SelectItem>
-                  <SelectItem value="authenticated">Authenticated users only</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Default Language</Label>
-                <Select
-                  value={portalForm.default_language}
-                  onValueChange={(v) => setPortalForm((f) => ({
-                    ...f,
-                    default_language: v,
-                    supported_languages: f.supported_languages?.includes(v)
-                      ? f.supported_languages
-                      : [...(f.supported_languages ?? []), v],
-                  }))}
-                >
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {SUPPORTED_LANGUAGES.map((lang) => (
-                      <SelectItem key={lang} value={lang}>{lang.toUpperCase()}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2 flex flex-col justify-end">
-                <div className="flex items-center gap-2 h-10">
-                  <Switch
-                    id="seo-crawlable"
-                    checked={portalForm.seo_crawlable}
-                    onCheckedChange={(v) => setPortalForm((f) => ({ ...f, seo_crawlable: v }))}
-                  />
-                  <Label htmlFor="seo-crawlable">SEO crawlable</Label>
-                </div>
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label>Supported Languages</Label>
-              <div className="flex flex-wrap gap-2">
-                {SUPPORTED_LANGUAGES.map((lang) => {
-                  const selected = portalForm.supported_languages?.includes(lang) ?? false;
-                  const isDefault = portalForm.default_language === lang;
-                  return (
-                    <button
-                      key={lang}
-                      type="button"
-                      disabled={isDefault}
-                      onClick={() => setPortalForm((f) => {
-                        const current = f.supported_languages ?? [];
-                        return {
-                          ...f,
-                          supported_languages: selected
-                            ? current.filter((l) => l !== lang)
-                            : [...current, lang],
-                        };
-                      })}
-                      className={cn(
-                        'px-2.5 py-1 rounded text-xs font-medium border transition-colors',
-                        selected
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'bg-background text-muted-foreground border-input hover:border-foreground',
-                        isDefault && 'opacity-60 cursor-not-allowed',
-                      )}
-                    >
-                      {lang.toUpperCase()}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="space-y-2">
-              <Label htmlFor="portal-desc">Description</Label>
-              <Input
-                id="portal-desc"
-                placeholder="For external vendors and suppliers"
-                value={portalForm.description ?? ''}
-                onChange={(e) => setPortalForm((f) => ({ ...f, description: e.target.value }))}
-              />
-            </div>
-
-            <div className="flex items-center gap-2">
-              <Switch
-                id="portal-enabled"
-                checked={portalForm.enabled}
-                onCheckedChange={(v) => setPortalForm((f) => ({ ...f, enabled: v }))}
-              />
-              <Label htmlFor="portal-enabled">Enabled (visible to visitors)</Label>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPortalDialogOpen(false)} disabled={portalDialogSaving}>
-              Cancel
-            </Button>
-            <Button onClick={handlePortalDialogSave} disabled={portalDialogSaving || !portalForm.name.trim() || !portalForm.slug.trim()}>
-              {portalDialogSaving ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving…</> : editingPortal ? 'Save Changes' : 'Create Portal'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
     </div>
   );
 }

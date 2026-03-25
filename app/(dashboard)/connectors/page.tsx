@@ -98,8 +98,8 @@ export default function ConnectorsPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-2xl md:text-3xl font-bold">Connectors</h1>
-          <p className="text-sm md:text-base text-muted-foreground">Manage connector configurations for organizations</p>
+          <h1 className="text-3xl font-bold">Connectors</h1>
+          <p className="text-muted-foreground">Manage connector configurations for organizations</p>
         </div>
         <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/connectors/add')} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />

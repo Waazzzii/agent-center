@@ -163,8 +163,8 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
             Back
           </Button>
           <div>
-            <h1 className="text-2xl md:text-3xl font-bold">{connectorInfo?.connector_name || 'Edit Connector'}</h1>
-            <p className="text-sm md:text-base text-muted-foreground">
+            <h1 className="text-3xl font-bold">{connectorInfo?.connector_name || 'Edit Connector'}</h1>
+            <p className="text-muted-foreground">
               {connectorInfo?.connector_key || 'Connector configuration'}
             </p>
           </div>

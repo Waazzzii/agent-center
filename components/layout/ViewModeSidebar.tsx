@@ -22,6 +22,7 @@ import {
   Ticket,
   FileText,
   ChevronDown,
+  ChevronRight,
   Settings,
   BookOpen,
   X,
@@ -31,6 +32,10 @@ import {
   ChevronLeft,
   ShieldCheck,
   History,
+  Layers,
+  Globe,
+  UsersRound,
+  UserRound,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -46,12 +51,20 @@ import { getOrganizations } from '@/lib/api/organizations';
 import type { Organization } from '@/types/api.types';
 import { orgMainNavItems as mainItems, orgSettingsNavItems as settingsItems, firstPermittedHref } from '@/lib/nav';
 
+interface NavChild {
+  label: string;
+  href: string;
+  icon: React.ElementType;
+  permissionKeys?: string[];
+}
+
 interface NavItem {
   label: string;
   href: string;
   icon: React.ElementType;
   superAdminOnly?: boolean;
   permissionKeys?: string[];
+  children?: NavChild[];
 }
 
 // Super Admin system-level nav
@@ -72,21 +85,35 @@ const MAIN_ICONS: Record<string, React.ElementType> = {
   '/skills':        Wand2,
 };
 const SETTINGS_ICONS: Record<string, React.ElementType> = {
-  '/access-groups':  ShieldCheck,
+  '/access-groups':  UsersRound,
   '/ai-agent':       Bot,
   '/audit-logs':     FileText,
-  '/knowledge-base': BookOpen,
+  '/centers':        Layers,
   '/connectors':     Plug,
   '/oauth-clients':  Key,
   '/organization':   Building2,
   '/users':          UserCircle,
 };
+const CHILDREN_ICONS: Record<string, React.ElementType> = {
+  '/knowledge-base': BookOpen,
+  '/centers/admin':  Globe,
+  '/users':          UserRound,
+  '/access-groups':  UsersRound,
+  '/ai-agent':       Bot,
+  '/connectors':     Plug,
+  '/audit-logs':     FileText,
+  '/oauth-clients':  Key,
+};
 
-const orgMainNavItems: NavItem[] = mainItems.map((i) => ({ ...i, icon: MAIN_ICONS[i.href] ?? Bot }));
-const orgSettingsNavItems: NavItem[] = settingsItems.map((i) => ({ ...i, icon: SETTINGS_ICONS[i.href] ?? Building2 }));
+const orgMainNavItems: NavItem[] = mainItems.map(({ children: _ch, ...i }) => ({ ...i, icon: MAIN_ICONS[i.href] ?? Bot }));
+const orgSettingsNavItems: NavItem[] = settingsItems.map(({ children, ...i }) => ({
+  ...i,
+  icon: SETTINGS_ICONS[i.href] ?? Building2,
+  children: children?.map((c) => ({ ...c, icon: CHILDREN_ICONS[c.href] ?? Settings })),
+})) as NavItem[];
 
 // Paths that belong to the settings panel (triggers settings mode)
-const SETTINGS_PATHS = ['/users', '/connectors', '/access-groups', '/oauth-clients', '/knowledge-base', '/audit-logs', '/organization', '/ai-agent'];
+const SETTINGS_PATHS = ['/users', '/connectors', '/access-groups', '/oauth-clients', '/knowledge-base', '/audit-logs', '/organization', '/ai-agent', '/centers'];
 
 export function ViewModeSidebar() {
   const pathname = usePathname();
@@ -96,11 +123,25 @@ export function ViewModeSidebar() {
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(false);
   const [settingsMode, setSettingsMode] = useState(false);
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
 
   // Auto-detect settings mode from current path
   useEffect(() => {
     const inSettings = SETTINGS_PATHS.some((p) => pathname.startsWith(p));
     setSettingsMode(inSettings);
+  }, [pathname]);
+
+  // Auto-expand parent items whose children match the current path
+  useEffect(() => {
+    const newExpanded = new Set<string>();
+    for (const item of orgSettingsNavItems) {
+      if (item.children?.some((c) => pathname.startsWith(c.href))) {
+        newExpanded.add(item.href);
+      }
+    }
+    if (newExpanded.size > 0) {
+      setExpandedItems((prev) => new Set([...prev, ...newExpanded]));
+    }
   }, [pathname]);
 
   useEffect(() => {
@@ -123,6 +164,15 @@ export function ViewModeSidebar() {
 
   const handleSwitchOrganization = (org: Organization) => {
     switchToOrgAdminView(org.id, org.name);
+  };
+
+  const toggleExpanded = (href: string) => {
+    setExpandedItems((prev) => {
+      const next = new Set(prev);
+      if (next.has(href)) next.delete(href);
+      else next.add(href);
+      return next;
+    });
   };
 
   const { clearAuth } = useAuthStore();
@@ -158,6 +208,85 @@ export function ViewModeSidebar() {
       return item.permissionKeys.some((key) => hasPermission(selectedOrgId, key));
     });
   }
+
+  const renderNavItem = (item: NavItem) => {
+    const Icon = item.icon;
+    const hasChildren = item.children && item.children.length > 0;
+    const isExpanded = hasChildren && expandedItems.has(item.href);
+    const isActive = !hasChildren && pathname.startsWith(item.href);
+    const isChildActive = hasChildren && item.children!.some((c) => pathname.startsWith(c.href));
+
+    const visibleChildren = hasChildren
+      ? item.children!.filter((child) => {
+          if (bypassPermissions) return true;
+          if (!child.permissionKeys || !selectedOrgId) return false;
+          return child.permissionKeys.some((k) => hasPermission(selectedOrgId, k));
+        })
+      : [];
+
+    return (
+      <div key={item.href}>
+        {hasChildren ? (
+          <button
+            onClick={() => toggleExpanded(item.href)}
+            className={cn(
+              'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+              isChildActive
+                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+            )}
+          >
+            <Icon className="h-5 w-5 shrink-0" />
+            <span className="flex-1 text-left">{item.label}</span>
+            {isExpanded
+              ? <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+              : <ChevronRight className="h-4 w-4 shrink-0 opacity-60" />
+            }
+          </button>
+        ) : (
+          <Link
+            href={item.href}
+            className={cn(
+              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+              isActive
+                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+            )}
+            onClick={() => { if (sidebarOpen) toggleSidebar(); }}
+          >
+            <Icon className="h-5 w-5" />
+            {item.label}
+          </Link>
+        )}
+
+        {/* Children */}
+        {hasChildren && isExpanded && visibleChildren.length > 0 && (
+          <div className="mt-0.5 ml-4 space-y-0.5 border-l border-sidebar-border pl-3">
+            {visibleChildren.map((child) => {
+              const ChildIcon = child.icon;
+              const childActive = pathname.startsWith(child.href);
+              return (
+                <Link
+                  key={child.href}
+                  href={child.href}
+                  className={cn(
+                    'flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors',
+                    childActive
+                      ? 'font-medium bg-sidebar-accent text-sidebar-accent-foreground'
+                      : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
+                  )}
+                  onClick={() => { if (sidebarOpen) toggleSidebar(); }}
+                >
+                  <ChildIcon className="h-4 w-4 shrink-0" />
+                  {child.label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -277,26 +406,7 @@ export function ViewModeSidebar() {
                 No access granted yet
               </div>
             )}
-            {visibleNavItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = pathname.startsWith(item.href);
-              return (
-                <Link
-                  key={item.href}
-                  href={item.href}
-                  className={cn(
-                    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                    isActive
-                      ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                      : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                  )}
-                  onClick={() => { if (sidebarOpen) toggleSidebar(); }}
-                >
-                  <Icon className="h-5 w-5" />
-                  {item.label}
-                </Link>
-              );
-            })}
+            {visibleNavItems.map(renderNavItem)}
 
             {/* Settings entry point — shown in main mode when user has any admin access */}
             {viewMode === 'org_admin' && !settingsMode && hasAnySettingsAccess && (
