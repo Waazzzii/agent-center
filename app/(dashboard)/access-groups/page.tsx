@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { getAccessGroups, createAccessGroup, deleteAccessGroup } from '@/lib/api/access-groups';
 import { getAccessDefinitions } from '@/lib/api/permissions';
@@ -80,10 +79,7 @@ export default function AccessGroupsPage() {
   const router = useRouter();
   const { admin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('access_groups_read');
-  const canCreate = usePermission('access_groups_create');
-  const canUpdate = usePermission('access_groups_update');
-  const canDelete = usePermission('access_groups_delete');
+  const permitted = useRequirePermission('admin_groups');
   const { confirm } = useConfirmDialog();
 
   const [accessGroups, setAccessGroups] = useState<AccessGroup[]>([]);
@@ -218,7 +214,7 @@ export default function AccessGroupsPage() {
       render: (ag: AccessGroup) => {
         const cat = deriveCategory(ag.access, keyToCategory);
         return cat
-          ? <Badge variant="outline" className="text-xs font-normal">{cat.replace(/^Connector - /, '')}</Badge>
+          ? <Badge variant="outline" className="text-xs font-normal">MCP · {cat.replace(/^Connector - /, '')}</Badge>
           : <Badge variant="secondary" className="text-xs font-normal">Mixed</Badge>;
       },
     },
@@ -247,16 +243,12 @@ export default function AccessGroupsPage() {
         <div className="flex items-center gap-1 justify-end">
           <Button
             variant="ghost" size="icon"
-            disabled={!canUpdate}
-            title={!canUpdate ? "You don't have permission to perform this action" : undefined}
             onClick={(e) => { e.stopPropagation(); router.push(`/access-groups/${ag.id}`); }}
           >
             <Pencil className="h-4 w-4" />
           </Button>
           <Button
             variant="ghost" size="icon"
-            disabled={!canDelete}
-            title={!canDelete ? "You don't have permission to perform this action" : undefined}
             onClick={(e) => { e.stopPropagation(); handleDelete(ag); }}
           >
             <Trash2 className="h-4 w-4" />
@@ -267,8 +259,6 @@ export default function AccessGroupsPage() {
         <>
           <Button
             variant="outline" size="sm"
-            disabled={!canUpdate}
-            title={!canUpdate ? "You don't have permission to perform this action" : undefined}
             onClick={(e) => { e.stopPropagation(); router.push(`/access-groups/${ag.id}`); }}
             className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l hover:bg-muted/80"
           >
@@ -276,8 +266,6 @@ export default function AccessGroupsPage() {
           </Button>
           <Button
             variant="outline" size="sm"
-            disabled={!canDelete}
-            title={!canDelete ? "You don't have permission to perform this action" : undefined}
             onClick={(e) => { e.stopPropagation(); handleDelete(ag); }}
             className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
           >
@@ -299,7 +287,7 @@ export default function AccessGroupsPage() {
             Permission presets scoped to a functional category — assign multiple groups per user.
           </p>
         </div>
-        <Button disabled={!canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={handleOpenCreate}>
+        <Button onClick={handleOpenCreate}>
           <Plus className="h-4 w-4 mr-2" />
           New Access Group
         </Button>
@@ -401,8 +389,9 @@ export default function AccessGroupsPage() {
                       )}>
                         <div className="flex items-center gap-2">
                           <Plug className={cn('h-5 w-5 shrink-0', selectedConnector ? 'text-primary' : 'text-muted-foreground')} />
-                          <span className="font-semibold text-foreground text-sm">Connector</span>
+                          <span className="font-semibold text-foreground text-sm">MCP</span>
                         </div>
+                        <p className="text-xs text-muted-foreground leading-relaxed">Control which MCP endpoints users can call for a specific connector</p>
                         <Select
                           value={selectedConnector}
                           onValueChange={(v) => setSelectedCategory(v)}
@@ -428,7 +417,7 @@ export default function AccessGroupsPage() {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={creating || !newName.trim() || !selectedCategory || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined}>
+            <Button onClick={handleCreate} disabled={creating || !newName.trim() || !selectedCategory}>
               {creating ? 'Creating…' : 'Create Group'}
             </Button>
           </DialogFooter>

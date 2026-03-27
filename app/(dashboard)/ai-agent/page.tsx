@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import {
@@ -13,7 +12,7 @@ import {
   removeAnthropicKey,
   type AiAgentStatus,
 } from '@/lib/api/ai-agent';
-import { getConnectors, getConnectorOAuthUrl, disconnectConnectorOAuth } from '@/lib/api/connectors';
+import { getConnectors, updateConnector, getConnectorOAuthUrl, disconnectConnectorOAuth } from '@/lib/api/connectors';
 import type { OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,6 +20,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Switch } from '@/components/ui/switch';
 import { CheckCircle2, AlertCircle, KeyRound, Bot, Plug, ExternalLink, Settings, Eye, EyeOff } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -34,8 +34,7 @@ export default function AiAgentPage() {
     const tab = new URLSearchParams(window.location.search).get('tab');
     if (tab === 'connectors') setActiveTab('connectors');
   }, []);
-  const permitted = useRequirePermission('agents_read');
-  const canUpdate = usePermission('agents_update');
+  const permitted = useRequirePermission('admin_ai_agent');
 
   const [status, setStatus] = useState<AiAgentStatus | null>(null);
   const [loading, setLoading] = useState(true);
@@ -49,6 +48,7 @@ export default function AiAgentPage() {
   const [connectorsLoading, setConnectorsLoading] = useState(false);
   const [oauthConnecting, setOauthConnecting] = useState<string | null>(null);
   const [oauthDisconnecting, setOauthDisconnecting] = useState<string | null>(null);
+  const [agentEnableToggling, setAgentEnableToggling] = useState<string | null>(null);
 
   useEffect(() => {
     if (!selectedOrgId || !permitted) return;
@@ -75,7 +75,8 @@ export default function AiAgentPage() {
     try {
       setConnectorsLoading(true);
       const data = await getConnectors(selectedOrgId);
-      setConnectors(data.connectors.filter((c) => c.is_enabled));
+      // Show all connectors — is_enabled indicates configured/ready
+      setConnectors(data.connectors);
     } catch {
       toast.error('Failed to load connectors');
     } finally {
@@ -204,6 +205,21 @@ export default function AiAgentPage() {
     }
   };
 
+  const handleAgentEnabledToggle = async (connector: OrganizationConnector, checked: boolean) => {
+    if (!selectedOrgId) return;
+    setAgentEnableToggling(connector.id);
+    try {
+      await updateConnector(selectedOrgId, connector.id, { agent_enabled: checked });
+      setConnectors((prev) =>
+        prev.map((c) => c.id === connector.id ? { ...c, agent_enabled: checked } : c)
+      );
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update');
+    } finally {
+      setAgentEnableToggling(null);
+    }
+  };
+
   if (!permitted) return <NoPermissionContent />;
 
   return (
@@ -232,8 +248,7 @@ export default function AiAgentPage() {
             </p>
             <Button
               onClick={handleEnable}
-              disabled={agentToggling || !canUpdate}
-              title={!canUpdate ? "You don't have permission to perform this action" : undefined}
+              disabled={agentToggling}
             >
               {agentToggling ? 'Enabling…' : 'Enable AI Agent'}
             </Button>
@@ -259,8 +274,7 @@ export default function AiAgentPage() {
               variant="outline"
               size="sm"
               onClick={handleDisable}
-              disabled={agentToggling || !canUpdate}
-              title={!canUpdate ? "You don't have permission to perform this action" : undefined}
+              disabled={agentToggling}
             >
               {agentToggling ? 'Disabling…' : 'Disable'}
             </Button>
@@ -339,7 +353,6 @@ export default function AiAgentPage() {
                           placeholder={status.anthropic_key_masked ?? 'sk-ant-...'}
                           value={anthropicKey}
                           onChange={(e) => setAnthropicKey(e.target.value)}
-                          disabled={!canUpdate}
                           className="pr-10"
                         />
                         <Button
@@ -360,7 +373,7 @@ export default function AiAgentPage() {
                       <Button
                         size="sm"
                         onClick={handleSaveKey}
-                        disabled={!anthropicKey.trim() || keyLoading || !canUpdate}
+                        disabled={!anthropicKey.trim() || keyLoading}
                       >
                         {keyLoading ? 'Saving…' : 'Update Key'}
                       </Button>
@@ -368,7 +381,7 @@ export default function AiAgentPage() {
                         size="sm"
                         variant="outline"
                         onClick={handleRemoveKey}
-                        disabled={keyLoading || !canUpdate}
+                        disabled={keyLoading}
                         className="border-destructive text-destructive hover:bg-destructive/10"
                       >
                         Remove Key
@@ -392,7 +405,6 @@ export default function AiAgentPage() {
                           placeholder="sk-ant-..."
                           value={anthropicKey}
                           onChange={(e) => setAnthropicKey(e.target.value)}
-                          disabled={!canUpdate}
                           className="pr-10"
                         />
                         <Button
@@ -412,7 +424,7 @@ export default function AiAgentPage() {
                     <Button
                       size="sm"
                       onClick={handleSaveKey}
-                      disabled={!anthropicKey.trim() || keyLoading || !canUpdate}
+                      disabled={!anthropicKey.trim() || keyLoading}
                     >
                       {keyLoading ? 'Saving…' : 'Save Key'}
                     </Button>
@@ -444,7 +456,7 @@ export default function AiAgentPage() {
                 ) : connectors.length === 0 ? (
                   <div className="flex items-center gap-2 rounded-lg border border-muted px-4 py-3 text-sm text-muted-foreground">
                     <AlertCircle className="h-4 w-4 shrink-0" />
-                    No enabled connectors found. Enable connectors in the Connectors section first.
+                    No connectors found. Add connectors in the Connectors section first.
                   </div>
                 ) : (
                   <div className="divide-y">
@@ -454,65 +466,65 @@ export default function AiAgentPage() {
                       const connectedEmail = connector.agent_config?.connected_email as string | undefined;
                       const isThisConnecting = oauthConnecting === connector.id;
                       const isThisDisconnecting = oauthDisconnecting === connector.id;
+                      const isThisToggling = agentEnableToggling === connector.id;
 
                       return (
-                        <div key={connector.id} className="flex items-center justify-between py-4 first:pt-0 last:pb-0">
-                          <div className="space-y-0.5">
-                            <p className="text-sm font-medium">{connector.connector_name}</p>
-                            {isOAuth ? (
-                              isOAuthConnected ? (
-                                <p className="text-xs text-muted-foreground">Connected as {connectedEmail}</p>
-                              ) : (
-                                <p className="text-xs text-amber-600 dark:text-amber-400">
-                                  {connector.agent_instruction || 'No account connected — login required'}
-                                </p>
-                              )
-                            ) : (
-                              <p className="text-xs text-muted-foreground">
-                                {connector.agent_instruction || 'Available via configured credentials'}
-                              </p>
-                            )}
+                        <div key={connector.id} className="py-4 first:pt-0 last:pb-0 space-y-3">
+                          {/* Name + agent_enabled toggle */}
+                          <div className="flex items-center justify-between gap-4">
+                            <div className="space-y-0.5 min-w-0">
+                              <p className="text-sm font-medium">{connector.connector_name}</p>
+                              {connector.agent_instruction && (
+                                <p className="text-xs text-muted-foreground">{connector.agent_instruction}</p>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="text-xs text-muted-foreground">
+                                {connector.agent_enabled ? 'Enabled' : 'Disabled'}
+                              </span>
+                              <Switch
+                                checked={connector.agent_enabled ?? false}
+                                disabled={isThisToggling}
+                                onCheckedChange={(checked) => handleAgentEnabledToggle(connector, checked)}
+                                aria-label={`Enable agent use for ${connector.connector_name}`}
+                              />
+                            </div>
                           </div>
 
-                          <div className="flex items-center gap-2">
-                            {isOAuth ? (
-                              isOAuthConnected ? (
-                                <>
-                                  <Badge variant="default" className="text-xs bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-green-200 dark:border-green-800">
-                                    Connected
-                                  </Badge>
-                                  {canUpdate && (
-                                    <Button
-                                      size="sm"
-                                      variant="outline"
-                                      onClick={() => handleDisconnectOAuth(connector)}
-                                      disabled={isThisDisconnecting}
-                                      className="text-xs h-7"
-                                    >
-                                      {isThisDisconnecting ? 'Disconnecting…' : 'Disconnect'}
-                                    </Button>
-                                  )}
-                                </>
-                              ) : (
-                                <>
-                                  {canUpdate && (
-                                    <Button
-                                      size="sm"
-                                      onClick={() => handleConnectOAuth(connector.id)}
-                                      disabled={isThisConnecting}
-                                      className="text-xs h-7"
-                                    >
-                                      {isThisConnecting ? 'Connecting…' : `Connect ${connector.connector_name}`}
-                                    </Button>
-                                  )}
-                                </>
-                              )
-                            ) : (
-                              <Badge variant="default" className="text-xs bg-green-100 text-green-800 dark:bg-green-900 dark:text-green-200 border-green-200 dark:border-green-800">
-                                Available
-                              </Badge>
-                            )}
-                          </div>
+                          {/* OAuth section — only shown if agent is enabled */}
+                          {connector.agent_enabled && isOAuth && (
+                            <div className="flex items-center justify-between rounded-lg border border-muted bg-muted/30 px-3 py-2">
+                              <div>
+                                {isOAuthConnected ? (
+                                  <p className="text-xs text-muted-foreground">Connected as {connectedEmail}</p>
+                                ) : (
+                                  <p className="text-xs text-amber-600 dark:text-amber-400">
+                                    No account connected — login required
+                                  </p>
+                                )}
+                              </div>
+                              {isOAuthConnected ? (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    onClick={() => handleDisconnectOAuth(connector)}
+                                    disabled={isThisDisconnecting}
+                                    className="text-xs h-7"
+                                  >
+                                    {isThisDisconnecting ? 'Disconnecting…' : 'Disconnect'}
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    onClick={() => handleConnectOAuth(connector.id)}
+                                    disabled={isThisConnecting}
+                                    className="text-xs h-7"
+                                  >
+                                    {isThisConnecting ? 'Connecting…' : 'Connect Account'}
+                                  </Button>
+                                )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}

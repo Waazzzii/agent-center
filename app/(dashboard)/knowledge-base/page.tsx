@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
 import {
   getKbSettings,
   updateKbSettings,
@@ -211,10 +210,7 @@ function DomainStatusBadge({ status }: { status: DomainProvisioningStatus | 'iss
 export default function KnowledgeBasePage() {
   const router = useRouter();
   const { selectedOrgId, selectedOrgName, isOrgAdminView } = useAdminViewStore();
-  const permitted = useRequirePermission(['knowledgebase_admin_read', 'knowledgebase_admin_update']);
-  const canCreate = usePermission('knowledgebase_admin_create');
-  const canUpdate = usePermission('knowledgebase_admin_update');
-  const canDelete = usePermission('knowledgebase_admin_delete');
+  const permitted = useRequirePermission('knowledge_base_edit');
   const { confirm } = useConfirmDialog();
 
   const [kbSettings, setKbSettings] = useState<KbOrgSettings | null>(null);
@@ -773,7 +769,7 @@ export default function KnowledgeBasePage() {
             <p className="text-sm text-muted-foreground mb-6 max-w-sm">
               Enable the Knowledge Base to provision a self-service portal for {selectedOrgName}.
             </p>
-            <Button onClick={() => handleKbToggle(true)} disabled={kbSaving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+            <Button onClick={() => handleKbToggle(true)} disabled={kbSaving}>
               {kbSaving ? 'Enabling…' : 'Enable Knowledge Base'}
             </Button>
           </CardContent>
@@ -802,8 +798,7 @@ export default function KnowledgeBasePage() {
               variant="outline"
               size="sm"
               onClick={() => handleKbToggle(false)}
-              disabled={kbSaving || !canUpdate}
-              title={!canUpdate ? "You don't have permission to perform this action" : undefined}
+              disabled={kbSaving}
             >
               Disable
             </Button>
@@ -898,17 +893,15 @@ export default function KnowledgeBasePage() {
                       value={customDomainInput}
                       onChange={(e) => setCustomDomainInput(e.target.value.toLowerCase().replace(/^https?:\/\//, ''))}
                       className="font-mono text-sm"
-                      disabled={!canUpdate}
                     />
                     <Button
                       onClick={handleSaveCustomDomain}
-                      disabled={kbSaving || !customDomainInput.trim() || customDomainInput.trim() === kbSettings?.custom_domain || !canUpdate}
-                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
+                      disabled={kbSaving || !customDomainInput.trim() || customDomainInput.trim() === kbSettings?.custom_domain}
                     >
                       {kbSaving ? 'Saving…' : kbSettings?.custom_domain ? 'Update' : 'Save'}
                     </Button>
                     {kbSettings?.custom_domain && (
-                      <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={kbSaving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+                      <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={kbSaving}>
                         Remove
                       </Button>
                     )}
@@ -967,7 +960,6 @@ export default function KnowledgeBasePage() {
                     placeholder={selectedOrgName || 'Knowledge Base'}
                     value={kbNameInput}
                     onChange={(e) => setKbNameInput(e.target.value)}
-                    disabled={!canUpdate}
                   />
                   <p className="text-xs text-muted-foreground">
                     Defaults to your organization name if not set.
@@ -992,7 +984,7 @@ export default function KnowledgeBasePage() {
                 ) : logoUrl ? (
                   <div className="flex items-center gap-4">
                     <img src={logoUrl} alt="KB Logo" className="h-16 max-w-[200px] object-contain rounded border p-2 bg-white" />
-                    <Button variant="outline" size="sm" onClick={handleLogoDelete} disabled={logoDeleting || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+                    <Button variant="outline" size="sm" onClick={handleLogoDelete} disabled={logoDeleting}>
                       {logoDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
                     </Button>
                   </div>
@@ -1001,7 +993,7 @@ export default function KnowledgeBasePage() {
                     {logoUploading ? <Loader2 className="h-8 w-8 text-muted-foreground mb-2 animate-spin" /> : <Upload className="h-8 w-8 text-muted-foreground mb-2" />}
                     <p className="text-sm font-medium">{logoUploading ? 'Uploading…' : 'Upload logo'}</p>
                     <p className="text-xs text-muted-foreground mt-1">PNG, JPG or SVG — max 2 MB</p>
-                    <Button variant="outline" size="sm" className="mt-4" disabled={logoUploading || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); logoInputRef.current?.click(); }}>
+                    <Button variant="outline" size="sm" className="mt-4" disabled={logoUploading} onClick={(e) => { e.stopPropagation(); logoInputRef.current?.click(); }}>
                       Choose file
                     </Button>
                   </div>
@@ -1025,7 +1017,7 @@ export default function KnowledgeBasePage() {
                 ) : faviconUrl ? (
                   <div className="flex items-center gap-4">
                     <img src={faviconUrl} alt="KB Favicon" className="h-12 w-12 object-contain rounded border p-2 bg-white" />
-                    <Button variant="outline" size="sm" onClick={handleFaviconDelete} disabled={faviconDeleting || !canUpdate}>
+                    <Button variant="outline" size="sm" onClick={handleFaviconDelete} disabled={faviconDeleting}>
                       {faviconDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
                     </Button>
                   </div>
@@ -1034,7 +1026,7 @@ export default function KnowledgeBasePage() {
                     {faviconUploading ? <Loader2 className="h-8 w-8 text-muted-foreground mb-2 animate-spin" /> : <Upload className="h-8 w-8 text-muted-foreground mb-2" />}
                     <p className="text-sm font-medium">{faviconUploading ? 'Uploading…' : 'Upload favicon'}</p>
                     <p className="text-xs text-muted-foreground mt-1">PNG, JPG, SVG or ICO — max 512 KB</p>
-                    <Button variant="outline" size="sm" className="mt-4" disabled={faviconUploading || !canUpdate} onClick={(e) => { e.stopPropagation(); faviconInputRef.current?.click(); }}>
+                    <Button variant="outline" size="sm" className="mt-4" disabled={faviconUploading} onClick={(e) => { e.stopPropagation(); faviconInputRef.current?.click(); }}>
                       Choose file
                     </Button>
                   </div>
@@ -1082,7 +1074,6 @@ export default function KnowledgeBasePage() {
                     <button
                       type="button"
                       onClick={() => setCustomThemeInput(KB_THEME_DEFAULTS)}
-                      disabled={!canUpdate}
                       className="ml-auto text-xs text-slate-400 dark:text-[#8a9bb0] hover:text-slate-600 dark:hover:text-slate-300 transition-colors disabled:pointer-events-none disabled:opacity-40"
                     >
                       Load defaults
@@ -1092,7 +1083,6 @@ export default function KnowledgeBasePage() {
                     value={customThemeInput}
                     onChange={(e) => setCustomThemeInput(e.target.value)}
                     placeholder="/* Paste custom CSS here, or click 'Load defaults' to start from the Wazzi defaults */"
-                    disabled={!canUpdate}
                     spellCheck={false}
                     autoCorrect="off"
                     autoCapitalize="off"
@@ -1101,7 +1091,6 @@ export default function KnowledgeBasePage() {
                       'w-full resize-none bg-slate-50 dark:bg-[#0f1419] px-4 py-3 font-mono text-sm text-slate-900 dark:text-[#e8e8e8]',
                       'placeholder:text-slate-300 dark:placeholder:text-[#4a5a6e] focus:outline-none',
                       'leading-relaxed tracking-wide',
-                      !canUpdate && 'opacity-60 cursor-not-allowed'
                     )}
                   />
                 </div>
@@ -1113,8 +1102,7 @@ export default function KnowledgeBasePage() {
             <div className="flex justify-end">
               <Button
                 onClick={handleSaveThemeTab}
-                disabled={themeTabSaving || !canUpdate}
-                title={!canUpdate ? "You don't have permission to perform this action" : undefined}
+                disabled={themeTabSaving}
                 className="gap-2 min-w-[140px]"
               >
                 {themeTabSaving ? (
@@ -1133,12 +1121,10 @@ export default function KnowledgeBasePage() {
           <TabsContent value="portals" className="mt-6">
             <div className="mb-4 flex items-center justify-between">
               <p className="text-sm text-muted-foreground">Audience-specific portals (e.g. Vendor, Internal, Guest)</p>
-              {canCreate && (
-                <Button onClick={handlePortalOpenCreate} size="sm" className="gap-2">
+              <Button onClick={handlePortalOpenCreate} size="sm" className="gap-2">
                   <Plus className="h-4 w-4" />
                   New Portal
                 </Button>
-              )}
             </div>
             {portalsLoading ? (
               <div className="flex items-center justify-center py-12">
@@ -1152,8 +1138,7 @@ export default function KnowledgeBasePage() {
                   <p className="text-sm text-muted-foreground mb-6 max-w-sm">
                     Portals are audience-specific sections of your Knowledge Base (e.g. Vendor, Internal, Guest).
                   </p>
-                  {canCreate && (
-                    <div className="flex flex-col sm:flex-row gap-3">
+                  <div className="flex flex-col sm:flex-row gap-3">
                       <Button onClick={handleSeedDefaultPortals} disabled={portalSeeding} className="gap-2">
                         {portalSeeding ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
                         Create Default Portals
@@ -1163,7 +1148,6 @@ export default function KnowledgeBasePage() {
                         Create Custom Portal
                       </Button>
                     </div>
-                  )}
                 </CardContent>
               </Card>
             ) : (
@@ -1188,14 +1172,11 @@ export default function KnowledgeBasePage() {
                         </p>
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
-                        {canUpdate && (
-                          <Switch
+                        <Switch
                             checked={portal.enabled}
                             disabled={portalSaving === portal.id}
                             onCheckedChange={(v) => handlePortalToggleEnabled(portal, v)}
                           />
-                        )}
-                        {canUpdate && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1204,8 +1185,6 @@ export default function KnowledgeBasePage() {
                           >
                             <Pencil className="h-4 w-4" />
                           </Button>
-                        )}
-                        {canDelete && (
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1215,7 +1194,6 @@ export default function KnowledgeBasePage() {
                           >
                             {portalSaving === portal.id ? <Loader2 className="h-4 w-4 animate-spin" /> : <Trash2 className="h-4 w-4" />}
                           </Button>
-                        )}
                       </div>
                     </CardContent>
                   </Card>

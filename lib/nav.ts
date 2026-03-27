@@ -12,10 +12,10 @@ export interface NavItem {
 
 /** Main org nav — shown in the regular (non-settings) panel, alphabetical */
 export const orgMainNavItems: NavItem[] = [
-  { label: 'Agentic Workflows', href: '/agents',         permissionKeys: ['agents_read'] },
-  { label: 'Agent History',    href: '/agent-history',  permissionKeys: ['agents_read'] },
-  { label: 'Approvals',        href: '/approvals',      permissionKeys: ['approvals_read'] },
-  { label: 'Skills',         href: '/skills',         permissionKeys: ['skills_read'] },
+  { label: 'Agentic Workflows', href: '/agents',        permissionKeys: ['agents_manager'] },
+  { label: 'Agent History',     href: '/agent-history', permissionKeys: ['agents_manager'] },
+  { label: 'Approvals',         href: '/approvals',     permissionKeys: ['agents_manager'] },
+  { label: 'Skills',            href: '/skills',        permissionKeys: ['agents_manager'] },
 ];
 
 /** Settings nav — shown in the settings panel, alphabetical */
@@ -23,40 +23,33 @@ export const orgSettingsNavItems: NavItem[] = [
   {
     label: 'Access',
     href: '/access-groups',
-    permissionKeys: ['access_groups_read', 'users_read'],
+    permissionKeys: ['admin_users', 'admin_groups'],
     children: [
-      { label: 'Users',   href: '/users',         permissionKeys: ['users_read'] },
-      { label: 'Groups',  href: '/access-groups', permissionKeys: ['access_groups_read'] },
+      { label: 'Users',   href: '/users',         permissionKeys: ['admin_users'] },
+      { label: 'Groups',  href: '/access-groups', permissionKeys: ['admin_groups'] },
     ],
   },
-  {
-    label: 'AI',
-    href: '/ai-agent',
-    permissionKeys: ['agents_read', 'connectors_read'],
-    children: [
-      { label: 'Agent',  href: '/ai-agent',    permissionKeys: ['agents_read'] },
-      { label: 'MCP',    href: '/connectors',  permissionKeys: ['connectors_read'] },
-    ],
-  },
+  { label: 'AI Agent', href: '/ai-agent', permissionKeys: ['admin_ai_agent'] },
+  { label: 'Connectors', href: '/connectors', permissionKeys: ['admin_connectors'] },
   {
     label: 'Audit',
     href: '/audit-logs',
-    permissionKeys: ['audit_logs_read', 'oauth_clients_read'],
+    permissionKeys: ['admin_audit_logs', 'admin_oauth_clients'],
     children: [
-      { label: 'Logs',   href: '/audit-logs',    permissionKeys: ['audit_logs_read'] },
-      { label: 'OAuth',  href: '/oauth-clients', permissionKeys: ['oauth_clients_read'] },
+      { label: 'Logs',   href: '/audit-logs',    permissionKeys: ['admin_audit_logs'] },
+      { label: 'OAuth',  href: '/oauth-clients', permissionKeys: ['admin_oauth_clients'] },
     ],
   },
   {
     label: 'Centers',
-    href: '/centers',
-    permissionKeys: ['knowledgebase_admin_read', 'center_admin'],
+    href: '/centers/data-sources',
+    permissionKeys: ['admin_data_sources', 'admin_products'],
     children: [
-      { label: 'Knowledge Base',  href: '/knowledge-base',         permissionKeys: ['knowledgebase_admin_read'] },
-      { label: 'Administration',  href: '/centers/admin',          permissionKeys: ['center_admin'] },
+      { label: 'Data Sources', href: '/centers/data-sources', permissionKeys: ['admin_data_sources'] },
+      { label: 'Products',     href: '/centers/products',     permissionKeys: ['admin_products'] },
     ],
   },
-  { label: 'Organization',    href: '/organization',   permissionKeys: ['organization_read'] },
+  { label: 'Organization', href: '/organization', permissionKeys: ['admin_organization'] },
 ];
 
 /**

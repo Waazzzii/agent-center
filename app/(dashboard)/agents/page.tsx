@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { getAgents, deleteAgent, runAgent, type Agent } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -18,11 +17,7 @@ import { NoPermissionContent } from '@/components/layout/no-permission-content';
 export default function AgentsPage() {
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agents_read');
-  const canCreate = usePermission('agents_create');
-  const canUpdate = usePermission('agents_update');
-  const canExecute = usePermission('agents_execute');
-  const canDelete = usePermission('agents_delete');
+  const permitted = useRequirePermission('agents_manager');
   const { confirm } = useConfirmDialog();
 
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -96,7 +91,7 @@ export default function AgentsPage() {
           <h1 className="text-3xl font-bold">Agentic Workflows</h1>
           <p className="text-muted-foreground">Automated workflows powered by LLMs and your connected systems</p>
         </div>
-        <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/agents/create')}>
+        <Button disabled={!selectedOrgId} onClick={() => router.push('/agents/create')}>
           <Plus className="mr-2 h-4 w-4" />
           New Workflow
         </Button>
@@ -152,28 +147,28 @@ export default function AgentsPage() {
                   label: 'Actions',
                   desktopRender: (a) => (
                     <div className="flex items-center justify-end gap-2">
-                      <Button variant="ghost" size="sm" disabled={!canExecute || runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
+                      <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
                         {runningId === a.id
                           ? <RefreshCw className="h-4 w-4 animate-spin" />
                           : <Play className="h-4 w-4 text-green-600" />}
                       </Button>
-                      <Button variant="ghost" size="sm" disabled={!canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }}>
+                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }}>
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="sm" disabled={!canDelete} title={!canDelete ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }}>
+                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }}>
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </div>
                   ),
                   render: (a) => (
                     <>
-                      <Button variant="outline" size="sm" disabled={!canExecute || runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }} className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l">
+                      <Button variant="outline" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }} className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l">
                         {runningId === a.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 text-green-600" />}
                       </Button>
-                      <Button variant="outline" size="sm" disabled={!canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} className="flex-1 rounded-none border-r-0 border-t-0 border-l">
+                      <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} className="flex-1 rounded-none border-r-0 border-t-0 border-l">
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="outline" size="sm" disabled={!canDelete} title={!canDelete ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }} className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10">
+                      <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }} className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10">
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </>

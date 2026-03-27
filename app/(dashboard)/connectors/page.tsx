@@ -2,233 +2,244 @@
 
 import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { useAuthStore } from '@/stores/auth.store';
+import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
-import { getConnectors, deleteConnector } from '@/lib/api/connectors';
-import { OrganizationConnector } from '@/types/api.types';
+import { getConnectors as getBaseCatalog } from '@/lib/api/connectors-base';
+import { getConnectors, createConnector, deleteConnector } from '@/lib/api/connectors';
+import type { Connector, OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { ResponsiveTable } from '@/components/ui/responsive-table';
-import { Badge } from '@/components/ui/badge';
-import { Trash2, Plus, Pencil } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
+import {
+  ExternalLink,
+  Loader2,
+  Plug,
+  CheckCircle2,
+  XCircle,
+} from 'lucide-react';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 
 export default function ConnectorsPage() {
   const router = useRouter();
-  const { admin } = useAuthStore();
-  const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('connectors_read');
-  const canCreate = usePermission('connectors_create');
-  const canUpdate = usePermission('connectors_update');
-  const canDelete = usePermission('connectors_delete');
+  const { selectedOrgId, selectedOrgName, isOrgAdminView } = useAdminViewStore();
   const { confirm } = useConfirmDialog();
-  const [connectors, setConnectors] = useState<OrganizationConnector[]>([]);
+  const permitted = useRequirePermission('admin_connectors');
+
+  const [catalogConnectors, setCatalogConnectors] = useState<Connector[]>([]);
+  const [orgConnectors, setOrgConnectors] = useState<OrganizationConnector[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [addingId, setAddingId] = useState<string | null>(null);
+  const [removingId, setRemovingId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!admin) {
-      router.push('/login');
-      return;
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [admin]);
-
-  useEffect(() => {
-    if (selectedOrgId) {
-      loadConnectors();
-    }
+    if (!isOrgAdminView() || !selectedOrgId) { router.push('/organizations'); return; }
+    loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId]);
 
-  const loadConnectors = async () => {
+  const loadAll = async () => {
     if (!selectedOrgId) return;
-
+    setLoading(true);
     try {
-      setLoading(true);
-      setError(null);
-      const data = await getConnectors(selectedOrgId);
-      setConnectors(data.connectors);
-    } catch (err: any) {
-      setError(err.message || 'Failed to load connectors');
+      const [catalogData, orgData] = await Promise.all([
+        getBaseCatalog(),
+        getConnectors(selectedOrgId),
+      ]);
+      setCatalogConnectors(catalogData.connectors.filter((c) => c.is_public && c.is_active));
+      setOrgConnectors(orgData.connectors);
+    } catch {
+      toast.error('Failed to load connectors');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleDelete = async (connectorId: string) => {
+  const handleAdd = async (connector: Connector) => {
     if (!selectedOrgId) return;
-
-    const confirmed = await confirm({
-      title: 'Delete Connector',
-      description: 'Are you sure you want to delete this connector? This action cannot be undone.',
-      confirmText: 'Delete',
-      cancelText: 'Cancel',
-      variant: 'destructive',
-    });
-
-    if (!confirmed) return;
-
+    setAddingId(connector.id);
     try {
-      await deleteConnector(selectedOrgId, connectorId);
-      await loadConnectors();
+      const newConn = await createConnector(selectedOrgId, {
+        connector_id: connector.id,
+        config: {},
+        is_enabled: true,
+      });
+      toast.success(`${connector.name} added`);
+      router.push(`/connectors/${newConn.id}/edit`);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to delete connector');
+      toast.error(err.message || 'Failed to add connector');
+      setAddingId(null);
     }
   };
 
-  if (!admin || loading) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-center">
-          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
-  }
+  const handleRemove = async (orgConn: OrganizationConnector) => {
+    if (!selectedOrgId) return;
+    const confirmed = await confirm({
+      title: 'Remove Connector',
+      description: `Remove ${orgConn.connector_name} from this organization? All configuration will be deleted and this cannot be undone.`,
+      confirmText: 'Remove',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!confirmed) return;
+    setRemovingId(orgConn.id);
+    try {
+      await deleteConnector(selectedOrgId, orgConn.id);
+      setOrgConnectors((prev) => prev.filter((c) => c.id !== orgConn.id));
+      toast.success('Connector removed');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to remove connector');
+    } finally {
+      setRemovingId(null);
+    }
+  };
 
   if (!permitted) return <NoPermissionContent />;
 
+  // Build lookup: catalog connector id → org connector instance
+  const orgByBase: Record<string, OrganizationConnector> = {};
+  for (const oc of orgConnectors) orgByBase[oc.connector_id] = oc;
+
   return (
     <div className="space-y-6">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <h1 className="text-3xl font-bold">Connectors</h1>
-          <p className="text-muted-foreground">Manage connector configurations for organizations</p>
-        </div>
-        <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/connectors/add')} className="w-full sm:w-auto">
-          <Plus className="mr-2 h-4 w-4" />
-          Browse Connectors
-        </Button>
+      <div>
+        <h1 className="text-3xl font-bold">Connectors</h1>
+        <p className="text-muted-foreground">
+          Browse and manage connectors available to {selectedOrgName ?? 'your organization'}.
+        </p>
       </div>
 
-      {!selectedOrgId ? (
+      {loading ? (
+        <div className="flex items-center justify-center py-16">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        </div>
+      ) : catalogConnectors.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
-            <p className="text-muted-foreground">
-              No organization selected. Please select an organization from the header.
-            </p>
+            <Plug className="mx-auto h-12 w-12 text-muted-foreground mb-4" />
+            <p className="text-muted-foreground">No connectors available.</p>
           </CardContent>
         </Card>
       ) : (
-        <>
-          {error && (
-            <div className="mb-6 rounded-lg border border-destructive bg-destructive/10 p-4">
-              <p className="text-destructive">{error}</p>
-            </div>
-          )}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {catalogConnectors.map((connector) => {
+            const orgConn = orgByBase[connector.id];
+            const isAdded = Boolean(orgConn);
+            const isEnabled = isAdded && orgConn.is_enabled;
+            const isMcp = isAdded && orgConn.mcp_enabled === true;
+            const isAgent = isAdded && orgConn.agent_enabled === true;
+            const isCenters = isAdded && orgConn.centers_enabled === true;
+            const isAdding = addingId === connector.id;
+            const isRemoving = isAdded && removingId === orgConn.id;
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Connectors</CardTitle>
-              <CardDescription>
-                {connectors.length} connector{connectors.length !== 1 ? 's' : ''} configured
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ResponsiveTable
-                data={connectors}
-                getRowKey={(connector) => connector.id}
-                onRowClick={(connector) => router.push(`/connectors/${connector.id}/edit`)}
-                emptyMessage="No connectors configured for this organization."
-                columns={[
-                  {
-                    key: 'name',
-                    label: 'Connector ID',
-                    mobileLabel: 'Connector',
-                    render: (connector) => (
-                      <span className="font-medium">{connector.connector_name}</span>
-                    ),
-                  },
-                  {
-                    key: 'status',
-                    label: 'Status',
-                    render: (connector) => (
-                      connector.is_enabled ? (
-                        <Badge variant="default">Enabled</Badge>
+            return (
+              <Card key={connector.id} className="flex flex-col">
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      {connector.icon_url ? (
+                        <img
+                          src={connector.icon_url}
+                          alt={connector.name}
+                          className="h-9 w-9 rounded shrink-0"
+                        />
                       ) : (
-                        <Badge variant="secondary">Disabled</Badge>
-                      )
-                    ),
-                  },
-                  {
-                    key: 'created',
-                    label: 'Created',
-                    render: (connector) => new Date(connector.created_at).toLocaleDateString(),
-                  },
-                  {
-                    key: 'actions',
-                    label: 'Actions',
-                    desktopRender: (connector) => (
-                      <div className="flex items-center justify-end gap-2">
+                        <div className="h-9 w-9 rounded bg-primary/10 flex items-center justify-center shrink-0">
+                          <Plug className="h-4 w-4 text-primary" />
+                        </div>
+                      )}
+                      <CardTitle className="text-base leading-tight">{connector.name}</CardTitle>
+                    </div>
+                    {connector.documentation_url && (
+                      <a
+                        href={connector.documentation_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-muted-foreground hover:text-foreground shrink-0 mt-0.5"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <ExternalLink className="h-4 w-4" />
+                      </a>
+                    )}
+                  </div>
+                  {connector.description && (
+                    <CardDescription className="mt-1 line-clamp-2">
+                      {connector.description}
+                    </CardDescription>
+                  )}
+                </CardHeader>
+
+                <CardContent className="flex-1 flex flex-col justify-end gap-0 pt-0">
+                  {isAdded ? (
+                    <div className="space-y-3">
+                      <div className="rounded-lg border divide-y text-sm">
+                        <StatusRow label="MCP" active={isMcp} />
+                        <StatusRow label="Agent" active={isAgent} />
+                        <StatusRow label="Centers" active={isCenters} />
+                      </div>
+                      <div className="flex gap-2">
+                        <Link href={`/connectors/${orgConn.id}/edit`} className="w-1/2">
+                          <Button variant="outline" size="sm" className="w-full">Configure</Button>
+                        </Link>
                         <Button
-                          variant="ghost"
+                          variant="outline"
                           size="sm"
-                          disabled={!canUpdate}
-                          title={!canUpdate ? "You don't have permission to perform this action" : undefined}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            router.push(`/connectors/${connector.id}/edit`);
-                          }}
+                          className="w-1/2 text-destructive hover:text-destructive hover:bg-destructive/10 border-destructive/30"
+                          disabled={isRemoving}
+                          onClick={() => handleRemove(orgConn)}
                         >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          disabled={!canDelete}
-                          title={!canDelete ? "You don't have permission to perform this action" : undefined}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(connector.id);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
+                          {isRemoving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : 'Remove'}
                         </Button>
                       </div>
-                    ),
-                    render: (connector) => (
-                      <>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={!canUpdate}
-                          title={!canUpdate ? "You don't have permission to perform this action" : undefined}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            router.push(`/connectors/${connector.id}/edit`);
-                          }}
-                          className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l hover:bg-muted/80"
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          disabled={!canDelete}
-                          title={!canDelete ? "You don't have permission to perform this action" : undefined}
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleDelete(connector.id);
-                          }}
-                          className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
-                        >
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </>
-                    ),
-                  },
-                ]}
-              />
-            </CardContent>
-          </Card>
-        </>
+                    </div>
+                  ) : (
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        className="w-1/2"
+                        disabled={isAdding}
+                        onClick={() => handleAdd(connector)}
+                      >
+                        {isAdding ? (
+                          <><Loader2 className="h-3.5 w-3.5 animate-spin" /></>
+                        ) : (
+                          'Add'
+                        )}
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
       )}
+    </div>
+  );
+}
+
+// ── Status row ─────────────────────────────────────────────────────────────────
+
+function StatusRow({ label, active }: { label: string; active: boolean }) {
+  return (
+    <div className="flex items-center justify-between px-3 py-2">
+      <span className="text-xs text-muted-foreground">{label}</span>
+      <span
+        className={[
+          'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium border',
+          active
+            ? 'border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400'
+            : 'border-border bg-muted/50 text-muted-foreground',
+        ].join(' ')}
+      >
+        {active ? (
+          <CheckCircle2 className="h-3 w-3 shrink-0" />
+        ) : (
+          <XCircle className="h-3 w-3 shrink-0 opacity-40" />
+        )}
+        {active ? 'Enabled' : 'Disabled'}
+      </span>
     </div>
   );
 }

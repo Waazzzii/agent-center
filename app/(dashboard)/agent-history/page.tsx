@@ -255,7 +255,7 @@ const PAGE_SIZE = 15;
 
 export default function AgentHistoryPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agents_read');
+  const permitted = useRequirePermission('agents_manager');
   const searchParams = useSearchParams();
 
   const [agents, setAgents] = useState<Agent[]>([]);

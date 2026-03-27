@@ -1,9 +1,17 @@
 import apiClient from './client';
-import type { OrganizationConnector } from '@/types/api.types';
+import type { ConnectorOption, OrganizationConnector } from '@/types/api.types';
 
 export async function getConnectors(orgId: string) {
   const response = await apiClient.get<{ connectors: OrganizationConnector[]; total: number }>(
     `/admin/organizations/${orgId}/connectors`
+  );
+  return response.data;
+}
+
+export async function getConnectorsByCategory(orgId: string, category: string) {
+  const response = await apiClient.get<{ connectors: ConnectorOption[]; total: number }>(
+    `/admin/organizations/${orgId}/connectors`,
+    { params: { category } }
   );
   return response.data;
 }
@@ -38,6 +46,9 @@ export async function updateConnector(
     config?: Record<string, any>;
     secrets?: Record<string, any>;
     is_enabled?: boolean;
+    mcp_enabled?: boolean;
+    agent_enabled?: boolean;
+    centers_enabled?: boolean;
   }
 ) {
   const response = await apiClient.patch<OrganizationConnector>(

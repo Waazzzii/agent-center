@@ -1,6 +1,7 @@
 import apiClient from './client';
 import type {
   CenterOrgSettings,
+  CenterConnectorConfig,
   VercelDomainStatus,
 } from '@/types/api.types';
 
@@ -25,6 +26,7 @@ export async function updateCenterSettings(
     name?: string | null;
     custom_domain?: string | null;
     custom_theme?: string | null;
+    connector_config?: CenterConnectorConfig;
   },
 ): Promise<CenterSettingsResponse> {
   const response = await apiClient.put<CenterSettingsResponse>(

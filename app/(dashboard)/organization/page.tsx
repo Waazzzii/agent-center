@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useAuthStore } from '@/stores/auth.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { getOrganization, updateOrganization } from '@/lib/api/organizations';
 import { Organization } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
@@ -23,8 +22,7 @@ export default function SettingsPage() {
   const router = useRouter();
   const { selectedOrgId, selectedOrgName, isOrgAdminView } = useAdminViewStore();
   const { isSuperAdmin } = useAuthStore();
-  const permitted = useRequirePermission('organization_read');
-  const canUpdate = usePermission('organization_update');
+  const permitted = useRequirePermission('admin_organization');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [organization, setOrganization] = useState<Organization | null>(null);
@@ -124,7 +122,7 @@ export default function SettingsPage() {
                 value={formData.name || ''}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                 placeholder="Acme Corporation"
-                disabled={!canUpdate}
+
               />
             </div>
             <div className="space-y-2">
@@ -149,7 +147,6 @@ export default function SettingsPage() {
               onChange={(e) => setFormData({ ...formData, description: e.target.value })}
               placeholder="Brief description of your organization..."
               rows={3}
-              disabled={!canUpdate}
             />
           </div>
 
@@ -162,7 +159,7 @@ export default function SettingsPage() {
               <Switch
                 id="is_active"
                 checked={formData.is_active || false}
-                disabled={!canUpdate}
+
                 onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
               />
             </div>
@@ -185,7 +182,7 @@ export default function SettingsPage() {
                 value={formData.contact_email || ''}
                 onChange={(e) => setFormData({ ...formData, contact_email: e.target.value })}
                 placeholder="contact@example.com"
-                disabled={!canUpdate}
+
               />
             </div>
             <div className="space-y-2">
@@ -196,7 +193,7 @@ export default function SettingsPage() {
                 value={formData.contact_phone || ''}
                 onChange={(e) => setFormData({ ...formData, contact_phone: e.target.value })}
                 placeholder="+1 (555) 123-4567"
-                disabled={!canUpdate}
+
               />
             </div>
           </div>
@@ -208,7 +205,6 @@ export default function SettingsPage() {
               value={formData.website || ''}
               onChange={(e) => setFormData({ ...formData, website: e.target.value })}
               placeholder="https://example.com"
-              disabled={!canUpdate}
             />
           </div>
         </CardContent>
@@ -227,7 +223,6 @@ export default function SettingsPage() {
               value={formData.address_line1 || ''}
               onChange={(e) => setFormData({ ...formData, address_line1: e.target.value })}
               placeholder="123 Main Street"
-              disabled={!canUpdate}
             />
           </div>
           <div className="space-y-2">
@@ -237,7 +232,6 @@ export default function SettingsPage() {
               value={formData.address_line2 || ''}
               onChange={(e) => setFormData({ ...formData, address_line2: e.target.value })}
               placeholder="Suite 100"
-              disabled={!canUpdate}
             />
           </div>
           <div className="grid gap-4 md:grid-cols-3">
@@ -248,7 +242,7 @@ export default function SettingsPage() {
                 value={formData.city || ''}
                 onChange={(e) => setFormData({ ...formData, city: e.target.value })}
                 placeholder="San Francisco"
-                disabled={!canUpdate}
+
               />
             </div>
             <div className="space-y-2">
@@ -258,7 +252,7 @@ export default function SettingsPage() {
                 value={formData.state || ''}
                 onChange={(e) => setFormData({ ...formData, state: e.target.value })}
                 placeholder="CA"
-                disabled={!canUpdate}
+
               />
             </div>
             <div className="space-y-2">
@@ -268,7 +262,7 @@ export default function SettingsPage() {
                 value={formData.postal_code || ''}
                 onChange={(e) => setFormData({ ...formData, postal_code: e.target.value })}
                 placeholder="94102"
-                disabled={!canUpdate}
+
               />
             </div>
           </div>
@@ -279,14 +273,13 @@ export default function SettingsPage() {
               value={formData.country || ''}
               onChange={(e) => setFormData({ ...formData, country: e.target.value })}
               placeholder="United States"
-              disabled={!canUpdate}
             />
           </div>
           <div className="flex gap-4 pt-2">
-            <Button onClick={handleSubmit} disabled={loading || !canUpdate}>
+            <Button onClick={handleSubmit} disabled={loading}>
               {loading ? 'Saving...' : 'Save Changes'}
             </Button>
-            <Button type="button" variant="outline" onClick={loadOrganization} disabled={!canUpdate}>
+            <Button type="button" variant="outline" onClick={loadOrganization}>
               Reset
             </Button>
           </div>

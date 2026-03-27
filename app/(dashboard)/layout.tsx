@@ -11,7 +11,7 @@ import { getOrganizations } from '@/lib/api/organizations';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 import { usePermissionsSync } from '@/hooks/use-permissions-sync';
 import { cn } from '@/lib/utils';
-import { orgMainNavItems, firstPermittedHref } from '@/lib/nav';
+import { orgSettingsNavItems, firstPermittedHref } from '@/lib/nav';
 
 export default function DashboardLayout({
   children,
@@ -50,7 +50,7 @@ export default function DashboardLayout({
             // If the user is on a super-admin-only or root page, redirect to the first permitted main nav item
             if (pathname === '/organizations' || pathname === '/') {
               const bypass = isSuperAdmin() || isOrgAdmin();
-              const dest = firstPermittedHref(orgMainNavItems, bypass, hasPermission, firstOrg.id);
+              const dest = firstPermittedHref(orgSettingsNavItems, bypass, hasPermission, firstOrg.id);
               router.replace(dest ?? '/no-permission');
             }
             // Otherwise leave them on their intended page

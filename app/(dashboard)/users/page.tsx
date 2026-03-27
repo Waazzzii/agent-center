@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { getUsers, deleteUser } from '@/lib/api/users';
 import { User } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
@@ -23,10 +22,7 @@ export default function UsersPage() {
   const router = useRouter();
   const { admin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('users_read');
-  const canCreate = usePermission('users_create');
-  const canUpdate = usePermission('users_update');
-  const canDelete = usePermission('users_delete');
+  const permitted = useRequirePermission('admin_users');
   const [users, setUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -157,7 +153,7 @@ export default function UsersPage() {
           <h1 className="text-3xl font-bold">Users</h1>
           <p className="text-muted-foreground">Manage users within this organization</p>
         </div>
-        <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => setCreateModalOpen(true)} className="w-full sm:w-auto">
+        <Button disabled={!selectedOrgId} onClick={() => setCreateModalOpen(true)} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />
           Add User
         </Button>
@@ -283,8 +279,6 @@ export default function UsersPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          disabled={!canUpdate}
-                          title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             router.push(`/users/${user.id}/edit`);
@@ -295,8 +289,6 @@ export default function UsersPage() {
                         <Button
                           variant="ghost"
                           size="sm"
-                          disabled={!canDelete}
-                          title={!canDelete ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDeleteClick(user);
@@ -311,8 +303,6 @@ export default function UsersPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={!canUpdate}
-                          title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             router.push(`/users/${user.id}/edit`);
@@ -324,8 +314,6 @@ export default function UsersPage() {
                         <Button
                           variant="outline"
                           size="sm"
-                          disabled={!canDelete}
-                          title={!canDelete ? "You don't have permission to perform this action" : undefined}
                           onClick={(e) => {
                             e.stopPropagation();
                             handleDeleteClick(user);

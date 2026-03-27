@@ -160,6 +160,12 @@ export interface OrganizationConnector {
   /** Agent-specific OAuth state (oauth_connected, connected_email, token_expiry) */
   agent_config: Record<string, any>;
   is_enabled: boolean;
+  /** Exposed as an MCP tool endpoint */
+  mcp_enabled?: boolean;
+  /** Available for use by AI agents */
+  agent_enabled?: boolean;
+  /** Available for use by Centers data imports */
+  centers_enabled?: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -384,6 +390,8 @@ export interface OrgProductSettings {
   custom_theme: string | null;
   logo_storage_path: string | null;
   favicon_storage_path: string | null;
+  /** Product-specific config JSONB — shape varies per product */
+  config: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 }
@@ -393,6 +401,52 @@ export type KbOrgSettings = OrgProductSettings;
 
 /** Admin Center settings — same shared fields, no portal flags */
 export type CenterOrgSettings = OrgProductSettings;
+
+/** Connector assignment config stored in organization_products.config for the AC product */
+export interface CenterConnectorConfig {
+  pms_connector_id?: string | null;
+  hr_connector_id?: string | null;
+}
+
+/** Lightweight connector option returned by the category-filtered list endpoint */
+export interface ConnectorOption {
+  id: string;
+  connector_key: string;
+  connector_name: string;
+  connector_icon_url: string | null;
+  is_enabled: boolean;
+  mcp_enabled: boolean;
+  agent_enabled: boolean;
+  centers_enabled: boolean;
+}
+
+/** Catalog entry for a data category (properties, reservations, etc.) */
+export interface CenterDataCategory {
+  key: string;
+  label: string;
+  description: string | null;
+  sort_order: number;
+}
+
+/** Per-org, per-category data source config row (as returned by the list endpoint) */
+export interface DataSourceConfig extends CenterDataCategory {
+  config_id: string | null;
+  org_connector_id: string | null;
+  connector_key: string | null;
+  connector_name: string | null;
+  connector_icon_url: string | null;
+  /** Cron expression controlling refresh frequency (e.g. every 15 min, every hour) */
+  refresh_cron: string | null;
+  is_active: boolean | null;
+  last_synced_at: string | null;
+}
+
+export interface UpsertDataSourceConfigDto {
+  org_connector_id?: string | null;
+  /** Cron expression, e.g. "0 * * * *" */
+  refresh_cron?: string;
+  is_active?: boolean;
+}
 
 export interface KbPortal {
   id: string;

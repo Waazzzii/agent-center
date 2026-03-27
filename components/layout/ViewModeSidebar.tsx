@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -24,7 +24,6 @@ import {
   ChevronDown,
   ChevronRight,
   Settings,
-  BookOpen,
   X,
   Wand2,
   Bot,
@@ -88,15 +87,15 @@ const SETTINGS_ICONS: Record<string, React.ElementType> = {
   '/access-groups':  UsersRound,
   '/ai-agent':       Bot,
   '/audit-logs':     FileText,
-  '/centers':        Layers,
+  '/centers/data-sources': Layers,
   '/connectors':     Plug,
   '/oauth-clients':  Key,
   '/organization':   Building2,
   '/users':          UserCircle,
 };
 const CHILDREN_ICONS: Record<string, React.ElementType> = {
-  '/knowledge-base': BookOpen,
-  '/centers/admin':  Globe,
+  '/centers/data-sources':  Database,
+  '/centers/products':      Globe,
   '/users':          UserRound,
   '/access-groups':  UsersRound,
   '/ai-agent':       Bot,
@@ -124,18 +123,41 @@ export function ViewModeSidebar() {
   const [loading, setLoading] = useState(false);
   const [settingsMode, setSettingsMode] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  // Tracks items the user has explicitly collapsed so auto-expand doesn't override them
+  const manuallyClosed = useRef<Set<string>>(new Set());
 
-  // Auto-detect settings mode from current path
+  // Auto-detect settings mode from current path.
+  // When first entering settings, collapse all nav items so the user starts clean.
+  const prevSettingsMode = useRef(false);
+  const suppressNextAutoExpand = useRef(false);
   useEffect(() => {
     const inSettings = SETTINGS_PATHS.some((p) => pathname.startsWith(p));
+    if (inSettings && !prevSettingsMode.current) {
+      // Just entered settings — collapse everything and suppress the auto-expand
+      // that will fire in the next effect on this same render cycle.
+      setExpandedItems(new Set());
+      manuallyClosed.current = new Set();
+      suppressNextAutoExpand.current = true;
+    }
+    prevSettingsMode.current = inSettings;
     setSettingsMode(inSettings);
   }, [pathname]);
 
-  // Auto-expand parent items whose children match the current path
+  // Auto-expand parent items whose children (or own href) match the current path,
+  // but respect items the user has manually collapsed and skip on fresh settings entry.
   useEffect(() => {
+    if (suppressNextAutoExpand.current) {
+      suppressNextAutoExpand.current = false;
+      return;
+    }
     const newExpanded = new Set<string>();
     for (const item of orgSettingsNavItems) {
-      if (item.children?.some((c) => pathname.startsWith(c.href))) {
+      if (!item.children?.length) continue;
+      if (manuallyClosed.current.has(item.href)) continue;
+      if (
+        item.children.some((c) => pathname.startsWith(c.href)) ||
+        pathname.startsWith(item.href)
+      ) {
         newExpanded.add(item.href);
       }
     }
@@ -169,8 +191,13 @@ export function ViewModeSidebar() {
   const toggleExpanded = (href: string) => {
     setExpandedItems((prev) => {
       const next = new Set(prev);
-      if (next.has(href)) next.delete(href);
-      else next.add(href);
+      if (next.has(href)) {
+        next.delete(href);
+        manuallyClosed.current.add(href);
+      } else {
+        next.add(href);
+        manuallyClosed.current.delete(href);
+      }
       return next;
     });
   };
@@ -213,8 +240,11 @@ export function ViewModeSidebar() {
     const Icon = item.icon;
     const hasChildren = item.children && item.children.length > 0;
     const isExpanded = hasChildren && expandedItems.has(item.href);
-    const isActive = !hasChildren && pathname.startsWith(item.href);
     const isChildActive = hasChildren && item.children!.some((c) => pathname.startsWith(c.href));
+    const isActive = !hasChildren && pathname.startsWith(item.href);
+    // A parent whose own href matches a child's href is a pure grouper (no dedicated page).
+    // Other parents (e.g. Centers) navigate to their own page AND can be toggled via the chevron.
+    const isGrouper = hasChildren && item.children!.some((c) => c.href === item.href);
 
     const visibleChildren = hasChildren
       ? item.children!.filter((child) => {
@@ -227,22 +257,56 @@ export function ViewModeSidebar() {
     return (
       <div key={item.href}>
         {hasChildren ? (
-          <button
-            onClick={() => toggleExpanded(item.href)}
+          <div
             className={cn(
-              'flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-              isChildActive
+              'flex w-full items-center rounded-lg text-sm font-medium transition-colors',
+              !isGrouper && pathname.startsWith(item.href) && !isChildActive
                 ? 'bg-sidebar-accent text-sidebar-accent-foreground'
                 : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
             )}
           >
-            <Icon className="h-5 w-5 shrink-0" />
-            <span className="flex-1 text-left">{item.label}</span>
-            {isExpanded
-              ? <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
-              : <ChevronRight className="h-4 w-4 shrink-0 opacity-60" />
-            }
-          </button>
+            {isGrouper ? (
+              // Pure grouper: whole row toggles — no dedicated page to navigate to
+              <button
+                className="flex flex-1 items-center gap-3 px-3 py-2 text-left"
+                onClick={() => toggleExpanded(item.href)}
+              >
+                <Icon className="h-5 w-5 shrink-0" />
+                <span className="flex-1">{item.label}</span>
+                {isExpanded
+                  ? <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+                  : <ChevronRight className="h-4 w-4 shrink-0 opacity-60" />
+                }
+              </button>
+            ) : (
+              // Navigable parent: label navigates (and re-expands), chevron independently toggles
+              <>
+                <Link
+                  href={item.href}
+                  className="flex flex-1 items-center gap-3 px-3 py-2"
+                  onClick={() => {
+                    // Intentional navigation clears manual-close so section re-expands
+                    manuallyClosed.current.delete(item.href);
+                    setExpandedItems((prev) => new Set([...prev, item.href]));
+                    if (sidebarOpen) toggleSidebar();
+                  }}
+                >
+                  <Icon className="h-5 w-5 shrink-0" />
+                  <span className="flex-1 text-left">{item.label}</span>
+                </Link>
+                <button
+                  onClick={() => toggleExpanded(item.href)}
+                  className="pr-3 py-2"
+                  aria-label={isExpanded ? 'Collapse' : 'Expand'}
+                >
+                  {isExpanded
+                    ? <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+                    : <ChevronRight className="h-4 w-4 shrink-0 opacity-60" />
+                  }
+                </button>
+              </>
+            )}
+          </div>
         ) : (
           <Link
             href={item.href}

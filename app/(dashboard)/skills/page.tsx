@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { getSkills, deleteSkill, importSkills, getSkillUsages, type Skill } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -22,10 +21,7 @@ const PAGE_SIZE = 20;
 export default function SkillsPage() {
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('skills_read');
-  const canCreate = usePermission('skills_create');
-  const canUpdate = usePermission('skills_update');
-  const canDelete = usePermission('skills_delete');
+  const permitted = useRequirePermission('agents_manager');
   const { confirm } = useConfirmDialog();
 
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -168,11 +164,11 @@ export default function SkillsPage() {
           <p className="text-muted-foreground">Reusable prompt instructions synced with the Anthropic Prompt Library</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined}>
+          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} disabled={!selectedOrgId}>
             <Upload className="mr-2 h-4 w-4" />
             Import
           </Button>
-          <Button disabled={!selectedOrgId || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/skills/create')}>
+          <Button disabled={!selectedOrgId} onClick={() => router.push('/skills/create')}>
             <Plus className="mr-2 h-4 w-4" />
             New Skill
           </Button>
@@ -229,20 +225,20 @@ export default function SkillsPage() {
                   label: 'Actions',
                   desktopRender: (s) => (
                     <div className="flex items-center justify-end gap-2">
-                      <Button variant="ghost" size="sm" disabled={!canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); router.push(`/skills/${s.id}/edit`); }}>
+                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/skills/${s.id}/edit`); }}>
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="sm" disabled={!canDelete} title={!canDelete ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); handleDelete(s.id, s.name); }}>
+                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(s.id, s.name); }}>
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </div>
                   ),
                   render: (s) => (
                     <>
-                      <Button variant="outline" size="sm" disabled={!canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); router.push(`/skills/${s.id}/edit`); }} className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l">
+                      <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/skills/${s.id}/edit`); }} className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l">
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="outline" size="sm" disabled={!canDelete} title={!canDelete ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); handleDelete(s.id, s.name); }} className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10">
+                      <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(s.id, s.name); }} className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10">
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </>
@@ -300,7 +296,7 @@ export default function SkillsPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setImportOpen(false)}>Cancel</Button>
-            <Button onClick={handleImport} disabled={importing || !importJson.trim() || !canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined}>
+            <Button onClick={handleImport} disabled={importing || !importJson.trim()}>
               {importing ? 'Importing…' : 'Import'}
             </Button>
           </DialogFooter>

@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
 import {
   getCenterSettings,
   updateCenterSettings,
@@ -155,8 +154,7 @@ function DomainStatusBadge({ status }: { status: DomainProvisioningStatus | 'iss
 export default function AdministrationPage() {
   const router = useRouter();
   const { selectedOrgId, selectedOrgName, isOrgAdminView } = useAdminViewStore();
-  const permitted = useRequirePermission(['center_admin', 'knowledgebase_admin_read']);
-  const canUpdate = usePermission('center_admin');
+  const permitted = useRequirePermission('admin_products');
 
   const [settings, setSettings]   = useState<CenterOrgSettings | null>(null);
   const [logoUrlFromApi, setLogoUrlFromApi] = useState<string | null>(null);
@@ -189,6 +187,7 @@ export default function AdministrationPage() {
 
   const [autoDomainStatus, setAutoDomainStatus]     = useState<DomainProvisioningStatus | 'issuing' | null>(null);
   const [customDomainStatus, setCustomDomainStatus] = useState<DomainProvisioningStatus | 'issuing' | null>(null);
+
 
   const [lastProvision, setLastProvision] = useState<ProductDomainProvisionResult | null>(null);
 
@@ -584,7 +583,7 @@ export default function AdministrationPage() {
             <p className="text-sm text-muted-foreground mb-6 max-w-sm">
               Enable the Administration Center to provision a management portal for {selectedOrgName}.
             </p>
-            <Button onClick={() => handleToggle(true)} disabled={saving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+            <Button onClick={() => handleToggle(true)} disabled={saving}>
               {saving ? 'Enabling…' : 'Enable Administration'}
             </Button>
           </CardContent>
@@ -609,8 +608,7 @@ export default function AdministrationPage() {
               variant="outline"
               size="sm"
               onClick={() => handleToggle(false)}
-              disabled={saving || !canUpdate}
-              title={!canUpdate ? "You don't have permission to perform this action" : undefined}
+              disabled={saving}
             >
               Disable
             </Button>
@@ -707,17 +705,15 @@ export default function AdministrationPage() {
                       value={customDomainInput}
                       onChange={(e) => setCustomDomainInput(e.target.value.toLowerCase().replace(/^https?:\/\//, ''))}
                       className="font-mono text-sm"
-                      disabled={!canUpdate}
                     />
                     <Button
                       onClick={handleSaveCustomDomain}
-                      disabled={saving || !customDomainInput.trim() || customDomainInput.trim() === settings?.custom_domain || !canUpdate}
-                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
+                      disabled={saving || !customDomainInput.trim() || customDomainInput.trim() === settings?.custom_domain}
                     >
                       {saving ? 'Saving…' : settings?.custom_domain ? 'Update' : 'Save'}
                     </Button>
                     {settings?.custom_domain && (
-                      <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={saving || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+                      <Button variant="destructive" onClick={handleRemoveCustomDomain} disabled={saving}>
                         Remove
                       </Button>
                     )}
@@ -776,7 +772,6 @@ export default function AdministrationPage() {
                     placeholder={selectedOrgName || 'Administration Center'}
                     value={nameInput}
                     onChange={(e) => setNameInput(e.target.value)}
-                    disabled={!canUpdate}
                   />
                   <p className="text-xs text-muted-foreground">
                     Defaults to your organization name if not set.
@@ -801,7 +796,7 @@ export default function AdministrationPage() {
                 ) : logoUrl ? (
                   <div className="flex items-center gap-4">
                     <img src={logoUrl} alt="Admin Logo" className="h-16 max-w-[200px] object-contain rounded border p-2 bg-white" />
-                    <Button variant="outline" size="sm" onClick={handleLogoDelete} disabled={logoDeleting || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+                    <Button variant="outline" size="sm" onClick={handleLogoDelete} disabled={logoDeleting}>
                       {logoDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
                     </Button>
                   </div>
@@ -810,7 +805,7 @@ export default function AdministrationPage() {
                     {logoUploading ? <Loader2 className="h-8 w-8 text-muted-foreground mb-2 animate-spin" /> : <Upload className="h-8 w-8 text-muted-foreground mb-2" />}
                     <p className="text-sm font-medium">{logoUploading ? 'Uploading…' : 'Upload logo'}</p>
                     <p className="text-xs text-muted-foreground mt-1">PNG, JPG or SVG — max 2 MB</p>
-                    <Button variant="outline" size="sm" className="mt-4" disabled={logoUploading || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined} onClick={(e) => { e.stopPropagation(); logoInputRef.current?.click(); }}>
+                    <Button variant="outline" size="sm" className="mt-4" disabled={logoUploading} onClick={(e) => { e.stopPropagation(); logoInputRef.current?.click(); }}>
                       Choose file
                     </Button>
                   </div>
@@ -834,7 +829,7 @@ export default function AdministrationPage() {
                 ) : faviconUrl ? (
                   <div className="flex items-center gap-4">
                     <img src={faviconUrl} alt="Admin Favicon" className="h-12 w-12 object-contain rounded border p-2 bg-white" />
-                    <Button variant="outline" size="sm" onClick={handleFaviconDelete} disabled={faviconDeleting || !canUpdate}>
+                    <Button variant="outline" size="sm" onClick={handleFaviconDelete} disabled={faviconDeleting}>
                       {faviconDeleting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Remove'}
                     </Button>
                   </div>
@@ -843,7 +838,7 @@ export default function AdministrationPage() {
                     {faviconUploading ? <Loader2 className="h-8 w-8 text-muted-foreground mb-2 animate-spin" /> : <Upload className="h-8 w-8 text-muted-foreground mb-2" />}
                     <p className="text-sm font-medium">{faviconUploading ? 'Uploading…' : 'Upload favicon'}</p>
                     <p className="text-xs text-muted-foreground mt-1">PNG, JPG, SVG or ICO — max 512 KB</p>
-                    <Button variant="outline" size="sm" className="mt-4" disabled={faviconUploading || !canUpdate} onClick={(e) => { e.stopPropagation(); faviconInputRef.current?.click(); }}>
+                    <Button variant="outline" size="sm" className="mt-4" disabled={faviconUploading} onClick={(e) => { e.stopPropagation(); faviconInputRef.current?.click(); }}>
                       Choose file
                     </Button>
                   </div>
@@ -891,7 +886,6 @@ export default function AdministrationPage() {
                     <button
                       type="button"
                       onClick={() => setCustomThemeInput(CENTER_THEME_DEFAULTS)}
-                      disabled={!canUpdate}
                       className="ml-auto text-xs text-slate-400 dark:text-[#8a9bb0] hover:text-slate-600 dark:hover:text-slate-300 transition-colors disabled:pointer-events-none disabled:opacity-40"
                     >
                       Load defaults
@@ -901,7 +895,6 @@ export default function AdministrationPage() {
                     value={customThemeInput}
                     onChange={(e) => setCustomThemeInput(e.target.value)}
                     placeholder="/* Paste custom CSS here, or click 'Load defaults' to start from the Wazzi defaults */"
-                    disabled={!canUpdate}
                     spellCheck={false}
                     autoCorrect="off"
                     autoCapitalize="off"
@@ -910,7 +903,6 @@ export default function AdministrationPage() {
                       'w-full resize-none bg-slate-50 dark:bg-[#0f1419] px-4 py-3 font-mono text-sm text-slate-900 dark:text-[#e8e8e8]',
                       'placeholder:text-slate-300 dark:placeholder:text-[#4a5a6e] focus:outline-none',
                       'leading-relaxed tracking-wide',
-                      !canUpdate && 'opacity-60 cursor-not-allowed'
                     )}
                   />
                 </div>
@@ -922,8 +914,7 @@ export default function AdministrationPage() {
             <div className="flex justify-end">
               <Button
                 onClick={handleSaveThemeTab}
-                disabled={themeTabSaving || !canUpdate}
-                title={!canUpdate ? "You don't have permission to perform this action" : undefined}
+                disabled={themeTabSaving}
                 className="gap-2 min-w-[140px]"
               >
                 {themeTabSaving ? (
@@ -937,6 +928,7 @@ export default function AdministrationPage() {
             </div>
 
           </TabsContent>
+
         </Tabs>
 
       )}

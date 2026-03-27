@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useAuthStore } from '@/stores/auth.store';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { getUser, getUsers, updateUser, deleteUser } from '@/lib/api/users';
@@ -36,10 +35,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
   const { selectedOrgId } = useAdminViewStore();
   const { admin } = useAuthStore();
   const canChangeRole = admin?.role === AdminRole.SUPER_ADMIN || admin?.role === AdminRole.ORG_ADMIN;
-  const permitted = useRequirePermission('users_read');
-  const canUpdate = usePermission('users_update');
-  const canDelete = usePermission('users_delete');
-  const canReadAccessGroups = usePermission('access_groups_read');
+  const permitted = useRequirePermission('admin_users');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [user, setUser] = useState<User | null>(null);
@@ -107,12 +103,8 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
       const userAgs = await getUserAccessGroups(selectedOrgId, userId);
       setUserAccessGroups(userAgs.access_groups);
 
-      if (canReadAccessGroups) {
-        const allAgs = await getAccessGroups(selectedOrgId);
-        setAllAccessGroups(allAgs.access_groups);
-      } else {
-        setAllAccessGroups([]);
-      }
+      const allAgs = await getAccessGroups(selectedOrgId);
+      setAllAccessGroups(allAgs.access_groups);
     } catch {
       toast.error('Failed to load access groups');
     } finally {
@@ -236,7 +228,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
             </p>
           </div>
         </div>
-        <Button variant="destructive" disabled={!canDelete} title={!canDelete ? "You don't have permission to perform this action" : undefined} onClick={() => setDeleteDialogOpen(true)} className="w-full sm:w-auto">
+        <Button variant="destructive" onClick={() => setDeleteDialogOpen(true)} className="w-full sm:w-auto">
           <Trash2 className="mr-2 h-4 w-4" />
           Delete User
         </Button>
@@ -279,7 +271,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                       value={formData.first_name}
                       onChange={(e) => setFormData({ ...formData, first_name: e.target.value })}
                       placeholder="John"
-                      disabled={!canUpdate}
+
                     />
                   </div>
 
@@ -291,7 +283,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                       value={formData.last_name}
                       onChange={(e) => setFormData({ ...formData, last_name: e.target.value })}
                       placeholder="Doe"
-                      disabled={!canUpdate}
+
                     />
                   </div>
 
@@ -303,7 +295,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                       value={formData.display_name}
                       onChange={(e) => setFormData({ ...formData, display_name: e.target.value })}
                       placeholder="John Doe"
-                      disabled={!canUpdate}
+
                     />
                   </div>
 
@@ -315,7 +307,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                       value={formData.phone}
                       onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                       placeholder="+1 (555) 123-4567"
-                      disabled={!canUpdate}
+
                     />
                   </div>
 
@@ -329,7 +321,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                     <Switch
                       id="is_active"
                       checked={formData.is_active}
-                      disabled={!canUpdate}
+
                       onCheckedChange={(checked) => setFormData({ ...formData, is_active: checked })}
                     />
                   </div>
@@ -361,7 +353,7 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                 </div>
 
                 <div className="flex gap-4">
-                  <Button type="submit" disabled={loading || !canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
+                  <Button type="submit" disabled={loading}>
                     {loading ? 'Saving...' : 'Save Changes'}
                   </Button>
                   <Button type="button" variant="outline" onClick={() => router.push('/users')}>
@@ -408,23 +400,21 @@ export default function EditUserPage({ params }: { params: Promise<{ id: string 
                                 Manage
                               </Link>
                             </Button>
-                            {canUpdate && (
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-destructive"
-                                onClick={() => handleRemoveGroup(ag.id)}
-                              >
-                                <X className="h-4 w-4" />
-                              </Button>
-                            )}
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-8 w-8 text-muted-foreground hover:text-destructive"
+                              onClick={() => handleRemoveGroup(ag.id)}
+                            >
+                              <X className="h-4 w-4" />
+                            </Button>
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
 
-                  {canUpdate && canReadAccessGroups && (() => {
+                  {(() => {
                     const assignedIds = new Set(userAccessGroups.map((g) => g.id));
                     const available = allAccessGroups.filter((g) => !assignedIds.has(g.id));
                     if (available.length === 0) return null;

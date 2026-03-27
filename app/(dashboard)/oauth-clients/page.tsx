@@ -5,7 +5,6 @@ import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { getOAuthClients, deleteOAuthClient } from '@/lib/api/oauth-clients';
 import { getOrganizations } from '@/lib/api/organizations';
 import { OAuthClient, Organization } from '@/types/api.types';
@@ -32,10 +31,7 @@ export default function OAuthClientsPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('oauth_clients_read');
-  const canCreate = usePermission('oauth_clients_create');
-  const canUpdate = usePermission('oauth_clients_update');
-  const canDelete = usePermission('oauth_clients_delete');
+  const permitted = useRequirePermission('admin_oauth_clients');
   const { confirm } = useConfirmDialog();
   const [clients, setClients] = useState<OAuthClient[]>([]);
   const [organizations, setOrganizations] = useState<Map<string, Organization>>(new Map());
@@ -131,7 +127,7 @@ export default function OAuthClientsPage() {
           </p>
         </div>
         {!isReadOnly && (
-          <Button disabled={!canCreate} title={!canCreate ? "You don't have permission to perform this action" : undefined} onClick={() => router.push('/oauth-clients/create')} className="w-full sm:w-auto">
+          <Button onClick={() => router.push('/oauth-clients/create')} className="w-full sm:w-auto">
             <Plus className="mr-2 h-4 w-4" />
             Add OAuth Client
           </Button>
@@ -183,6 +179,7 @@ export default function OAuthClientsPage() {
               {
                 key: 'name',
                 label: 'Name',
+                thClassName: 'w-56',
                 render: (client) => (
                   <div>
                     <div className="font-medium">{client.client_name}</div>
@@ -245,8 +242,6 @@ export default function OAuthClientsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={!canUpdate}
-                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         router.push(`/oauth-clients/${client.client_id}/edit`);
@@ -257,8 +252,6 @@ export default function OAuthClientsPage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      disabled={!canDelete}
-                      title={!canDelete ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDelete(client.client_id, client.client_name);
@@ -273,8 +266,6 @@ export default function OAuthClientsPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!canUpdate}
-                      title={!canUpdate ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         router.push(`/oauth-clients/${client.client_id}/edit`);
@@ -286,8 +277,6 @@ export default function OAuthClientsPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      disabled={!canDelete}
-                      title={!canDelete ? "You don't have permission to perform this action" : undefined}
                       onClick={(e) => {
                         e.stopPropagation();
                         handleDelete(client.client_id, client.client_name);

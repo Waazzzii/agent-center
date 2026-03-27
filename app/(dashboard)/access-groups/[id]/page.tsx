@@ -1,9 +1,8 @@
 'use client';
 
 import { useEffect, useState, useCallback, useMemo } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { usePermission } from '@/lib/hooks/use-permission';
 import {
   getAccessGroup,
   updateAccessGroup,
@@ -23,6 +22,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Checkbox } from '@/components/ui/checkbox';
@@ -34,331 +34,157 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import { ChevronLeft, Save, UserPlus, Trash2, ShieldCheck, Plug, Search } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Save, UserPlus, Trash2, ShieldCheck, Search, Pencil, Plug, Users } from 'lucide-react';
 import { toast } from 'sonner';
-import { cn } from '@/lib/utils';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Permission row ────────────────────────────────────────────────────────────
 
-const SECTION_DESCRIPTIONS: Record<string, string> = {
-  'Users':           'Manage user accounts and invitations within this organization',
-  'Access Groups':   'Control access group presets and member assignments',
-  'OAuth Clients':   'Manage OAuth 2.0 client applications for this organization',
-  'Settings':        'View and edit organization configuration and settings',
-  'Audit Logs':      'Access audit log entries and event history',
-  'MCP Connections': 'Configure and manage MCP connector integrations',
-  'Knowledge Base':  'Manage knowledge base articles, categories and content',
-  'Skills':          'Build and manage reusable AI skills',
-  'Agents':          'Configure and deploy AI agents',
-  'Approvals':       'Handle human-in-the-loop approval and review workflows',
-};
-
-function sortCategories(cats: string[]): string[] {
-  return [...cats].sort((a, b) => a.localeCompare(b));
-}
-
-// ─── Permission section (subcategory-grouped) ─────────────────────────────────
-
-function PermissionSection({
-  sectionName,
-  definitions,
-  access,
+function PermissionRow({
+  def,
+  enabled,
   onChange,
   readOnly,
 }: {
-  sectionName: string;
-  definitions: PermissionDefinition[];
-  access: Record<string, boolean>;
+  def: PermissionDefinition;
+  enabled: boolean;
   onChange: (key: string, value: boolean) => void;
   readOnly?: boolean;
 }) {
-  const enabledCount = definitions.filter((d) => access[d.key] ?? false).length;
-  const allEnabled = enabledCount === definitions.length && definitions.length > 0;
-
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between gap-2">
-        <div>
-          <h3 className="text-base font-semibold">{sectionName}</h3>
-          {SECTION_DESCRIPTIONS[sectionName] && (
-            <p className="text-sm text-muted-foreground mt-0.5">{SECTION_DESCRIPTIONS[sectionName]}</p>
-          )}
-        </div>
-        <button
-          type="button"
-          disabled={readOnly}
-          onClick={() => definitions.forEach((d) => onChange(d.key, !allEnabled))}
-          className="shrink-0 text-xs font-medium text-primary hover:underline disabled:pointer-events-none disabled:opacity-50"
-        >
-          {allEnabled ? 'Deselect All' : 'Select All'}
-        </button>
+    <div className="flex items-center justify-between py-3">
+      <div className="flex-1 min-w-0 pr-4">
+        <p className="text-sm font-medium">{def.label}</p>
+        {def.description && (
+          <p className="text-xs text-muted-foreground mt-0.5">{def.description}</p>
+        )}
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-start">
-        {definitions.map((def) => {
-          const enabled = access[def.key] ?? false;
-          return (
-            <button
-              key={def.key}
-              type="button"
-              disabled={readOnly}
-              onClick={() => onChange(def.key, !enabled)}
-              className={cn(
-                'text-left rounded-lg border p-3 transition-colors',
-                enabled ? 'border-primary/50 bg-primary/5' : readOnly ? 'border-border' : 'border-border hover:bg-muted/40'
-              )}
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-sm font-medium">{def.label}</span>
-                <div className={cn(
-                  'h-3.5 w-3.5 rounded-full border-2 transition-colors shrink-0 ml-2',
-                  enabled ? 'bg-primary border-primary' : 'border-muted-foreground/30'
-                )} />
-              </div>
-              {def.description && (
-                <p className="text-xs text-muted-foreground leading-relaxed">{def.description}</p>
-              )}
-            </button>
-          );
-        })}
-      </div>
+      <Switch
+        checked={enabled}
+        onCheckedChange={(v) => onChange(def.key, v)}
+        disabled={readOnly}
+      />
     </div>
   );
 }
 
-// ─── Flat permission list (connector categories) ───────────────────────────────
+// ─── Permission group (subcategory section) ────────────────────────────────────
 
-function FlatPermissionList({
-  definitions,
-  access,
-  onChange,
+function PermissionGroup({
   title,
+  definitions,
+  access,
+  onChange,
   readOnly,
 }: {
+  title: string;
   definitions: PermissionDefinition[];
   access: Record<string, boolean>;
   onChange: (key: string, value: boolean) => void;
-  title?: string;
   readOnly?: boolean;
 }) {
-  const enabled = definitions.filter((d) => access[d.key]).length;
-  const allEnabled = enabled === definitions.length && definitions.length > 0;
+  const allEnabled = definitions.length > 0 && definitions.every((d) => access[d.key] ?? false);
 
-  if (definitions.length === 0) {
-    return <p className="text-sm text-muted-foreground">No permissions defined for this connector yet.</p>;
-  }
+  if (definitions.length === 0) return null;
 
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-muted-foreground">
-          {title && <span className="font-medium text-foreground mr-2">{title}</span>}
-          {enabled} of {definitions.length} enabled
-        </p>
+    <div>
+      <div className="flex items-center justify-between mb-2">
+        {title && <h3 className="text-sm font-semibold">{title}</h3>}
         <button
           type="button"
           disabled={readOnly}
           onClick={() => definitions.forEach((d) => onChange(d.key, !allEnabled))}
-          className="text-xs font-medium text-primary hover:underline"
+          className="text-xs font-medium text-primary hover:underline disabled:pointer-events-none disabled:opacity-50 ml-auto"
         >
-          {allEnabled ? 'Deselect All' : 'Select All'}
+          {allEnabled ? 'Disable all' : 'Enable all'}
         </button>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 items-start">
-        {definitions.map((def) => {
-          const isEnabled = access[def.key] ?? false;
-          return (
-            <button
-              key={def.key}
-              type="button"
-              disabled={readOnly}
-              onClick={() => onChange(def.key, !isEnabled)}
-              className={cn(
-                'text-left rounded-lg border p-3 transition-colors',
-                isEnabled ? 'border-primary/50 bg-primary/5' : readOnly ? 'border-border' : 'border-border hover:bg-muted/40'
-              )}
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-sm font-medium">{def.label}</span>
-                <div className={cn(
-                  'h-3.5 w-3.5 rounded-full border-2 transition-colors shrink-0 ml-2',
-                  isEnabled ? 'bg-primary border-primary' : 'border-muted-foreground/30'
-                )} />
-              </div>
-              {def.description && (
-                <p className="text-xs text-muted-foreground leading-relaxed">{def.description}</p>
-              )}
-            </button>
-          );
-        })}
+      <div className="divide-y rounded-lg border px-4">
+        {definitions.map((def) => (
+          <PermissionRow
+            key={def.key}
+            def={def}
+            enabled={access[def.key] ?? false}
+            onChange={onChange}
+            readOnly={readOnly}
+          />
+        ))}
       </div>
     </div>
   );
 }
 
-// ─── Access tab content ───────────────────────────────────────────────────────
+// ─── Permission tab content ────────────────────────────────────────────────────
 
-function AccessTab({
+function PermissionTabContent({
   definitions,
   access,
   onPermissionChange,
   saving,
   onSave,
-  initialCategory,
   readOnly,
+  emptyMessage,
 }: {
   definitions: PermissionDefinition[];
   access: Record<string, boolean>;
   onPermissionChange: (key: string, value: boolean) => void;
   saving: boolean;
   onSave: () => void;
-  initialCategory: string;
   readOnly?: boolean;
+  emptyMessage?: string;
 }) {
-  const allCategories = sortCategories([...new Set(definitions.map((d) => d.category))]);
-  const [selectedCategory, setSelectedCategory] = useState(
-    allCategories.includes(initialCategory) ? initialCategory : (allCategories[0] ?? '')
+  const subcategories = [...new Set(definitions.map((d) => d.subcategory).filter(Boolean))].sort(
+    (a, b) => {
+      // Sort by min sort_order within each subcategory
+      const minA = Math.min(...definitions.filter((d) => d.subcategory === a).map((d) => d.sort_order));
+      const minB = Math.min(...definitions.filter((d) => d.subcategory === b).map((d) => d.sort_order));
+      return minA - minB;
+    }
   );
 
-  // Enabled count per category
-  const enabledPerCategory = new Map(
-    allCategories.map((cat) => [
-      cat,
-      definitions.filter((d) => d.category === cat && (access[d.key] ?? false)).length,
-    ])
-  );
-
-  // Split standard categories from connector categories (connector names start with "Connector - ")
-  const builtinCategories = allCategories.filter((c) => !c.startsWith('Connector - '));
-  const connectorCategories = allCategories.filter((c) => c.startsWith('Connector - '));
-  const selectedIsConnector = connectorCategories.includes(selectedCategory);
-  // Strip "Connector - " prefix for display in dropdown
-  const connectorLabel = (cat: string) => cat.replace(/^Connector - /, '');
-
-  // Definitions for the currently selected category
-  const catDefs = definitions
-    .filter((d) => d.category === selectedCategory)
-    .sort((a, b) => a.sort_order - b.sort_order);
-
-  // Connector categories have one subcategory = connector name; built-ins have multiple
-  const uniqueSubcategories = [...new Set(catDefs.map((d) => d.subcategory).filter(Boolean))];
-  const hasMultipleSubcategories = uniqueSubcategories.length > 1;
-  const sections: Record<string, PermissionDefinition[]> = {};
-  for (const def of catDefs) {
-    const s = def.subcategory || '_flat';
-    if (!sections[s]) { sections[s] = []; }
-    sections[s].push(def);
+  const groups: Record<string, PermissionDefinition[]> = {};
+  for (const def of definitions) {
+    const key = def.subcategory || '_flat';
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(def);
   }
-  const sectionOrder = Object.keys(sections).sort((a, b) => a.localeCompare(b));
+  // Sort within each group
+  for (const key of Object.keys(groups)) {
+    groups[key].sort((a, b) => a.sort_order - b.sort_order);
+  }
 
-  const totalConnectorEnabled = connectorCategories.reduce((sum, cat) => sum + (enabledPerCategory.get(cat) ?? 0), 0);
+  if (definitions.length === 0) {
+    return (
+      <div className="py-12 text-center text-sm text-muted-foreground">
+        {emptyMessage ?? 'No permissions defined.'}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      {/* Category filter — pills for built-ins, select for connectors */}
-      <div className="flex items-center gap-2 flex-wrap">
-        {builtinCategories.map((cat) => {
-          const count = enabledPerCategory.get(cat) ?? 0;
-          const isSelected = cat === selectedCategory;
-          return (
-            <button
-              key={cat}
-              type="button"
-              onClick={() => setSelectedCategory(cat)}
-              className={cn(
-                'inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm font-medium transition-colors',
-                isSelected
-                  ? 'border-primary bg-primary text-primary-foreground'
-                  : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground'
-              )}
-            >
-              {cat}
-              {count > 0 && (
-                <span className={cn(
-                  'inline-flex items-center justify-center rounded-full text-[10px] font-semibold px-1.5 min-w-[18px]',
-                  isSelected ? 'bg-primary-foreground/20 text-primary-foreground' : 'bg-primary/15 text-primary'
-                )}>
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
-
-        {connectorCategories.length > 0 && (
-          <Select
-            value={selectedIsConnector ? selectedCategory : ''}
-            onValueChange={(v) => v && setSelectedCategory(v)}
-          >
-            <SelectTrigger className={cn(
-              'h-8 rounded-full border px-3 text-sm font-medium w-auto gap-1.5 transition-colors',
-              selectedIsConnector
-                ? 'border-primary bg-primary text-primary-foreground [&>svg]:text-primary-foreground'
-                : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground'
-            )}>
-              <Plug className="h-3.5 w-3.5 shrink-0" />
-              <SelectValue placeholder="Connectors">
-                {selectedIsConnector ? connectorLabel(selectedCategory) : 'Connectors'}
-              </SelectValue>
-              {!selectedIsConnector && totalConnectorEnabled > 0 && (
-                <span className="inline-flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5 min-w-[18px]">
-                  {totalConnectorEnabled}
-                </span>
-              )}
-            </SelectTrigger>
-            <SelectContent>
-              {connectorCategories.map((cat) => {
-                const count = enabledPerCategory.get(cat) ?? 0;
-                return (
-                  <SelectItem key={cat} value={cat}>
-                    <span className="flex items-center gap-2">
-                      {connectorLabel(cat)}
-                      {count > 0 && (
-                        <span className="ml-auto inline-flex items-center justify-center rounded-full bg-primary/15 text-primary text-[10px] font-semibold px-1.5 min-w-[18px]">
-                          {count}
-                        </span>
-                      )}
-                    </span>
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
-
-      {/* Permission grid */}
-      <div className="space-y-8">
-        {hasMultipleSubcategories ? (
-          sectionOrder.map((section) => (
-            <PermissionSection
-              key={section}
-              sectionName={section}
-              definitions={sections[section]}
-              access={access}
-              onChange={onPermissionChange}
-              readOnly={readOnly}
-            />
-          ))
-        ) : (
-          <FlatPermissionList
-            definitions={catDefs}
-            access={access}
-            onChange={onPermissionChange}
-            title={uniqueSubcategories[0]}
-            readOnly={readOnly}
-          />
-        )}
-      </div>
-
+      {subcategories.map((sub) => (
+        <PermissionGroup
+          key={sub}
+          title={sub}
+          definitions={groups[sub] ?? []}
+          access={access}
+          onChange={onPermissionChange}
+          readOnly={readOnly}
+        />
+      ))}
+      {groups['_flat'] && (
+        <PermissionGroup
+          key="_flat"
+          title=""
+          definitions={groups['_flat']}
+          access={access}
+          onChange={onPermissionChange}
+          readOnly={readOnly}
+        />
+      )}
       <div className="flex justify-end pt-2">
         <Button onClick={onSave} disabled={saving || readOnly}>
           <Save className="h-4 w-4 mr-2" />
@@ -374,12 +200,9 @@ function AccessTab({
 export default function AccessGroupDetailPage() {
   const params = useParams();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { selectedOrgId } = useAdminViewStore();
   const accessGroupId = params.id as string;
-  const permitted = useRequirePermission('access_groups_read');
-  const canUpdate = usePermission('access_groups_update');
-  const canDelete = usePermission('access_groups_delete');
+  const permitted = useRequirePermission('admin_groups');
   const { confirm } = useConfirmDialog();
 
   const [accessGroup, setAccessGroup] = useState<AccessGroup | null>(null);
@@ -391,14 +214,28 @@ export default function AccessGroupDetailPage() {
   const [orgUsers, setOrgUsers] = useState<User[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Details modal
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [savingDetails, setSavingDetails] = useState(false);
+
+  // Members modal
+  const [membersOpen, setMembersOpen] = useState(false);
+
+  // Add member modal
   const [addMemberOpen, setAddMemberOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [pendingUserIds, setPendingUserIds] = useState<string[]>([]);
+
+  // MCP connector selector
+  const [selectedConnector, setSelectedConnector] = useState<string | null>(null);
+
+  // Members table
   const [memberFilter, setMemberFilter] = useState('');
   const [memberSortKey, setMemberSortKey] = useState<string>('email');
   const [memberSortDir, setMemberSortDir] = useState<'asc' | 'desc'>('asc');
-
-  const initialCategory = searchParams.get('category') ?? 'Administration';
 
   const load = useCallback(async () => {
     if (!selectedOrgId || !permitted) return;
@@ -428,27 +265,44 @@ export default function AccessGroupDetailPage() {
     setAccess((prev) => ({ ...prev, [key]: value }));
   };
 
-  const handleSave = async () => {
+  const handleSaveAccess = async () => {
     if (!selectedOrgId || !accessGroup) return;
     try {
       setSaving(true);
-      // Build a complete access map from all known definitions so stale/removed
-      // permissions are explicitly set to false rather than silently persisting.
       const fullAccess = Object.fromEntries(
         definitions.map((d) => [d.key, access[d.key] ?? false])
       );
-      await Promise.all([
-        updateAccessGroup(selectedOrgId, accessGroupId, {
-          name: name.trim(),
-          description: description.trim() || undefined,
-        }),
-        updateAccessGroupAccess(selectedOrgId, accessGroupId, fullAccess),
-      ]);
-      toast.success('Changes saved');
+      await updateAccessGroupAccess(selectedOrgId, accessGroupId, fullAccess);
+      toast.success('Permissions saved');
     } catch {
-      toast.error('Failed to save changes');
+      toast.error('Failed to save permissions');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleOpenDetails = () => {
+    setEditName(name);
+    setEditDesc(description);
+    setDetailsOpen(true);
+  };
+
+  const handleSaveDetails = async () => {
+    if (!selectedOrgId || !accessGroup) return;
+    try {
+      setSavingDetails(true);
+      await updateAccessGroup(selectedOrgId, accessGroupId, {
+        name: editName.trim(),
+        description: editDesc.trim() || undefined,
+      });
+      setName(editName.trim());
+      setDescription(editDesc.trim());
+      setDetailsOpen(false);
+      toast.success('Details saved');
+    } catch {
+      toast.error('Failed to save details');
+    } finally {
+      setSavingDetails(false);
     }
   };
 
@@ -518,7 +372,6 @@ export default function AccessGroupDetailPage() {
   const filteredOrgUsers = orgUsers.filter(
     (u) => !searchQuery || u.email.toLowerCase().includes(searchQuery.toLowerCase())
   );
-
   const allFilteredSelected = filteredOrgUsers.length > 0 && filteredOrgUsers.every((u) => pendingUserIds.includes(u.id));
   const someFilteredSelected = !allFilteredSelected && filteredOrgUsers.some((u) => pendingUserIds.includes(u.id));
 
@@ -554,6 +407,19 @@ export default function AccessGroupDetailPage() {
     });
   }, [members, memberFilter, memberSortKey, memberSortDir]);
 
+  // ── Categorise definitions into tabs ──────────────────────────────────────
+  const adminDefs    = definitions.filter((d) => d.category === 'Administration');
+  const centersDefs  = definitions.filter((d) => d.category === 'Centers');
+  const mcpDefs      = definitions.filter((d) => d.category === 'Connector');
+
+  // MCP: group by subcategory (connector name)
+  const mcpConnectors = [...new Set(mcpDefs.map((d) => d.subcategory))].sort();
+  const mcpByConnector: Record<string, PermissionDefinition[]> = {};
+  for (const def of mcpDefs) {
+    if (!mcpByConnector[def.subcategory]) mcpByConnector[def.subcategory] = [];
+    mcpByConnector[def.subcategory].push(def);
+  }
+
   if (!permitted) return <NoPermissionContent />;
 
   if (loading) {
@@ -568,168 +434,305 @@ export default function AccessGroupDetailPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/access-groups')}>
+      {/* ── Header ── */}
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="flex items-start gap-3">
+          <Button variant="ghost" size="icon" onClick={() => router.push('/access-groups')} className="shrink-0 mt-0.5">
             <ChevronLeft className="h-5 w-5" />
           </Button>
-          <ShieldCheck className="h-5 w-5 text-muted-foreground" />
-          <h1 className="text-3xl font-bold">{name || accessGroup.name}</h1>
+          <div>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-muted-foreground shrink-0" />
+              <h1 className="text-3xl font-bold">{name || accessGroup.name}</h1>
+            </div>
+            {description && (
+              <p className="text-sm text-muted-foreground mt-1 ml-7">{description}</p>
+            )}
+          </div>
         </div>
-        <Button
-          variant="destructive"
-          onClick={handleDelete}
-          disabled={!canDelete}
-          title={!canDelete ? "You don't have permission to perform this action" : undefined}
-          className="w-full sm:w-auto"
-        >
-          <Trash2 className="mr-2 h-4 w-4" />
-          Delete Group
-        </Button>
-      </div>
-
-      {/* Tabs */}
-      <Tabs defaultValue="access">
-        <TabsList>
-          <TabsTrigger value="access">Access</TabsTrigger>
-          <TabsTrigger value="members">
+        <div className="flex items-center gap-2 shrink-0">
+          <Button variant="outline" size="sm" onClick={() => setMembersOpen(true)}>
+            <Users className="h-3.5 w-3.5 mr-1.5" />
             Members
             {members.length > 0 && (
-              <span className="ml-1.5 inline-flex items-center justify-center rounded-full bg-muted text-muted-foreground text-[10px] font-semibold px-1.5 min-w-[18px]">
+              <span className="ml-1 inline-flex items-center justify-center rounded-full bg-muted text-muted-foreground text-[10px] font-semibold px-1.5 min-w-[18px]">
                 {members.length}
               </span>
             )}
-          </TabsTrigger>
-          <TabsTrigger value="details">Details</TabsTrigger>
+          </Button>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={handleOpenDetails}
+          >
+            <Pencil className="h-3.5 w-3.5 mr-1.5" />
+            Edit Details
+          </Button>
+          <Button
+            variant="destructive"
+            size="sm"
+            onClick={handleDelete}
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1.5" />
+            Delete
+          </Button>
+        </div>
+      </div>
+
+      {/* ── Tabs ── */}
+      <Tabs defaultValue="administration">
+        <TabsList className="w-full justify-start">
+          <TabsTrigger value="administration">Administration</TabsTrigger>
+          <TabsTrigger value="centers">Centers</TabsTrigger>
+          <TabsTrigger value="mcp">MCP</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="access" className="mt-6">
+        {/* ── Administration ── */}
+        <TabsContent value="administration" className="mt-6">
           <Card>
             <CardContent className="pt-6">
-              <AccessTab
-                definitions={definitions}
+              <PermissionTabContent
+                definitions={adminDefs}
                 access={access}
                 onPermissionChange={handlePermissionChange}
                 saving={saving}
-                onSave={handleSave}
-                initialCategory={initialCategory}
-                readOnly={!canUpdate}
+                onSave={handleSaveAccess}
+
+                emptyMessage="No administration permissions defined."
               />
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="members" className="mt-6">
+        {/* ── Centers ── */}
+        <TabsContent value="centers" className="mt-6">
           <Card>
-            <CardHeader className="flex flex-row items-center justify-between space-y-0">
-              <CardTitle>Members</CardTitle>
-              <Button variant="outline" size="sm" onClick={handleOpenAddMember} disabled={!canUpdate} title={!canUpdate ? "You don't have permission to perform this action" : undefined}>
-                <UserPlus className="h-4 w-4 mr-2" />
+            <CardContent className="pt-6">
+              <PermissionTabContent
+                definitions={centersDefs}
+                access={access}
+                onPermissionChange={handlePermissionChange}
+                saving={saving}
+                onSave={handleSaveAccess}
+
+                emptyMessage="No Centers permissions defined."
+              />
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ── MCP ── */}
+        <TabsContent value="mcp" className="mt-6">
+          {mcpConnectors.length === 0 ? (
+            <Card>
+              <CardContent className="pt-6">
+                <p className="py-12 text-center text-sm text-muted-foreground">
+                  No MCP connectors configured. Set up connectors in the Connectors section.
+                </p>
+              </CardContent>
+            </Card>
+          ) : selectedConnector ? (
+            /* ── Selected connector permissions ── */
+            <Card>
+              <CardHeader className="pb-2">
+                <div className="flex items-center gap-3">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSelectedConnector(null)}
+                    className="h-8 px-2 text-muted-foreground hover:text-foreground"
+                  >
+                    <ChevronLeft className="h-4 w-4 mr-1" />
+                    All Connectors
+                  </Button>
+                  <span className="text-muted-foreground">/</span>
+                  <div className="flex items-center gap-2">
+                    <Plug className="h-4 w-4 text-muted-foreground" />
+                    <CardTitle className="text-base">{selectedConnector}</CardTitle>
+                  </div>
+                </div>
+              </CardHeader>
+              <CardContent className="pt-2">
+                <PermissionGroup
+                  title=""
+                  definitions={mcpByConnector[selectedConnector] ?? []}
+                  access={access}
+                  onChange={handlePermissionChange}
+                />
+                <div className="flex justify-end pt-4">
+                  <Button onClick={handleSaveAccess} disabled={saving}>
+                    <Save className="h-4 w-4 mr-2" />
+                    {saving ? 'Saving…' : 'Save Changes'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ) : (
+            /* ── Connector picker ── */
+            <div className="space-y-4">
+              <p className="text-sm text-muted-foreground">
+                Select a connector to manage its MCP access permissions.
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {mcpConnectors.map((connector) => {
+                  const defs = mcpByConnector[connector] ?? [];
+                  const enabledCount = defs.filter((d) => access[d.key]).length;
+                  return (
+                    <button
+                      key={connector}
+                      type="button"
+                      onClick={() => setSelectedConnector(connector)}
+                      className="group flex items-center justify-between rounded-lg border bg-card p-4 text-left transition-colors hover:border-primary/50 hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md border bg-background">
+                          <Plug className="h-4 w-4 text-muted-foreground" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium">{connector}</p>
+                          <p className="text-xs text-muted-foreground">
+                            {enabledCount === 0
+                              ? 'No access granted'
+                              : `${enabledCount} of ${defs.length} permission${defs.length !== 1 ? 's' : ''} enabled`}
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </TabsContent>
+
+      </Tabs>
+
+      {/* ── Members modal ── */}
+      <Dialog open={membersOpen} onOpenChange={setMembersOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <div className="flex items-center justify-between pr-6">
+              <DialogTitle>Members — {accessGroup.name}</DialogTitle>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleOpenAddMember}
+              >
+                <UserPlus className="h-3.5 w-3.5 mr-1.5" />
                 Add User
               </Button>
-            </CardHeader>
-            <CardContent>
-              <div className="relative mb-3">
-                <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Filter members…"
-                  value={memberFilter}
-                  onChange={(e) => setMemberFilter(e.target.value)}
-                  className="pl-8"
-                />
-              </div>
-              <ResponsiveTable
-                data={displayedMembers}
-                sortKey={memberSortKey}
-                sortDir={memberSortDir}
-                onSort={handleMemberSort}
-                columns={[
-                  {
-                    key: 'email',
-                    label: 'User',
-                    sortable: true,
-                    render: (m) => (
-                      <div className="flex items-center gap-2">
-                        <span className="text-sm">{m.email}</span>
-                        {(m.role === 'super_admin' || m.role === 'org_admin') && (
-                          <Badge variant="secondary" className="text-[10px] font-normal">Admin</Badge>
-                        )}
-                      </div>
-                    ),
-                  },
-                  { key: 'granted_at', label: 'Since', sortable: true, render: (m) => <span className="text-xs text-muted-foreground">{m.granted_at ? new Date(m.granted_at).toLocaleDateString() : '—'}</span> },
-                  {
-                    key: 'actions',
-                    label: '',
-                    desktopRender: (m) => (m.role === 'super_admin' || m.role === 'org_admin') ? null : (
-                      <div className="flex justify-end">
-                        <Button variant="ghost" size="icon" onClick={(e) => { e.stopPropagation(); handleRemoveMember(m.id); }} disabled={!canDelete} title={!canDelete ? "You don't have permission to perform this action" : undefined}>
-                          <Trash2 className="h-4 w-4 text-destructive" />
-                        </Button>
-                      </div>
-                    ),
-                    render: (m) => (m.role === 'super_admin' || m.role === 'org_admin') ? null : (
+            </div>
+          </DialogHeader>
+          <div className="relative mt-1">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Filter members…"
+              value={memberFilter}
+              onChange={(e) => setMemberFilter(e.target.value)}
+              className="pl-8"
+            />
+          </div>
+          <div className="mt-2 max-h-[400px] overflow-y-auto">
+            <ResponsiveTable
+              data={displayedMembers}
+              sortKey={memberSortKey}
+              sortDir={memberSortDir}
+              onSort={handleMemberSort}
+              columns={[
+                {
+                  key: 'email',
+                  label: 'User',
+                  sortable: true,
+                  render: (m) => (
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm">{m.email}</span>
+                      {(m.role === 'super_admin' || m.role === 'org_admin') && (
+                        <Badge variant="secondary" className="text-[10px] font-normal">Admin</Badge>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: 'granted_at',
+                  label: 'Since',
+                  sortable: true,
+                  render: (m) => (
+                    <span className="text-xs text-muted-foreground">
+                      {m.granted_at ? new Date(m.granted_at).toLocaleDateString() : '—'}
+                    </span>
+                  ),
+                },
+                {
+                  key: 'actions',
+                  label: '',
+                  desktopRender: (m) => (m.role === 'super_admin' || m.role === 'org_admin') ? null : (
+                    <div className="flex justify-end">
                       <Button
-                        variant="outline" size="sm"
-                        disabled={!canDelete}
-                        title={!canDelete ? "You don't have permission to perform this action" : undefined}
+                        variant="ghost"
+                        size="icon"
                         onClick={(e) => { e.stopPropagation(); handleRemoveMember(m.id); }}
-                        className="flex-1 rounded-none rounded-tr-lg rounded-br-lg border-r-0 border-t-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
                       >
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
-                    ),
-                  },
-                ]}
-                emptyMessage={memberFilter ? 'No members match your filter.' : 'No members yet.'}
+                    </div>
+                  ),
+                  render: (m) => (m.role === 'super_admin' || m.role === 'org_admin') ? null : (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={(e) => { e.stopPropagation(); handleRemoveMember(m.id); }}
+                      className="flex-1 rounded-none rounded-tr-lg rounded-br-lg border-r-0 border-t-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10 hover:border-destructive"
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  ),
+                },
+              ]}
+              emptyMessage={memberFilter ? 'No members match your filter.' : 'No members yet.'}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Edit Details modal ── */}
+      <Dialog open={detailsOpen} onOpenChange={setDetailsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Details</DialogTitle>
+            <DialogDescription>Update the name and description for this access group.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-name">Name</Label>
+              <Input
+                id="edit-name"
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                placeholder="Access group name"
               />
-            </CardContent>
-          </Card>
-        </TabsContent>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-desc">Description</Label>
+              <Textarea
+                id="edit-desc"
+                value={editDesc}
+                onChange={(e) => setEditDesc(e.target.value)}
+                placeholder="Optional description"
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDetailsOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveDetails} disabled={savingDetails || !editName.trim()}>
+              {savingDetails ? 'Saving…' : 'Save'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-        <TabsContent value="details" className="mt-6">
-          <Card>
-            <CardContent className="pt-6">
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="ag-name">Name</Label>
-                    <Input
-                      id="ag-name"
-                      value={name}
-                      onChange={(e) => setName(e.target.value)}
-                      placeholder="Access group name"
-                      disabled={!canUpdate}
-                      readOnly={!canUpdate}
-                    />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="ag-desc">Description</Label>
-                    <Textarea
-                      id="ag-desc"
-                      value={description}
-                      onChange={(e) => setDescription(e.target.value)}
-                      placeholder="Optional description"
-                      rows={3}
-                      disabled={!canUpdate}
-                      readOnly={!canUpdate}
-                    />
-                  </div>
-                </div>
-                <div className="flex justify-end">
-                  <Button onClick={handleSave} disabled={saving || !canUpdate}>
-                    <Save className="h-4 w-4 mr-2" />
-                    {saving ? 'Saving…' : 'Save Details'}
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-
-      {/* Add member dialog */}
+      {/* ── Add member modal ── */}
       <Dialog open={addMemberOpen} onOpenChange={setAddMemberOpen}>
         <DialogContent className="max-w-md">
           <DialogHeader>
@@ -772,21 +775,19 @@ export default function AccessGroupDetailPage() {
                     role="button"
                     tabIndex={0}
                     className="flex w-full items-center gap-3 px-3 py-2.5 hover:bg-muted text-sm cursor-pointer"
-                    aria-disabled={!canUpdate}
                     onClick={() =>
-                      canUpdate && setPendingUserIds((prev) =>
+                      setPendingUserIds((prev) =>
                         prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
                       )
                     }
                     onKeyDown={(e) =>
-                      e.key === 'Enter' && canUpdate && setPendingUserIds((prev) =>
+                      e.key === 'Enter' && setPendingUserIds((prev) =>
                         prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
                       )
                     }
                   >
                     <Checkbox
                       checked={pendingUserIds.includes(u.id)}
-                      disabled={!canUpdate}
                       onCheckedChange={() =>
                         setPendingUserIds((prev) =>
                           prev.includes(u.id) ? prev.filter((id) => id !== u.id) : [...prev, u.id]
@@ -802,9 +803,8 @@ export default function AccessGroupDetailPage() {
           </div>
           <DialogFooter className="mt-2">
             <Button variant="outline" onClick={() => setAddMemberOpen(false)}>Cancel</Button>
-            <Button onClick={handleAddMembers} disabled={pendingUserIds.length === 0 || !canUpdate}>
-              <UserPlus className="h-4 w-4 mr-2" />
-              Add{pendingUserIds.length > 0 ? ` (${pendingUserIds.length})` : ''}
+            <Button onClick={handleAddMembers} disabled={pendingUserIds.length === 0}>
+              Add {pendingUserIds.length > 0 ? `${pendingUserIds.length} ` : ''}User{pendingUserIds.length !== 1 ? 's' : ''}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -4,21 +4,19 @@ import { use, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { usePermission } from '@/lib/hooks/use-permission';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { getConnector, updateConnector, deleteConnector } from '@/lib/api/connectors';
 import { getConnector as getBaseConnector } from '@/lib/api/connectors-base';
 import { getAccessGroups } from '@/lib/api/access-groups';
 import { getAccessDefinitions } from '@/lib/api/permissions';
-import type { UpdateConnectorConfigDto, Connector, OrganizationConnector, AccessGroup, PermissionDefinition } from '@/types/api.types';
+import { getDataSourceConfigs } from '@/lib/api/data-source-configs';
+import type { Connector, OrganizationConnector, AccessGroup, PermissionDefinition, DataSourceConfig } from '@/types/api.types';
 import { DynamicConnectorForm } from '@/components/dynamic-connector-form';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, ExternalLink, Trash2 } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Trash2, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
@@ -27,15 +25,14 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   const router = useRouter();
   const { selectedOrgId, isOrgAdminView } = useAdminViewStore();
   const { confirm } = useConfirmDialog();
-  const permitted = useRequirePermission('connectors_read');
-  const canUpdate = usePermission('connectors_update');
-  const canDelete = usePermission('connectors_delete');
-  const canReadAccessGroups = usePermission('access_groups_read');
+  const permitted = useRequirePermission('admin_connectors');
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [connector, setConnector] = useState<OrganizationConnector | null>(null);
   const [agItems, setAgItems] = useState<{ group: AccessGroup; enabledLabels: string[] }[]>([]);
   const [agLoading, setAgLoading] = useState(false);
+  const [assignedCategories, setAssignedCategories] = useState<DataSourceConfig[]>([]);
+  const [dscLoading, setDscLoading] = useState(false);
   const [baseConnector, setBaseConnector] = useState<Connector | null>(null);
   const [connectorInfo, setConnectorInfo] = useState<{
     connector_name: string;
@@ -89,11 +86,13 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
 
   const loadConnectorAccessGroups = async () => {
     if (!selectedOrgId || !connector) return;
+    setAgLoading(true);
+    setDscLoading(true);
     try {
-      setAgLoading(true);
-      const [{ access_groups: groups }, definitions] = await Promise.all([
+      const [{ access_groups: groups }, definitions, allConfigs] = await Promise.all([
         getAccessGroups(selectedOrgId),
         getAccessDefinitions(selectedOrgId),
+        getDataSourceConfigs(selectedOrgId),
       ]);
 
       const connectorCategory = `Connector - ${connector.connector_name}`;
@@ -109,10 +108,12 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         .filter((item) => item.enabledLabels.length > 0);
 
       setAgItems(items);
+      setAssignedCategories(allConfigs.filter((c) => c.org_connector_id === connectorId));
     } catch {
-      toast.error('Failed to load access groups');
+      toast.error('Failed to load access data');
     } finally {
       setAgLoading(false);
+      setDscLoading(false);
     }
   };
 
@@ -169,18 +170,18 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
             </p>
           </div>
         </div>
-        <Button variant="destructive" onClick={handleDeleteConnector} disabled={!canDelete} className="w-full sm:w-auto">
+        <Button variant="destructive" onClick={handleDeleteConnector} className="w-full sm:w-auto">
           <Trash2 className="mr-2 h-4 w-4" />
-          Delete Connector
+          Remove
         </Button>
       </div>
 
       <Tabs defaultValue="configuration" className="max-w-2xl" onValueChange={(v) => {
-        if (v === 'access-groups' && canReadAccessGroups) loadConnectorAccessGroups();
+        if (v === 'access') loadConnectorAccessGroups();
       }}>
         <TabsList>
           <TabsTrigger value="configuration">Configuration</TabsTrigger>
-          <TabsTrigger value="access-groups">Access Groups</TabsTrigger>
+          <TabsTrigger value="access">Access</TabsTrigger>
         </TabsList>
 
         <TabsContent value="configuration">
@@ -192,6 +193,12 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
           </CardDescription>
         </CardHeader>
         <CardContent>
+          {/* Connection status — hardcoded as Connected for now */}
+          <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950 px-4 py-3 text-sm mb-6">
+            <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />
+            <span className="font-medium text-green-800 dark:text-green-200">Connected</span>
+          </div>
+
           {schema && schema.fields.length > 0 && connector ? (
             <div className="space-y-6">
               <DynamicConnectorForm
@@ -210,7 +217,6 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                 tokenHealthStatus={connector.secret_info?.health_status}
                 tokenExpiresAt={connector.secret_info?.expires_at}
                 tokenLastRenewedAt={connector.secret_info?.last_renewed_at}
-                disabled={!canUpdate}
                 onSubmit={async (config, secrets) => {
                   if (!selectedOrgId) return;
                   setLoading(true);
@@ -232,133 +238,260 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
                 loading={loading}
               />
 
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div className="space-y-0.5">
-                  <Label htmlFor="is_enabled" className="text-base">Enable Connector</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Connector will be active and ready to use
-                  </p>
-                </div>
-                <Switch
-                  id="is_enabled"
-                  checked={connector.is_enabled}
-                  disabled={!canUpdate}
-                  onCheckedChange={async (checked) => {
-                    if (!selectedOrgId) return;
-                    try {
-                      await updateConnector(selectedOrgId, connectorId, {
-                        is_enabled: checked,
-                      });
-                      toast.success('Connector status updated');
-                      await loadConnector();
-                    } catch (error: any) {
-                      const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
-                      toast.error(errorMessage);
-                    }
-                  }}
-                />
-              </div>
             </div>
-          ) : (
-            <div className="space-y-6">
-              <div className="flex items-center justify-between rounded-lg border p-4">
-                <div className="space-y-0.5">
-                  <Label htmlFor="is_enabled" className="text-base">Enable Connector</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Connector will be active and ready to use
-                  </p>
-                </div>
-                <Switch
-                  id="is_enabled"
-                  checked={connector?.is_enabled ?? formData.is_enabled}
-                  disabled={!canUpdate}
-                  onCheckedChange={async (checked) => {
-                    if (!selectedOrgId) return;
-                    try {
-                      await updateConnector(selectedOrgId, connectorId, { is_enabled: checked });
-                      toast.success('Connector status updated');
-                      await loadConnector();
-                    } catch (error: any) {
-                      const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
-                      toast.error(errorMessage);
-                    }
-                  }}
-                />
-              </div>
-            </div>
-          )}
+          ) : null}
         </CardContent>
       </Card>
         </TabsContent>
 
-        <TabsContent value="access-groups">
+        <TabsContent value="access" className="space-y-4">
+
+          {/* ── MCP ── */}
           <Card>
             <CardHeader>
-              <CardTitle>Access Groups</CardTitle>
-              <CardDescription>
-                Access groups that have endpoints enabled for this connector
-              </CardDescription>
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <CardTitle className="text-base">MCP</CardTitle>
+                  <CardDescription>
+                    Expose this connector as a tool via the Model Context Protocol.
+                  </CardDescription>
+                </div>
+                {connector?.mcp_enabled ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+
+                    className="shrink-0"
+                    onClick={async () => {
+                      const confirmed = await confirm({
+                        title: 'Disable MCP?',
+                        description: 'This connector will no longer be available as an MCP tool. Existing access group configuration will be preserved and can be re-enabled at any time.',
+                        confirmText: 'Disable',
+                        variant: 'destructive',
+                      });
+                      if (!confirmed) return;
+                      setConnector((prev) => prev ? { ...prev, mcp_enabled: false } : prev);
+                      try {
+                        await updateConnector(selectedOrgId!, connectorId, { mcp_enabled: false });
+                      } catch (err: any) {
+                        setConnector((prev) => prev ? { ...prev, mcp_enabled: true } : prev);
+                        toast.error(err.response?.data?.message || err.message || 'Failed to update');
+                      }
+                    }}
+                  >
+                    Disable
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!connector}
+                    className="shrink-0"
+                    onClick={async () => {
+                      setConnector((prev) => prev ? { ...prev, mcp_enabled: true } : prev);
+                      try {
+                        await updateConnector(selectedOrgId!, connectorId, { mcp_enabled: true });
+                      } catch (err: any) {
+                        setConnector((prev) => prev ? { ...prev, mcp_enabled: false } : prev);
+                        toast.error(err.response?.data?.message || err.message || 'Failed to update');
+                      }
+                    }}
+                  >
+                    Enable
+                  </Button>
+                )}
+              </div>
             </CardHeader>
-            <CardContent className="space-y-4">
-              {agLoading ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
-              ) : agItems.length > 0 ? (
-                <div className="divide-y rounded-lg border">
-                  {agItems.map(({ group, enabledLabels }) => (
-                    <div key={group.id} className="flex items-start justify-between px-4 py-3 gap-4">
-                      <div className="min-w-0 flex-1 space-y-1.5">
-                        <div>
-                          <p className="text-sm font-medium">{group.name}</p>
+            {connector?.mcp_enabled && (
+              <CardContent className="space-y-3">
+                {agLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading...</p>
+                ) : agItems.length > 0 ? (
+                  <div className="divide-y rounded-lg border">
+                    {agItems.map(({ group }) => (
+                      <div key={group.id} className="flex items-center justify-between px-4 py-2.5 gap-4">
+                        <div className="min-w-0 flex-1">
+                          <span className="text-sm font-medium">{group.name}</span>
                           {group.description && (
-                            <p className="text-xs text-muted-foreground">{group.description}</p>
+                            <p className="text-xs text-muted-foreground truncate">{group.description}</p>
                           )}
                         </div>
-                        <div className="flex flex-wrap gap-1">
-                          {enabledLabels.map((label) => (
-                            <span
-                              key={label}
-                              className="inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium text-muted-foreground"
-                            >
-                              {label}
-                            </span>
-                          ))}
-                        </div>
+                        <Button variant="ghost" size="sm" asChild className="flex-shrink-0 h-7">
+                          <Link href={`/access-groups/${group.id}?category=Connector - ${connector?.connector_name}`}>
+                            <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                            Manage
+                          </Link>
+                        </Button>
                       </div>
-                      <Button variant="ghost" size="sm" asChild className="flex-shrink-0">
-                        <Link href={`/access-groups/${group.id}?category=Connector - ${connector?.connector_name}`}>
-                          <ExternalLink className="h-3.5 w-3.5 mr-1" />
-                          Manage
-                        </Link>
-                      </Button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <>
-                  {!canReadAccessGroups ? (
-                    <div className="flex items-start gap-3 rounded-lg border border-yellow-200 bg-yellow-50 px-4 py-3 dark:border-yellow-900/50 dark:bg-yellow-900/20">
-                      <span className="mt-0.5 text-yellow-600 dark:text-yellow-400">⚠</span>
-                      <p className="text-sm text-yellow-800 dark:text-yellow-300">
-                        You need access group view permission to see which groups include this connector.
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="text-sm text-muted-foreground">
-                      This connector is not included in any access groups yet.
-                    </p>
-                  )}
-                  {canReadAccessGroups && (
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href="/access-groups">
-                        <ExternalLink className="h-3.5 w-3.5 mr-1" />
-                        Manage Access Groups
-                      </Link>
-                    </Button>
-                  )}
-                </>
-              )}
-            </CardContent>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No access groups include this connector yet.</p>
+                )}
+                {agItems.length === 0 && !agLoading && (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/access-groups">
+                      <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                      Manage Access Groups
+                    </Link>
+                  </Button>
+                )}
+              </CardContent>
+            )}
           </Card>
+
+          {/* ── Agent ── */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <CardTitle className="text-base">Agent</CardTitle>
+                  <CardDescription>
+                    Allow AI agents to call this connector during workflow execution.
+                  </CardDescription>
+                </div>
+                {connector?.agent_enabled ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+
+                    className="shrink-0"
+                    onClick={async () => {
+                      const confirmed = await confirm({
+                        title: 'Disable Agent Access?',
+                        description: 'AI agents will no longer be able to call this connector. No configuration will be removed.',
+                        confirmText: 'Disable',
+                        variant: 'destructive',
+                      });
+                      if (!confirmed) return;
+                      setConnector((prev) => prev ? { ...prev, agent_enabled: false } : prev);
+                      try {
+                        await updateConnector(selectedOrgId!, connectorId, { agent_enabled: false });
+                      } catch (err: any) {
+                        setConnector((prev) => prev ? { ...prev, agent_enabled: true } : prev);
+                        toast.error(err.response?.data?.message || err.message || 'Failed to update');
+                      }
+                    }}
+                  >
+                    Disable
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!connector}
+                    className="shrink-0"
+                    onClick={async () => {
+                      setConnector((prev) => prev ? { ...prev, agent_enabled: true } : prev);
+                      try {
+                        await updateConnector(selectedOrgId!, connectorId, { agent_enabled: true });
+                      } catch (err: any) {
+                        setConnector((prev) => prev ? { ...prev, agent_enabled: false } : prev);
+                        toast.error(err.response?.data?.message || err.message || 'Failed to update');
+                      }
+                    }}
+                  >
+                    Enable
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+          </Card>
+
+          {/* ── Centers ── */}
+          <Card>
+            <CardHeader>
+              <div className="flex items-start justify-between gap-4">
+                <div className="space-y-1">
+                  <CardTitle className="text-base">Centers</CardTitle>
+                  <CardDescription>
+                    Allow this connector to supply data for Centers imports.
+                  </CardDescription>
+                </div>
+                {connector?.centers_enabled ? (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+
+                    className="shrink-0"
+                    onClick={async () => {
+                      const confirmed = await confirm({
+                        title: 'Disable Centers?',
+                        description: 'This connector will no longer supply data for Centers imports. Existing data source configurations will be preserved and can be re-enabled at any time.',
+                        confirmText: 'Disable',
+                        variant: 'destructive',
+                      });
+                      if (!confirmed) return;
+                      setConnector((prev) => prev ? { ...prev, centers_enabled: false } : prev);
+                      try {
+                        await updateConnector(selectedOrgId!, connectorId, { centers_enabled: false });
+                      } catch (err: any) {
+                        setConnector((prev) => prev ? { ...prev, centers_enabled: true } : prev);
+                        toast.error(err.response?.data?.message || err.message || 'Failed to update');
+                      }
+                    }}
+                  >
+                    Disable
+                  </Button>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={!connector}
+                    className="shrink-0"
+                    onClick={async () => {
+                      setConnector((prev) => prev ? { ...prev, centers_enabled: true } : prev);
+                      try {
+                        await updateConnector(selectedOrgId!, connectorId, { centers_enabled: true });
+                      } catch (err: any) {
+                        setConnector((prev) => prev ? { ...prev, centers_enabled: false } : prev);
+                        toast.error(err.response?.data?.message || err.message || 'Failed to update');
+                      }
+                    }}
+                  >
+                    Enable
+                  </Button>
+                )}
+              </div>
+            </CardHeader>
+            {connector?.centers_enabled && (
+              <CardContent className="space-y-3">
+                {dscLoading ? (
+                  <p className="text-sm text-muted-foreground">Loading...</p>
+                ) : assignedCategories.length > 0 ? (
+                  <div className="divide-y rounded-lg border">
+                    {assignedCategories.map((cfg) => (
+                      <div key={cfg.key} className="flex items-center justify-between px-4 py-2.5 gap-4">
+                        <div className="min-w-0 flex-1">
+                          <span className="text-sm font-medium">{cfg.label}</span>
+                          {cfg.description && (
+                            <p className="text-xs text-muted-foreground truncate">{cfg.description}</p>
+                          )}
+                        </div>
+                        <Button variant="ghost" size="sm" asChild className="flex-shrink-0 h-7">
+                          <Link href="/centers/data-sources">
+                            <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                            Manage
+                          </Link>
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-sm text-muted-foreground">No categories assigned yet.</p>
+                )}
+                {assignedCategories.length === 0 && !dscLoading && (
+                  <Button variant="outline" size="sm" asChild>
+                    <Link href="/centers/data-sources">
+                      <ExternalLink className="h-3.5 w-3.5 mr-1" />
+                      Manage Centers Data Sources
+                    </Link>
+                  </Button>
+                )}
+              </CardContent>
+            )}
+          </Card>
+
         </TabsContent>
       </Tabs>
     </div>

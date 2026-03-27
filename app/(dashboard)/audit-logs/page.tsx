@@ -29,7 +29,7 @@ export default function AuditLogsPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
   const { viewMode, selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('audit_logs_read');
+  const permitted = useRequirePermission('admin_audit_logs');
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
