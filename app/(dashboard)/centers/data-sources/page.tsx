@@ -9,6 +9,7 @@ import {
   getDataSourceConfigs,
   bulkUpsertDataSourceConfigs,
   deleteDataSourceConfig,
+  triggerDataSourceSync,
 } from '@/lib/api/data-source-configs';
 import type { DataSourceConfig, ConnectorOption } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
@@ -22,27 +23,43 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
-import { Loader2 } from 'lucide-react';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Loader2, Pencil, RefreshCw, Wand2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 // ── Cron presets ──────────────────────────────────────────────────────────────
 
 const CRON_PRESETS: Array<{ label: string; value: string }> = [
-  { label: 'Every 15 min',   value: '*/15 * * * *' },
-  { label: 'Every 30 min',   value: '*/30 * * * *' },
-  { label: 'Every hour',     value: '0 * * * *' },
-  { label: 'Every 2 hours',  value: '0 */2 * * *' },
-  { label: 'Every 4 hours',  value: '0 */4 * * *' },
-  { label: 'Every 12 hours', value: '0 */12 * * *' },
-  { label: 'Every 24 hours', value: '0 0 * * *' },
-  { label: 'Custom…',        value: '__custom' },
+  { label: 'Every 15 min',   value: 'every_15' },
+  { label: 'Every 30 min',   value: 'every_30' },
+  { label: 'Every hour',     value: 'every_1h' },
+  { label: 'Every 2 hours',  value: 'every_2h' },
+  { label: 'Every 4 hours',  value: 'every_4h' },
+  { label: 'Every 12 hours', value: 'every_12h' },
+  { label: 'Every 24 hours', value: 'every_24h' },
 ];
 
-const DEFAULT_CRON = '0 * * * *';
+const DEFAULT_PRESET = 'every_1h';
 
-function presetValueFor(cron: string): string {
-  return CRON_PRESETS.find((p) => p.value === cron)?.value ?? '__custom';
+function rand(min: number, max: number) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/** Generate a randomised cron for a given preset key. */
+function generateRandomCron(presetKey: string): string {
+  const m = rand(0, 59);
+  switch (presetKey) {
+    case 'every_15': return `${rand(0, 14)}/15 * * * *`;
+    case 'every_30': return `${rand(0, 29)}/30 * * * *`;
+    case 'every_1h':  return `${m} * * * *`;
+    case 'every_2h':  return `${m} ${rand(0,1)}/2 * * *`;
+    case 'every_4h':  return `${m} ${rand(0,3)}/4 * * *`;
+    case 'every_12h': return `${m} ${rand(0,11)}/12 * * *`;
+    case 'every_24h': return `${m} ${rand(0,23)} * * *`;
+    default:          return presetKey; // shouldn't happen
+  }
 }
 
 // ── Row state ─────────────────────────────────────────────────────────────────
@@ -50,29 +67,21 @@ function presetValueFor(cron: string): string {
 interface RowState {
   connector_id: string;
   cron: string;
-  isCustom: boolean;
-  customInput: string;
   isActive: boolean;
 }
 
 function rowStateFromConfig(cfg: DataSourceConfig): RowState {
-  const cron = cfg.refresh_cron ?? DEFAULT_CRON;
-  const preset = presetValueFor(cron);
   return {
     connector_id: cfg.org_connector_id ?? '',
-    cron,
-    isCustom: preset === '__custom',
-    customInput: preset === '__custom' ? cron : '',
+    cron: cfg.refresh_cron ?? generateRandomCron(DEFAULT_PRESET),
     isActive: cfg.is_active ?? false,
   };
 }
 
 function isDirty(cfg: DataSourceConfig, row: RowState): boolean {
-  const savedCron = cfg.refresh_cron ?? DEFAULT_CRON;
-  const currentCron = row.isCustom ? row.customInput.trim() : row.cron;
   return (
     row.connector_id !== (cfg.org_connector_id ?? '') ||
-    currentCron !== savedCron ||
+    row.cron.trim() !== (cfg.refresh_cron ?? '') ||
     row.isActive !== (cfg.is_active ?? false)
   );
 }
@@ -84,11 +93,16 @@ export default function DataSourcesPage() {
   const { selectedOrgId, selectedOrgName, isOrgAdminView } = useAdminViewStore();
   const permitted = useRequirePermission('admin_data_sources');
 
+  const { confirm } = useConfirmDialog();
+
   const [configs, setConfigs]     = useState<DataSourceConfig[]>([]);
   const [loading, setLoading]     = useState(false);
   const [connectorsByCategory, setConnectorsByCategory] = useState<Record<string, ConnectorOption[]>>({});
   const [rowState, setRowState]   = useState<Record<string, RowState>>({});
-  const [saving, setSaving]       = useState(false);
+  const [saving, setSaving]                         = useState(false);
+  const [syncingKey, setSyncingKey]                 = useState<string | null>(null);
+  const [editingScheduleKey, setEditingScheduleKey] = useState<string | null>(null);
+  const [generateOpenKey, setGenerateOpenKey]       = useState<string | null>(null);
 
   useEffect(() => {
     if (!isOrgAdminView() || !selectedOrgId) { router.push('/organizations'); return; }
@@ -148,8 +162,7 @@ export default function DataSourcesPage() {
       .filter((key) => !!rowState[key].connector_id)
       .map((key) => {
         const row = rowState[key];
-        const cronToSave = row.isCustom ? row.customInput.trim() : row.cron;
-        return { categoryKey: key, data: { org_connector_id: row.connector_id, refresh_cron: cronToSave, is_active: row.isActive } };
+        return { categoryKey: key, data: { org_connector_id: row.connector_id, refresh_cron: row.cron.trim(), is_active: row.isActive } };
       });
 
     for (const u of toUpsert) {
@@ -168,6 +181,28 @@ export default function DataSourcesPage() {
       toast.error(err?.response?.data?.message ?? 'Failed to save');
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleSync = async (cfg: DataSourceConfig) => {
+    if (!selectedOrgId) return;
+    const confirmed = await confirm({
+      title: 'Refresh data now?',
+      description: `This will trigger an immediate sync for "${cfg.label}". The scheduled sync will continue as normal after this.`,
+      confirmText: 'Refresh Now',
+      cancelText: 'Cancel',
+      variant: 'default',
+    });
+    if (!confirmed) return;
+    setSyncingKey(cfg.key);
+    try {
+      await triggerDataSourceSync(selectedOrgId, cfg.key);
+      toast.success(`Sync triggered for ${cfg.label}`);
+      await loadConfigs();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message ?? 'Failed to trigger sync');
+    } finally {
+      setSyncingKey(null);
     }
   };
 
@@ -271,51 +306,70 @@ export default function DataSourcesPage() {
                       </div>
 
                       {/* Schedule */}
-                      <div className="px-3 py-3 border-b flex items-center">
-                        <div className="flex items-center gap-1.5">
-                          <Select
-                            value={row.isCustom ? '__custom' : row.cron}
-                            onValueChange={(v) => {
-                              if (v === '__custom') {
-                                patchRow(cfg.key, { isCustom: true, customInput: row.cron });
-                              } else {
-                                patchRow(cfg.key, { isCustom: false, cron: v, customInput: '' });
-                              }
-                            }}
-                            disabled={!row.connector_id}
-                          >
-                            <SelectTrigger className="w-36 h-8 text-xs shrink-0">
-                              <SelectValue />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {CRON_PRESETS.map((p) => (
-                                <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                          {row.isCustom && (
-                            <>
-                              <Input
-                                value={row.customInput}
-                                onChange={(e) => patchRow(cfg.key, { customInput: e.target.value })}
-                                placeholder="0 6 * * 1-5"
-                                className="w-28 h-8 text-xs font-mono"
-                              />
-                              <a
-                                href="https://crontab.guru"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-xs text-muted-foreground underline hover:text-foreground shrink-0"
-                              >
-                                guru
-                              </a>
-                            </>
-                          )}
-                        </div>
+                      <div className="px-3 py-3 border-b flex items-center min-w-0">
+                        {editingScheduleKey === cfg.key ? (
+                          <div className="flex items-center gap-1.5">
+                            <Input
+                              autoFocus
+                              value={row.cron}
+                              onChange={(e) => patchRow(cfg.key, { cron: e.target.value })}
+                              onBlur={() => setEditingScheduleKey(null)}
+                              onKeyDown={(e) => { if (e.key === 'Enter' || e.key === 'Escape') setEditingScheduleKey(null); }}
+                              placeholder="0 6 * * 1-5"
+                              className="w-36 h-8 text-xs font-mono"
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex items-center justify-between gap-2 w-full group">
+                            <span className="text-xs font-mono text-muted-foreground truncate">
+                              {row.cron || '—'}
+                            </span>
+                            {row.connector_id && (
+                              <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 shrink-0">
+                                <button
+                                  onClick={() => setEditingScheduleKey(cfg.key)}
+                                  className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                  title="Edit cron expression"
+                                >
+                                  <Pencil className="h-3.5 w-3.5" />
+                                </button>
+                                <Popover
+                                  open={generateOpenKey === cfg.key}
+                                  onOpenChange={(open) => setGenerateOpenKey(open ? cfg.key : null)}
+                                >
+                                  <PopoverTrigger asChild>
+                                    <button
+                                      className="p-1 rounded hover:bg-muted text-muted-foreground hover:text-foreground"
+                                      title="Generate from preset"
+                                    >
+                                      <Wand2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  </PopoverTrigger>
+                                  <PopoverContent align="start" className="w-44 p-1">
+                                    {CRON_PRESETS.map((p) => (
+                                      <button
+                                        key={p.value}
+                                        className="w-full text-left px-3 py-1.5 text-sm rounded hover:bg-muted transition-colors"
+                                        onClick={() => {
+                                          patchRow(cfg.key, { cron: generateRandomCron(p.value) });
+                                          setGenerateOpenKey(null);
+                                        }}
+                                      >
+                                        {p.label}
+                                      </button>
+                                    ))}
+                                  </PopoverContent>
+                                </Popover>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
 
                       {/* Last Synced */}
-                      <div className="px-3 py-3 border-b flex items-center">
+                      <div
+                        className="px-3 py-3 border-b flex items-center justify-between gap-2 group"
+                      >
                         {cfg.last_synced_at ? (
                           <span className="text-xs text-muted-foreground">
                             {new Date(cfg.last_synced_at).toLocaleString()}
@@ -323,6 +377,16 @@ export default function DataSourcesPage() {
                         ) : (
                           <span className="text-xs text-muted-foreground">—</span>
                         )}
+                        <button
+                          onClick={() => handleSync(cfg)}
+                          disabled={syncingKey === cfg.key || !row.connector_id}
+                          title="Sync now"
+                          className="opacity-0 group-hover:opacity-100 transition-opacity shrink-0 p-1 rounded hover:bg-muted disabled:cursor-not-allowed disabled:opacity-30"
+                        >
+                          <RefreshCw
+                            className={`h-3.5 w-3.5 text-muted-foreground ${syncingKey === cfg.key ? 'animate-spin' : ''}`}
+                          />
+                        </button>
                       </div>
 
                       {/* Active */}

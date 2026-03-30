@@ -121,6 +121,8 @@ export interface Connector {
   agent_instruction?: string | null;
   is_active: boolean;
   is_public: boolean;
+  /** Center data category keys this connector provides data for */
+  categories: string[];
   created_at: string;
   updated_at: string;
 }
@@ -295,6 +297,7 @@ export interface CreateConnectorDto {
   agent_instruction?: string;
   is_active?: boolean;
   is_public?: boolean;
+  categories?: string[];
 }
 
 export interface UpdateConnectorDto {
@@ -309,6 +312,7 @@ export interface UpdateConnectorDto {
   agent_instruction?: string;
   is_active?: boolean;
   is_public?: boolean;
+  categories?: string[];
 }
 
 // User DTOs

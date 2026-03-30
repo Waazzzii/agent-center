@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
-import { createConnector } from '@/lib/api/connectors-base';
+import { createConnector, getCenterDataCategories } from '@/lib/api/connectors-base';
+import type { CenterDataCategory } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -22,6 +23,7 @@ export default function CreateConnectorPage() {
   const router = useRouter();
   const { admin, isSuperAdmin } = useAuthStore();
   const [loading, setLoading] = useState(false);
+  const [availableCategories, setAvailableCategories] = useState<CenterDataCategory[]>([]);
   const [formData, setFormData] = useState({
     key: '',
     name: '',
@@ -34,7 +36,12 @@ export default function CreateConnectorPage() {
     agent_instruction: '',
     is_active: true,
     is_public: false,
+    categories: [] as string[],
   });
+
+  useEffect(() => {
+    getCenterDataCategories().then(setAvailableCategories).catch(() => {});
+  }, []);
 
   if (!admin || !isSuperAdmin()) {
     router.push('/users');
@@ -77,8 +84,9 @@ export default function CreateConnectorPage() {
       <form onSubmit={handleSubmit} className="space-y-6">
         <Tabs defaultValue="basic" className="w-full">
           <TabsList>
-            <TabsTrigger value="basic">Basic Details</TabsTrigger>
-            <TabsTrigger value="schema">MCP</TabsTrigger>
+            <TabsTrigger value="basic">Details</TabsTrigger>
+            <TabsTrigger value="schema">Configuration</TabsTrigger>
+            <TabsTrigger value="centers">Centers</TabsTrigger>
             <TabsTrigger value="agent">Agent</TabsTrigger>
           </TabsList>
 
@@ -188,10 +196,45 @@ export default function CreateConnectorPage() {
             </Card>
           </TabsContent>
 
+          <TabsContent value="centers" className="mt-6">
+            <Card className="max-w-2xl">
+              <CardHeader>
+                <CardTitle>Center Data Categories</CardTitle>
+                <CardDescription>Select which Center data categories this connector can provide data for.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  {availableCategories.map((cat) => {
+                    const selected = formData.categories.includes(cat.key);
+                    return (
+                      <button
+                        key={cat.key}
+                        type="button"
+                        onClick={() => {
+                          const next = selected
+                            ? formData.categories.filter((k) => k !== cat.key)
+                            : [...formData.categories, cat.key];
+                          setFormData({ ...formData, categories: next });
+                        }}
+                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                          selected
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground'
+                        }`}
+                      >
+                        {cat.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="schema" className="mt-6">
             <Card className="max-w-full">
               <CardHeader>
-                <CardTitle>MCP Schema</CardTitle>
+                <CardTitle>Configuration Schema</CardTitle>
                 <CardDescription>
                   Define custom fields that organizations fill when configuring this connector for MCP access
                 </CardDescription>

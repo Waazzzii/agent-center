@@ -3,9 +3,9 @@
 import { use, useEffect, useState, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
-import { getConnector, updateConnector, getConnectorAccessDefinitions, putConnectorAccessDefinitions, syncConnectorAccessDefinitions } from '@/lib/api/connectors-base';
+import { getConnector, updateConnector, getCenterDataCategories, getConnectorAccessDefinitions, putConnectorAccessDefinitions, syncConnectorAccessDefinitions } from '@/lib/api/connectors-base';
 import type { ConnectorAccessDefinition } from '@/lib/api/connectors-base';
-import { Connector } from '@/types/api.types';
+import { CenterDataCategory, Connector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -208,6 +208,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [formData, setFormData] = useState<Partial<Connector>>({});
+  const [availableCategories, setAvailableCategories] = useState<CenterDataCategory[]>([]);
 
   useEffect(() => {
     if (!admin || !isSuperAdmin()) {
@@ -216,6 +217,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     }
 
     loadConnector();
+    getCenterDataCategories().then(setAvailableCategories).catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [admin, connectorId]);
 
@@ -232,9 +234,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-
+  const handleSubmit = async () => {
     if (!formData.key || !formData.name) {
       toast.error('Key and name are required');
       return;
@@ -281,13 +281,13 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
 
       <Tabs defaultValue="basic" className="w-full">
         <TabsList>
-          <TabsTrigger value="basic">Basic Details</TabsTrigger>
-          <TabsTrigger value="schema">MCP</TabsTrigger>
+          <TabsTrigger value="basic">Details</TabsTrigger>
+          <TabsTrigger value="schema">Configuration</TabsTrigger>
+          <TabsTrigger value="centers">Centers</TabsTrigger>
           <TabsTrigger value="agent">Agent</TabsTrigger>
-          <TabsTrigger value="access">Access Definitions</TabsTrigger>
+          <TabsTrigger value="access">MCP</TabsTrigger>
         </TabsList>
 
-        <form onSubmit={handleSubmit}>
           <TabsContent value="basic" className="mt-6">
             <Card className="max-w-2xl">
               <CardHeader>
@@ -385,10 +385,46 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
             </Card>
           </TabsContent>
 
+          <TabsContent value="centers" className="mt-6">
+            <Card className="max-w-2xl">
+              <CardHeader>
+                <CardTitle>Center Data Categories</CardTitle>
+                <CardDescription>Select which Center data categories this connector can provide data for.</CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="flex flex-wrap gap-2">
+                  {availableCategories.map((cat) => {
+                    const selected = (formData.categories ?? []).includes(cat.key);
+                    return (
+                      <button
+                        key={cat.key}
+                        type="button"
+                        onClick={() => {
+                          const current = formData.categories ?? [];
+                          const next = selected
+                            ? current.filter((k) => k !== cat.key)
+                            : [...current, cat.key];
+                          setFormData({ ...formData, categories: next });
+                        }}
+                        className={`rounded-full border px-3 py-1 text-xs font-medium transition-colors ${
+                          selected
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-border bg-background text-muted-foreground hover:border-primary/50 hover:text-foreground'
+                        }`}
+                      >
+                        {cat.label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="schema" className="mt-6">
             <Card className="max-w-full">
               <CardHeader>
-                <CardTitle>MCP Schema</CardTitle>
+                <CardTitle>Configuration Schema</CardTitle>
                 <CardDescription>
                   Define custom fields that organizations fill when configuring this connector for MCP access
                 </CardDescription>
@@ -450,19 +486,18 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
           </TabsContent>
 
           <div className="mt-6 flex gap-4">
-            <Button type="submit" disabled={loading}>
+            <Button onClick={handleSubmit} disabled={loading}>
               {loading ? 'Saving...' : 'Save Changes'}
             </Button>
-            <Button type="button" variant="outline" onClick={() => router.back()}>
+            <Button variant="outline" onClick={() => router.back()}>
               Cancel
             </Button>
           </div>
-        </form>
 
         <TabsContent value="access" className="mt-6">
           <Card>
             <CardHeader>
-              <CardTitle>Access Definitions</CardTitle>
+              <CardTitle>MCP Access Definitions</CardTitle>
               <CardDescription>
                 Configure the permission entries exposed by this connector's endpoints.
                 Each endpoint gets its own access definition that can be toggled per access group.

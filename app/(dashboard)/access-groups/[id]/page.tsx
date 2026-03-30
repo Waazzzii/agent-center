@@ -34,7 +34,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import { ChevronLeft, ChevronRight, Save, UserPlus, Trash2, ShieldCheck, Search, Pencil, Plug, Users } from 'lucide-react';
+import { ChevronLeft, ChevronRight, Save, UserPlus, Trash2, ShieldCheck, Search, Pencil, Plug, Users, Database } from 'lucide-react';
 import { toast } from 'sonner';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
@@ -481,10 +481,19 @@ export default function AccessGroupDetailPage() {
 
       {/* ── Tabs ── */}
       <Tabs defaultValue="administration">
-        <TabsList className="w-full justify-start">
-          <TabsTrigger value="administration">Administration</TabsTrigger>
-          <TabsTrigger value="centers">Centers</TabsTrigger>
-          <TabsTrigger value="mcp">MCP</TabsTrigger>
+        <TabsList className="inline-grid grid-cols-3">
+          <TabsTrigger value="administration">
+            <ShieldCheck className="h-4 w-4 mr-2" />
+            Administration
+          </TabsTrigger>
+          <TabsTrigger value="centers">
+            <Database className="h-4 w-4 mr-2" />
+            Centers
+          </TabsTrigger>
+          <TabsTrigger value="mcp">
+            <Plug className="h-4 w-4 mr-2" />
+            MCP
+          </TabsTrigger>
         </TabsList>
 
         {/* ── Administration ── */}
@@ -610,7 +619,7 @@ export default function AccessGroupDetailPage() {
 
       {/* ── Members modal ── */}
       <Dialog open={membersOpen} onOpenChange={setMembersOpen}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-2xl">
           <DialogHeader>
             <div className="flex items-center justify-between pr-6">
               <DialogTitle>Members — {accessGroup.name}</DialogTitle>
@@ -633,7 +642,7 @@ export default function AccessGroupDetailPage() {
               className="pl-8"
             />
           </div>
-          <div className="mt-2 max-h-[400px] overflow-y-auto">
+          <div className="mt-2 max-h-[400px] overflow-y-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
             <ResponsiveTable
               data={displayedMembers}
               sortKey={memberSortKey}
@@ -644,6 +653,7 @@ export default function AccessGroupDetailPage() {
                   key: 'email',
                   label: 'User',
                   sortable: true,
+                  thClassName: 'w-full',
                   render: (m) => (
                     <div className="flex items-center gap-2">
                       <span className="text-sm">{m.email}</span>
@@ -657,6 +667,7 @@ export default function AccessGroupDetailPage() {
                   key: 'granted_at',
                   label: 'Since',
                   sortable: true,
+                  thClassName: 'w-32 shrink-0',
                   render: (m) => (
                     <span className="text-xs text-muted-foreground">
                       {m.granted_at ? new Date(m.granted_at).toLocaleDateString() : '—'}
@@ -666,14 +677,17 @@ export default function AccessGroupDetailPage() {
                 {
                   key: 'actions',
                   label: '',
+                  thClassName: 'w-10',
+                  tdClassName: 'p-0 w-10',
                   desktopRender: (m) => (m.role === 'super_admin' || m.role === 'org_admin') ? null : (
-                    <div className="flex justify-end">
+                    <div className="flex items-center justify-center h-full">
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={(e) => { e.stopPropagation(); handleRemoveMember(m.id); }}
+                        className="text-muted-foreground hover:text-destructive"
                       >
-                        <Trash2 className="h-4 w-4 text-destructive" />
+                        <Trash2 className="h-4 w-4" />
                       </Button>
                     </div>
                   ),

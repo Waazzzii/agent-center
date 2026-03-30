@@ -22,6 +22,7 @@ interface Column<T> {
   mobileFullWidth?: boolean;
   sortable?: boolean;
   thClassName?: string;
+  tdClassName?: string;
 }
 
 interface ResponsiveTableProps<T> {
@@ -131,7 +132,7 @@ export function ResponsiveTable<T>({
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className={cn('p-2 align-middle', !column.desktopRender && 'overflow-hidden')}
+                      className={cn('p-2 align-middle', !column.desktopRender && 'overflow-hidden', column.tdClassName)}
                     >
                       {column.desktopRender ? (
                         column.desktopRender(item)

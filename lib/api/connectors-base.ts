@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import { Connector, CreateConnectorDto, UpdateConnectorDto } from '@/types/api.types';
+import { CenterDataCategory, Connector, CreateConnectorDto, UpdateConnectorDto } from '@/types/api.types';
 
 export interface ListConnectorsResponse {
   connectors: Connector[];
@@ -32,6 +32,11 @@ export async function updateConnector(id: string, data: UpdateConnectorDto): Pro
 
 export async function deleteConnector(id: string): Promise<void> {
   await apiClient.delete(`/admin/connectors/${id}`);
+}
+
+export async function getCenterDataCategories(): Promise<CenterDataCategory[]> {
+  const response = await apiClient.get<{ categories: CenterDataCategory[] }>('/admin/center-data-categories');
+  return response.data.categories;
 }
 
 export interface ConnectorAccessDefinition {
