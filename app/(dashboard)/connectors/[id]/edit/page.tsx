@@ -95,8 +95,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         getDataSourceConfigs(selectedOrgId),
       ]);
 
-      const connectorCategory = `Connector - ${connector.connector_name}`;
-      const connectorDefs = definitions.filter((d: PermissionDefinition) => d.category === connectorCategory);
+      const connectorDefs = definitions.filter((d: PermissionDefinition) => d.category === 'Connector');
 
       const items = groups
         .map((group: AccessGroup) => {

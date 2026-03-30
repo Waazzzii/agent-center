@@ -35,3 +35,9 @@ export async function deleteDataSourceConfig(orgId: string, categoryKey: string)
     `/admin/organizations/${orgId}/data-source-configs/${categoryKey}`
   );
 }
+
+export async function triggerDataSourceSync(orgId: string, categoryKey: string): Promise<void> {
+  await apiClient.post(
+    `/admin/organizations/${orgId}/data-source-configs/${categoryKey}/sync`
+  );
+}
