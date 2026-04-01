@@ -18,11 +18,8 @@ export const orgMainNavItems: NavItem[] = [
   { label: 'Skills',            href: '/skills',        permissionKeys: ['agents_manager'] },
 ];
 
-/** Settings nav — shown in the settings panel */
-export const orgSettingsNavItems: NavItem[] = [
-  { label: 'AI Agent',     href: '/ai-agent',       permissionKeys: ['admin_ai_agent'] },
-  { label: 'Agent Center', href: '/centers/agents', permissionKeys: ['admin_agent_center'] },
-];
+/** Settings nav — no settings in the Agent Center */
+export const orgSettingsNavItems: NavItem[] = [];
 
 /**
  * Returns the href of the first nav item the user has permission for,

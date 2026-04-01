@@ -9,9 +9,6 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { AdminRole } from '@/types/api.types';
 import {
   Building2,
-  Plug,
-  Users,
-  UserCircle,
   Key,
   LogOut,
   Menu,
@@ -23,18 +20,11 @@ import {
   FileText,
   ChevronDown,
   ChevronRight,
-  Settings,
   X,
   Wand2,
   Bot,
   CheckCircle,
-  ChevronLeft,
-  ShieldCheck,
   History,
-  Layers,
-  Globe,
-  UsersRound,
-  UserRound,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -48,7 +38,7 @@ import { useUIStore } from '@/stores/ui.store';
 import { logout } from '@/lib/auth/oauth';
 import { getOrganizations } from '@/lib/api/organizations';
 import type { Organization } from '@/types/api.types';
-import { orgMainNavItems as mainItems, orgSettingsNavItems as settingsItems, firstPermittedHref } from '@/lib/nav';
+import { orgMainNavItems as mainItems } from '@/lib/nav';
 
 interface NavChild {
   label: string;
@@ -83,21 +73,7 @@ const MAIN_ICONS: Record<string, React.ElementType> = {
   '/approvals':     CheckCircle,
   '/skills':        Wand2,
 };
-const SETTINGS_ICONS: Record<string, React.ElementType> = {
-  '/ai-agent':       Bot,
-  '/centers/agents': Settings,
-};
-const CHILDREN_ICONS: Record<string, React.ElementType> = {};
-
 const orgMainNavItems: NavItem[] = mainItems.map(({ children: _ch, ...i }) => ({ ...i, icon: MAIN_ICONS[i.href] ?? Bot }));
-const orgSettingsNavItems: NavItem[] = settingsItems.map(({ children, ...i }) => ({
-  ...i,
-  icon: SETTINGS_ICONS[i.href] ?? Building2,
-  children: children?.map((c) => ({ ...c, icon: CHILDREN_ICONS[c.href] ?? Settings })),
-})) as NavItem[];
-
-// Paths that belong to the settings panel (triggers settings mode)
-const SETTINGS_PATHS = ['/ai-agent', '/centers'];
 
 export function ViewModeSidebar() {
   const pathname = usePathname();
@@ -106,37 +82,15 @@ export function ViewModeSidebar() {
   const { sidebarOpen, toggleSidebar, theme, toggleTheme } = useUIStore();
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(false);
-  const [settingsMode, setSettingsMode] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   // Tracks items the user has explicitly collapsed so auto-expand doesn't override them
   const manuallyClosed = useRef<Set<string>>(new Set());
 
-  // Auto-detect settings mode from current path.
-  // When first entering settings, collapse all nav items so the user starts clean.
-  const prevSettingsMode = useRef(false);
-  const suppressNextAutoExpand = useRef(false);
-  useEffect(() => {
-    const inSettings = SETTINGS_PATHS.some((p) => pathname.startsWith(p));
-    if (inSettings && !prevSettingsMode.current) {
-      // Just entered settings — collapse everything and suppress the auto-expand
-      // that will fire in the next effect on this same render cycle.
-      setExpandedItems(new Set());
-      manuallyClosed.current = new Set();
-      suppressNextAutoExpand.current = true;
-    }
-    prevSettingsMode.current = inSettings;
-    setSettingsMode(inSettings);
-  }, [pathname]);
-
   // Auto-expand parent items whose children (or own href) match the current path,
-  // but respect items the user has manually collapsed and skip on fresh settings entry.
+  // but respect items the user has manually collapsed.
   useEffect(() => {
-    if (suppressNextAutoExpand.current) {
-      suppressNextAutoExpand.current = false;
-      return;
-    }
     const newExpanded = new Set<string>();
-    for (const item of orgSettingsNavItems) {
+    for (const item of orgMainNavItems) {
       if (!item.children?.length) continue;
       if (manuallyClosed.current.has(item.href)) continue;
       if (
@@ -196,23 +150,11 @@ export function ViewModeSidebar() {
 
   const bypassPermissions = isSuperAdmin() || isOrgAdmin();
 
-  // Any admin permission key for "has settings access"
-  const settingsPermKeys = orgSettingsNavItems.flatMap((i) => i.permissionKeys ?? []);
-  const hasAnySettingsAccess = bypassPermissions || (selectedOrgId
-    ? settingsPermKeys.some((k) => hasPermission(selectedOrgId, k))
-    : false);
-
   // Build visible nav list
   let visibleNavItems: NavItem[];
 
   if (viewMode === 'super_admin') {
     visibleNavItems = superAdminNavItems;
-  } else if (settingsMode) {
-    visibleNavItems = orgSettingsNavItems.filter((item) => {
-      if (bypassPermissions) return true;
-      if (!item.permissionKeys || !selectedOrgId) return false;
-      return item.permissionKeys.some((key) => hasPermission(selectedOrgId, key));
-    });
   } else {
     visibleNavItems = orgMainNavItems.filter((item) => {
       if (bypassPermissions) return true;
@@ -427,27 +369,6 @@ export function ViewModeSidebar() {
             </div>
           )}
 
-          {/* Settings panel header */}
-          {viewMode === 'org_admin' && settingsMode && (
-            <div className="border-b px-2 py-2">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="w-full justify-start gap-2 text-muted-foreground"
-                onClick={() => setSettingsMode(false)}
-                asChild
-              >
-                <Link href={firstPermittedHref(orgMainNavItems, bypassPermissions, hasPermission, selectedOrgId ?? '') ?? '/no-permission'}>
-                  <ChevronLeft className="h-4 w-4" />
-                  Back
-                </Link>
-              </Button>
-              <div className="px-3 pt-1 pb-0.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                Settings
-              </div>
-            </div>
-          )}
-
           {/* Navigation */}
           <nav className="flex-1 space-y-1 overflow-y-auto p-4">
             {visibleNavItems.length === 0 && viewMode === 'org_admin' && (
@@ -456,21 +377,6 @@ export function ViewModeSidebar() {
               </div>
             )}
             {visibleNavItems.map(renderNavItem)}
-
-            {/* Settings entry point — shown in main mode when user has any admin access */}
-            {viewMode === 'org_admin' && !settingsMode && hasAnySettingsAccess && (
-              <Link
-                href={firstPermittedHref(orgSettingsNavItems, bypassPermissions, hasPermission, selectedOrgId ?? '') ?? '/no-permission'}
-                className={cn(
-                  'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-                  'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                )}
-                onClick={() => { if (sidebarOpen) toggleSidebar(); }}
-              >
-                <Settings className="h-5 w-5" />
-                Settings
-              </Link>
-            )}
           </nav>
 
           {/* Footer */}
