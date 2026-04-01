@@ -3,7 +3,7 @@
  */
 
 import apiClient from './client';
-import { CenterDataCategory, Connector, CreateConnectorDto, UpdateConnectorDto } from '@/types/api.types';
+import { CenterDataCategory, Connector, ConnectorConfiguration, CreateConnectorDto, UpdateConnectorDto } from '@/types/api.types';
 
 export interface ListConnectorsResponse {
   connectors: Connector[];
@@ -67,4 +67,30 @@ export async function putConnectorAccessDefinitions(
 export async function syncConnectorAccessDefinitions(id: string): Promise<ConnectorAccessDefinitionsResponse> {
   const response = await apiClient.post(`/admin/connectors/${id}/access-definitions/sync`);
   return response.data;
+}
+
+// ── Connector Configurations (Field Library) ──────────────────────────────────
+
+export async function getFieldLibrary(): Promise<ConnectorConfiguration[]> {
+  const response = await apiClient.get<{ fields: ConnectorConfiguration[] }>('/admin/connectors/field-library');
+  return response.data.fields;
+}
+
+export async function createFieldLibraryEntry(
+  data: Omit<ConnectorConfiguration, 'id' | 'is_system' | 'created_at' | 'updated_at'>
+): Promise<ConnectorConfiguration> {
+  const response = await apiClient.post<{ field: ConnectorConfiguration }>('/admin/connectors/field-library', data);
+  return response.data.field;
+}
+
+export async function updateFieldLibraryEntry(
+  id: string,
+  data: Partial<Omit<ConnectorConfiguration, 'id' | 'key' | 'is_system' | 'created_at' | 'updated_at'>>
+): Promise<ConnectorConfiguration> {
+  const response = await apiClient.put<{ field: ConnectorConfiguration }>(`/admin/connectors/field-library/${id}`, data);
+  return response.data.field;
+}
+
+export async function deleteFieldLibraryEntry(id: string): Promise<void> {
+  await apiClient.delete(`/admin/connectors/field-library/${id}`);
 }

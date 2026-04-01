@@ -1,11 +1,13 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
+  ConnectorConfiguration,
   ConnectorConfigSchema,
   ConnectorSchemaField,
   FieldType,
 } from '@/types/api.types';
+import { getFieldLibrary, createFieldLibraryEntry } from '@/lib/api/connectors-base';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -20,7 +22,18 @@ import {
 } from '@/components/ui/select';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus, Trash2, ChevronUp, ChevronDown, Eye } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import { Badge } from '@/components/ui/badge';
+import {
+  Plus, Trash2, ChevronUp, ChevronDown, Eye, Lock, Search, Sparkles, Pencil,
+} from 'lucide-react';
 import { DynamicConnectorForm } from './dynamic-connector-form';
 import { toast } from 'sonner';
 
@@ -41,569 +54,605 @@ const FIELD_TYPES: { value: FieldType; label: string }[] = [
   { value: 'oauth', label: 'OAuth Login' },
 ];
 
-export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilderProps) {
-  const [schema, setSchema] = useState<ConnectorConfigSchema>(
-    initialSchema || { fields: [] }
+function libraryToSchemaField(entry: ConnectorConfiguration): ConnectorSchemaField {
+  return {
+    key: entry.key,
+    label: entry.label,
+    type: entry.type as FieldType,
+    required: entry.is_required,
+    secret: entry.is_secret,
+    placeholder: entry.placeholder ?? undefined,
+    helpText: entry.help_text ?? undefined,
+    default: entry.default_value ?? undefined,
+    options: entry.options ?? undefined,
+    validation: entry.validation ?? undefined,
+  };
+}
+
+// ── Add Field Dialog ──────────────────────────────────────────────────────────
+// Two modes: pick from library | create new custom field
+
+interface AddFieldDialogProps {
+  open: boolean;
+  onClose: () => void;
+  library: ConnectorConfiguration[];
+  existingKeys: Set<string>;
+  onAdd: (field: ConnectorSchemaField) => void;
+  onCreated: (entry: ConnectorConfiguration) => void;
+}
+
+function AddFieldDialog({ open, onClose, library, existingKeys, onAdd, onCreated }: AddFieldDialogProps) {
+  const [mode, setMode] = useState<'pick' | 'create'>('pick');
+  const [search, setSearch] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [draft, setDraft] = useState({
+    key: '', label: '', type: 'text' as FieldType,
+    is_secret: false, is_required: false, placeholder: '', help_text: '',
+  });
+
+  const labelToKey = (l: string) =>
+    l.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+
+  const filtered = library.filter(
+    (f) => f.label.toLowerCase().includes(search.toLowerCase()) ||
+           f.key.toLowerCase().includes(search.toLowerCase())
   );
-  const [selectedFieldIndex, setSelectedFieldIndex] = useState<number | null>(null);
-  const [showPreview, setShowPreview] = useState(false);
-  // Track which fields have had their keys manually edited
-  const [manuallyEditedKeys, setManuallyEditedKeys] = useState<Set<number>>(new Set());
 
-  const updateSchema = (newSchema: ConnectorConfigSchema) => {
-    setSchema(newSchema);
-    onChange(newSchema);
-  };
-
-  // Convert label to snake_case key
-  const labelToKey = (label: string): string => {
-    return label
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '_') // Replace non-alphanumeric with underscore
-      .replace(/^_+|_+$/g, '');     // Remove leading/trailing underscores
-  };
-
-  const addField = () => {
-    const newField: ConnectorSchemaField = {
-      key: 'new_field',
-      label: 'New Field',
-      type: 'text',
-      required: false,
-    };
-
-    const newSchema = {
-      ...schema,
-      fields: [...schema.fields, newField],
-    };
-    updateSchema(newSchema);
-    setSelectedFieldIndex(newSchema.fields.length - 1);
-  };
-
-  const removeField = (index: number) => {
-    const newFields = schema.fields.filter((_, i) => i !== index);
-    updateSchema({ ...schema, fields: newFields });
-    if (selectedFieldIndex === index) {
-      setSelectedFieldIndex(null);
-    } else if (selectedFieldIndex !== null && selectedFieldIndex > index) {
-      setSelectedFieldIndex(selectedFieldIndex - 1);
+  const handleCreate = async () => {
+    if (!draft.key || !draft.label) { toast.error('Key and label are required'); return; }
+    setSaving(true);
+    try {
+      const created = await createFieldLibraryEntry({
+        key: draft.key,
+        label: draft.label,
+        type: draft.type,
+        is_secret: draft.is_secret,
+        is_required: draft.is_required,
+        placeholder: draft.placeholder || null,
+        help_text: draft.help_text || null,
+        default_value: null,
+        validation: null,
+        options: null,
+      });
+      onCreated(created);
+      onAdd(libraryToSchemaField(created));
+      toast.success(`"${created.label}" added to library`);
+      close();
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to create field');
+    } finally {
+      setSaving(false);
     }
   };
 
-  const moveField = (index: number, direction: 'up' | 'down') => {
-    if (
-      (direction === 'up' && index === 0) ||
-      (direction === 'down' && index === schema.fields.length - 1)
-    ) {
-      return;
-    }
-
-    const newFields = [...schema.fields];
-    const targetIndex = direction === 'up' ? index - 1 : index + 1;
-    [newFields[index], newFields[targetIndex]] = [newFields[targetIndex], newFields[index]];
-
-    updateSchema({ ...schema, fields: newFields });
-    setSelectedFieldIndex(targetIndex);
+  const close = () => {
+    setMode('pick');
+    setSearch('');
+    setDraft({ key: '', label: '', type: 'text', is_secret: false, is_required: false, placeholder: '', help_text: '' });
+    onClose();
   };
 
-  const updateField = (index: number, updates: Partial<ConnectorSchemaField>) => {
-    const newFields = [...schema.fields];
-    newFields[index] = { ...newFields[index], ...updates };
-    updateSchema({ ...schema, fields: newFields });
+  return (
+    <Dialog open={open} onOpenChange={(v) => { if (!v) close(); }}>
+      <DialogContent className="max-w-lg">
+        {mode === 'pick' ? (
+          <>
+            <DialogHeader>
+              <DialogTitle>Add Field</DialogTitle>
+              <DialogDescription>Select from the shared field library or create a custom field.</DialogDescription>
+            </DialogHeader>
+
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+              <Input
+                className="pl-9"
+                placeholder="Search fields…"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                autoFocus
+              />
+            </div>
+
+            <div className="max-h-72 overflow-y-auto space-y-0.5 pr-1 -mx-1 px-1">
+              {filtered.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-6">No matching fields.</p>
+              ) : filtered.map((f) => {
+                const added = existingKeys.has(f.key);
+                return (
+                  <button
+                    key={f.id}
+                    type="button"
+                    disabled={added}
+                    onClick={() => { onAdd(libraryToSchemaField(f)); close(); }}
+                    className={`w-full text-left flex items-center gap-3 px-3 py-2.5 rounded-md transition-colors ${
+                      added
+                        ? 'opacity-40 cursor-not-allowed'
+                        : 'hover:bg-muted/70 cursor-pointer'
+                    }`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <span className="text-sm font-medium">{f.label}</span>
+                        {f.is_secret && <Lock className="h-3 w-3 text-amber-500 shrink-0" />}
+                        {f.is_required && <Badge variant="secondary" className="text-[10px] px-1 py-0">Required</Badge>}
+                        {added && <Badge variant="outline" className="text-[10px] px-1 py-0">Added</Badge>}
+                      </div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        <code className="font-mono">{f.key}</code>
+                        <span className="mx-1">·</span>
+                        {f.type}
+                        {f.help_text && <span className="ml-1">· {f.help_text.slice(0, 60)}{f.help_text.length > 60 ? '…' : ''}</span>}
+                      </div>
+                    </div>
+                    <Plus className="h-4 w-4 text-muted-foreground shrink-0" />
+                  </button>
+                );
+              })}
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setMode('create')}>
+                <Sparkles className="h-4 w-4 mr-2" />
+                Create custom field
+              </Button>
+            </DialogFooter>
+          </>
+        ) : (
+          <>
+            <DialogHeader>
+              <DialogTitle>Create Custom Field</DialogTitle>
+              <DialogDescription>
+                This field will be saved to the shared library and added to this schema.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Label *</Label>
+                  <Input
+                    value={draft.label}
+                    onChange={(e) => setDraft((d) => ({ ...d, label: e.target.value, key: labelToKey(e.target.value) }))}
+                    placeholder="API Key"
+                    autoFocus
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Key *</Label>
+                  <Input
+                    value={draft.key}
+                    onChange={(e) => setDraft((d) => ({ ...d, key: e.target.value }))}
+                    placeholder="api_key"
+                    className="font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Type</Label>
+                <Select value={draft.type} onValueChange={(v) => setDraft((d) => ({ ...d, type: v as FieldType }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {FIELD_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Placeholder</Label>
+                <Input
+                  value={draft.placeholder}
+                  onChange={(e) => setDraft((d) => ({ ...d, placeholder: e.target.value }))}
+                  placeholder="Optional placeholder text"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Help Text</Label>
+                <Textarea
+                  value={draft.help_text}
+                  onChange={(e) => setDraft((d) => ({ ...d, help_text: e.target.value }))}
+                  placeholder="Description shown below the field"
+                  rows={2}
+                />
+              </div>
+
+              <div className="flex gap-5 pt-1">
+                <div className="flex items-center gap-2">
+                  <Switch id="df-req" checked={draft.is_required} onCheckedChange={(v) => setDraft((d) => ({ ...d, is_required: v }))} />
+                  <Label htmlFor="df-req" className="cursor-pointer">Required</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="df-sec" checked={draft.is_secret} onCheckedChange={(v) => setDraft((d) => ({ ...d, is_secret: v }))} />
+                  <Label htmlFor="df-sec" className="cursor-pointer">Secret</Label>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button type="button" variant="ghost" onClick={() => setMode('pick')}>Back</Button>
+              <Button type="button" onClick={handleCreate} disabled={saving}>
+                {saving ? 'Creating…' : 'Create & Add'}
+              </Button>
+            </DialogFooter>
+          </>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Edit Field Dialog ─────────────────────────────────────────────────────────
+// Edit a field's properties within this schema (does not modify the library)
+
+interface EditFieldDialogProps {
+  field: ConnectorSchemaField | null;
+  onClose: () => void;
+  onSave: (updated: ConnectorSchemaField) => void;
+}
+
+function EditFieldDialog({ field, onClose, onSave }: EditFieldDialogProps) {
+  const [draft, setDraft] = useState<ConnectorSchemaField | null>(null);
+
+  // Sync draft when field changes
+  useEffect(() => {
+    setDraft(field ? { ...field } : null);
+  }, [field]);
+
+  if (!draft) return null;
+
+  const set = (updates: Partial<ConnectorSchemaField>) => setDraft((d) => d ? { ...d, ...updates } : d);
+
+  const addOption = () =>
+    set({ options: [...(draft.options || []), { value: `option_${Date.now()}`, label: 'New Option' }] });
+
+  const updateOption = (i: number, updates: { value?: string; label?: string }) => {
+    const opts = [...(draft.options || [])];
+    opts[i] = { ...opts[i], ...updates };
+    set({ options: opts });
   };
 
-  const addOption = (fieldIndex: number) => {
-    const field = schema.fields[fieldIndex];
-    const newOption = {
-      value: `option_${Date.now()}`,
-      label: 'New Option',
-    };
-    updateField(fieldIndex, {
-      options: [...(field.options || []), newOption],
-    });
+  const removeOption = (i: number) =>
+    set({ options: (draft.options || []).filter((_, idx) => idx !== i) });
+
+  return (
+    <Dialog open={!!field} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Edit Field</DialogTitle>
+          <DialogDescription>
+            Customise how <code className="font-mono text-xs">{draft.key}</code> appears in this connector's schema.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          {/* Key — read-only */}
+          <div className="space-y-1.5">
+            <Label>Field Key</Label>
+            <div className="px-3 py-2 rounded-md bg-muted text-sm font-mono text-muted-foreground border select-all">
+              {draft.key}
+            </div>
+          </div>
+
+          {/* Label */}
+          <div className="space-y-1.5">
+            <Label htmlFor="ef-label">Label</Label>
+            <Input id="ef-label" value={draft.label} onChange={(e) => set({ label: e.target.value })} />
+          </div>
+
+          {/* Type */}
+          <div className="space-y-1.5">
+            <Label>Type</Label>
+            <Select value={draft.type} onValueChange={(v) => set({ type: v as FieldType })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {FIELD_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* OAuth provider */}
+          {draft.type === 'oauth' && (
+            <div className="space-y-1.5">
+              <Label>OAuth Provider</Label>
+              <Select value={draft.provider ?? 'google'} onValueChange={(v) => set({ provider: v as 'google' })}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="google">Google</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          )}
+
+          {/* Toggles */}
+          {draft.type !== 'oauth' && (
+            <div className="flex gap-6 flex-wrap">
+              <div className="flex items-center gap-2">
+                <Switch id="ef-req" checked={draft.required ?? false} onCheckedChange={(v) => set({ required: v })} />
+                <Label htmlFor="ef-req" className="cursor-pointer">Required</Label>
+              </div>
+              <div className="flex items-center gap-2">
+                <Switch id="ef-sec" checked={draft.secret ?? false} onCheckedChange={(v) => set({ secret: v })} />
+                <Label htmlFor="ef-sec" className="cursor-pointer">Secret</Label>
+              </div>
+            </div>
+          )}
+
+          {/* Placeholder */}
+          {draft.type !== 'oauth' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ef-ph">Placeholder</Label>
+              <Input id="ef-ph" value={draft.placeholder ?? ''} onChange={(e) => set({ placeholder: e.target.value })} />
+            </div>
+          )}
+
+          {/* Help text */}
+          <div className="space-y-1.5">
+            <Label htmlFor="ef-help">Help Text</Label>
+            <Textarea id="ef-help" value={draft.helpText ?? ''} onChange={(e) => set({ helpText: e.target.value })} rows={2} />
+          </div>
+
+          {/* Default value */}
+          {draft.type !== 'boolean' && draft.type !== 'oauth' && (
+            <div className="space-y-1.5">
+              <Label htmlFor="ef-default">Default Value</Label>
+              <Input
+                id="ef-default"
+                type={draft.type === 'number' ? 'number' : 'text'}
+                value={draft.default?.toString() ?? ''}
+                onChange={(e) => set({ default: draft.type === 'number' ? Number(e.target.value) : e.target.value })}
+                placeholder="Optional"
+              />
+            </div>
+          )}
+
+          {draft.type === 'boolean' && (
+            <div className="flex items-center gap-2">
+              <Switch
+                id="ef-default-bool"
+                checked={(draft.default as boolean) ?? false}
+                onCheckedChange={(v) => set({ default: v })}
+              />
+              <Label htmlFor="ef-default-bool" className="cursor-pointer">Default to enabled</Label>
+            </div>
+          )}
+
+          {/* Select options */}
+          {draft.type === 'select' && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <Label>Options</Label>
+                <Button type="button" size="sm" variant="outline" onClick={addOption}>
+                  <Plus className="h-3 w-3 mr-1" />Add Option
+                </Button>
+              </div>
+              <div className="space-y-2">
+                {(draft.options || []).map((opt, i) => (
+                  <div key={i} className="flex gap-2">
+                    <Input value={opt.value} onChange={(e) => updateOption(i, { value: e.target.value })} placeholder="Value" className="flex-1 font-mono text-sm" />
+                    <Input value={opt.label} onChange={(e) => updateOption(i, { label: e.target.value })} placeholder="Label" className="flex-1" />
+                    <Button type="button" size="sm" variant="ghost" onClick={() => removeOption(i)}>
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Validation */}
+          {(draft.type === 'text' || draft.type === 'textarea' || draft.type === 'number') && (
+            <div className="space-y-3 pt-3 border-t">
+              <Label className="text-sm font-semibold">Validation</Label>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">{draft.type === 'number' ? 'Min Value' : 'Min Length'}</Label>
+                  <Input
+                    type="number"
+                    value={draft.validation?.min ?? ''}
+                    onChange={(e) => set({ validation: { ...draft.validation, min: e.target.value ? Number(e.target.value) : undefined } })}
+                    placeholder="Optional"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">{draft.type === 'number' ? 'Max Value' : 'Max Length'}</Label>
+                  <Input
+                    type="number"
+                    value={draft.validation?.max ?? ''}
+                    onChange={(e) => set({ validation: { ...draft.validation, max: e.target.value ? Number(e.target.value) : undefined } })}
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+              {draft.type !== 'number' && (
+                <>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Regex Pattern</Label>
+                    <Input
+                      value={draft.validation?.pattern ?? ''}
+                      onChange={(e) => set({ validation: { ...draft.validation, pattern: e.target.value } })}
+                      placeholder="e.g. ^[A-Z0-9]+$"
+                      className="font-mono text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Custom Error Message</Label>
+                    <Input
+                      value={draft.validation?.customMessage ?? ''}
+                      onChange={(e) => set({ validation: { ...draft.validation, customMessage: e.target.value } })}
+                      placeholder="Optional"
+                    />
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <DialogFooter>
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button type="button" onClick={() => { onSave(draft); onClose(); }}>Save</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ── Main Component ────────────────────────────────────────────────────────────
+
+export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilderProps) {
+  const [schema, setSchema] = useState<ConnectorConfigSchema>(initialSchema ?? { fields: [] });
+  const [library, setLibrary] = useState<ConnectorConfiguration[]>([]);
+  const [addOpen, setAddOpen] = useState(false);
+  const [editingField, setEditingField] = useState<ConnectorSchemaField | null>(null);
+
+  useEffect(() => {
+    getFieldLibrary().then(setLibrary).catch(() => {});
+  }, []);
+
+  const update = (s: ConnectorConfigSchema) => { setSchema(s); onChange(s); };
+
+  const addField = (field: ConnectorSchemaField) => {
+    const next = { ...schema, fields: [...schema.fields, field] };
+    update(next);
   };
 
-  const updateOption = (
-    fieldIndex: number,
-    optionIndex: number,
-    updates: { value?: string; label?: string }
-  ) => {
-    const field = schema.fields[fieldIndex];
-    const newOptions = [...(field.options || [])];
-    newOptions[optionIndex] = { ...newOptions[optionIndex], ...updates };
-    updateField(fieldIndex, { options: newOptions });
+  const saveEdit = (updated: ConnectorSchemaField) => {
+    const idx = schema.fields.findIndex((f) => f.key === updated.key);
+    if (idx === -1) return;
+    const fields = [...schema.fields];
+    fields[idx] = updated;
+    update({ ...schema, fields });
   };
 
-  const removeOption = (fieldIndex: number, optionIndex: number) => {
-    const field = schema.fields[fieldIndex];
-    const newOptions = (field.options || []).filter((_, i) => i !== optionIndex);
-    updateField(fieldIndex, { options: newOptions });
+  const removeField = (key: string) =>
+    update({ ...schema, fields: schema.fields.filter((f) => f.key !== key) });
+
+  const moveField = (index: number, dir: 'up' | 'down') => {
+    const target = dir === 'up' ? index - 1 : index + 1;
+    if (target < 0 || target >= schema.fields.length) return;
+    const fields = [...schema.fields];
+    [fields[index], fields[target]] = [fields[target], fields[index]];
+    update({ ...schema, fields });
   };
 
-  const selectedField = selectedFieldIndex !== null ? schema.fields[selectedFieldIndex] : null;
+  const existingKeys = new Set(schema.fields.map((f) => f.key));
 
   return (
     <div className="space-y-6">
-      <Tabs defaultValue="builder" className="w-full">
+      <Tabs defaultValue="builder">
         <TabsList>
           <TabsTrigger value="builder">Builder</TabsTrigger>
           <TabsTrigger value="preview">
-            <Eye className="h-4 w-4 mr-2" />
-            Preview
+            <Eye className="h-4 w-4 mr-1.5" />Preview
           </TabsTrigger>
-          <TabsTrigger value="json">JSON</TabsTrigger>
         </TabsList>
 
-        <TabsContent value="builder" className="space-y-4">
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Field List */}
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle>Fields</CardTitle>
-                    <CardDescription>
-                      {schema.fields.length} field{schema.fields.length !== 1 ? 's' : ''}
-                    </CardDescription>
-                  </div>
-                  <Button type="button" onClick={addField} size="sm">
+        {/* ── Builder ── */}
+        <TabsContent value="builder" className="space-y-4 mt-4">
+          <Card>
+            <CardHeader>
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle>Configuration Fields</CardTitle>
+                  <CardDescription>
+                    {schema.fields.length === 0
+                      ? 'No fields yet — add from the library below'
+                      : `${schema.fields.length} field${schema.fields.length !== 1 ? 's' : ''} configured`}
+                  </CardDescription>
+                </div>
+                <Button type="button" size="sm" onClick={() => setAddOpen(true)}>
+                  <Plus className="h-4 w-4 mr-2" />
+                  Add Field
+                </Button>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {schema.fields.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-12 gap-3 text-center">
+                  <p className="text-sm text-muted-foreground">
+                    Pick fields from the shared library or create a custom one.
+                  </p>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setAddOpen(true)}>
                     <Plus className="h-4 w-4 mr-2" />
-                    Add Field
+                    Add your first field
                   </Button>
                 </div>
-              </CardHeader>
-              <CardContent>
-                {schema.fields.length === 0 ? (
-                  <p className="text-sm text-muted-foreground text-center py-8">
-                    No fields yet. Click "Add Field" to get started.
-                  </p>
-                ) : (
-                  <div className="space-y-2">
-                    {schema.fields.map((field, index) => (
-                      <div
-                        key={field.key}
-                        className={`p-3 border rounded-md cursor-pointer transition-colors ${
-                          selectedFieldIndex === index
-                            ? 'border-primary bg-primary/5'
-                            : 'hover:bg-muted/50'
-                        }`}
-                        onClick={() => setSelectedFieldIndex(index)}
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <div className="font-medium">{field.label}</div>
-                            <div className="text-sm text-muted-foreground">
-                              {field.key} • {field.type}
-                              {field.required && ' • Required'}
-                              {field.secret && ' • Secret'}
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                moveField(index, 'up');
-                              }}
-                              disabled={index === 0}
-                            >
-                              <ChevronUp className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                moveField(index, 'down');
-                              }}
-                              disabled={index === schema.fields.length - 1}
-                            >
-                              <ChevronDown className="h-4 w-4" />
-                            </Button>
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                removeField(index);
-                              }}
-                            >
-                              <Trash2 className="h-4 w-4 text-destructive" />
-                            </Button>
-                          </div>
+              ) : (
+                <div className="space-y-2">
+                  {schema.fields.map((field, i) => (
+                    <div
+                      key={`${field.key}-${i}`}
+                      className="flex items-center gap-3 px-4 py-3 rounded-lg border bg-card hover:bg-muted/40 transition-colors"
+                    >
+                      {/* Info */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-sm">{field.label}</span>
+                          {field.secret && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium text-amber-600 dark:text-amber-400">
+                              <Lock className="h-3 w-3" />Secret
+                            </span>
+                          )}
+                          {field.required && (
+                            <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Required</Badge>
+                          )}
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          <code className="font-mono">{field.key}</code>
+                          <span className="mx-1.5">·</span>
+                          {field.type}
                         </div>
                       </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
 
-            {/* Field Editor */}
-            <Card>
-              <CardHeader>
-                <CardTitle>Field Editor</CardTitle>
-                <CardDescription>
-                  {selectedField ? `Editing: ${selectedField.label}` : 'Select a field to edit'}
-                </CardDescription>
-              </CardHeader>
-              <CardContent>
-                {selectedField && selectedFieldIndex !== null ? (
-                  <div className="space-y-4">
-                    {/* Field Label */}
-                    <div className="space-y-2">
-                      <Label htmlFor="field-label">Label</Label>
-                      <Input
-                        id="field-label"
-                        value={selectedField.label}
-                        onChange={(e) => {
-                          const newLabel = e.target.value;
-                          // Auto-generate key from label if key hasn't been manually edited
-                          if (!manuallyEditedKeys.has(selectedFieldIndex)) {
-                            const autoKey = labelToKey(newLabel);
-                            updateField(selectedFieldIndex, { label: newLabel, key: autoKey });
-                          } else {
-                            updateField(selectedFieldIndex, { label: newLabel });
-                          }
-                        }}
-                        placeholder="e.g., API Key"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Display name shown to users
-                      </p>
-                    </div>
-
-                    {/* Field Key */}
-                    <div className="space-y-2">
-                      <Label htmlFor="field-key">Field Key</Label>
-                      <Input
-                        id="field-key"
-                        value={selectedField.key}
-                        onChange={(e) => {
-                          updateField(selectedFieldIndex, { key: e.target.value });
-                          // Mark this field's key as manually edited
-                          setManuallyEditedKeys(prev => new Set(prev).add(selectedFieldIndex));
-                        }}
-                        placeholder="e.g., api_key"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Unique identifier (auto-generated from label, or edit manually)
-                      </p>
-                    </div>
-
-                    {/* Field Type */}
-                    <div className="space-y-2">
-                      <Label htmlFor="field-type">Type</Label>
-                      <Select
-                        value={selectedField.type}
-                        onValueChange={(value: FieldType) => {
-                          if (selectedField.secret && value !== 'text') {
-                            toast.error('Secret fields can only be of type "Text"');
-                            return;
-                          }
-                          updateField(selectedFieldIndex, { type: value });
-                        }}
-                      >
-                        <SelectTrigger id="field-type">
-                          <SelectValue />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {FIELD_TYPES.map((type) => (
-                            <SelectItem key={type.value} value={type.value}>
-                              {type.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    </div>
-
-                    {/* OAuth Provider — only when type === oauth */}
-                    {selectedField.type === 'oauth' && (
-                      <div className="space-y-2">
-                        <Label htmlFor="field-provider">OAuth Provider</Label>
-                        <Select
-                          value={selectedField.provider ?? 'google'}
-                          onValueChange={(value) =>
-                            updateField(selectedFieldIndex, { provider: value as 'google' })
-                          }
+                      {/* Actions */}
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        <Button
+                          type="button" variant="ghost" size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => setEditingField(field)}
+                          title="Edit field"
                         >
-                          <SelectTrigger id="field-provider">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="google">Google</SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <p className="text-xs text-muted-foreground">
-                          Renders an OAuth connect/disconnect button instead of a text input.
-                        </p>
+                          <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          type="button" variant="ghost" size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => moveField(i, 'up')}
+                          disabled={i === 0}
+                        >
+                          <ChevronUp className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button" variant="ghost" size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => moveField(i, 'down')}
+                          disabled={i === schema.fields.length - 1}
+                        >
+                          <ChevronDown className="h-4 w-4" />
+                        </Button>
+                        <Button
+                          type="button" variant="ghost" size="sm"
+                          className="h-8 w-8 p-0"
+                          onClick={() => removeField(field.key)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
                       </div>
-                    )}
-
-                    {/* Required — not applicable for oauth */}
-                    {selectedField.type !== 'oauth' && (
-                    <div className="flex items-center space-x-2">
-                      <Switch
-                        id="field-required"
-                        checked={selectedField.required || false}
-                        onCheckedChange={(checked) =>
-                          updateField(selectedFieldIndex, { required: checked })
-                        }
-                      />
-                      <Label htmlFor="field-required" className="cursor-pointer">
-                        Required field
-                      </Label>
                     </div>
-                    )}
-
-                    {/* Secret — not applicable for oauth */}
-                    {selectedField.type !== 'oauth' && (
-                    <div className="flex items-center space-x-2">
-                      <Switch
-                        id="field-secret"
-                        checked={selectedField.secret || false}
-                        onCheckedChange={(checked) => {
-                          if (checked && selectedField.type !== 'text') {
-                            toast.error('Only "Text" type fields can be marked as secret');
-                            return;
-                          }
-                          updateField(selectedFieldIndex, { secret: checked });
-                        }}
-                      />
-                      <Label htmlFor="field-secret" className="cursor-pointer">
-                        Secret field (hidden after entry)
-                      </Label>
-                    </div>
-                    )}
-
-                    {/* Placeholder — not applicable for oauth */}
-                    {selectedField.type !== 'oauth' && (
-                    <div className="space-y-2">
-                      <Label htmlFor="field-placeholder">Placeholder</Label>
-                      <Input
-                        id="field-placeholder"
-                        value={selectedField.placeholder || ''}
-                        onChange={(e) =>
-                          updateField(selectedFieldIndex, { placeholder: e.target.value })
-                        }
-                        placeholder="e.g., Enter your API key"
-                      />
-                    </div>
-                    )}
-
-                    {/* Help Text */}
-                    <div className="space-y-2">
-                      <Label htmlFor="field-help">Help Text</Label>
-                      <Textarea
-                        id="field-help"
-                        value={selectedField.helpText || ''}
-                        onChange={(e) =>
-                          updateField(selectedFieldIndex, { helpText: e.target.value })
-                        }
-                        placeholder="Additional information to help users fill this field"
-                        rows={2}
-                      />
-                    </div>
-
-                    {/* Default Value */}
-                    {selectedField.type !== 'boolean' && selectedField.type !== 'oauth' && (
-                      <div className="space-y-2">
-                        <Label htmlFor="field-default">Default Value</Label>
-                        <Input
-                          id="field-default"
-                          value={selectedField.default?.toString() || ''}
-                          onChange={(e) => {
-                            const value =
-                              selectedField.type === 'number'
-                                ? Number(e.target.value)
-                                : e.target.value;
-                            updateField(selectedFieldIndex, { default: value });
-                          }}
-                          type={selectedField.type === 'number' ? 'number' : 'text'}
-                          placeholder="Optional default value"
-                        />
-                      </div>
-                    )}
-
-                    {/* Boolean Default */}
-                    {selectedField.type === 'boolean' && (
-                      <div className="flex items-center space-x-2">
-                        <Switch
-                          id="field-default-bool"
-                          checked={selectedField.default as boolean || false}
-                          onCheckedChange={(checked) =>
-                            updateField(selectedFieldIndex, { default: checked })
-                          }
-                        />
-                        <Label htmlFor="field-default-bool" className="cursor-pointer">
-                          Default to enabled
-                        </Label>
-                      </div>
-                    )}
-
-                    {/* Options for Select */}
-                    {selectedField.type === 'select' && (
-                      <div className="space-y-2">
-                        <div className="flex items-center justify-between">
-                          <Label>Options</Label>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="outline"
-                            onClick={() => addOption(selectedFieldIndex)}
-                          >
-                            <Plus className="h-3 w-3 mr-1" />
-                            Add Option
-                          </Button>
-                        </div>
-                        <div className="space-y-2">
-                          {(selectedField.options || []).map((option, optionIndex) => (
-                            <div key={optionIndex} className="flex gap-2">
-                              <Input
-                                value={option.value}
-                                onChange={(e) =>
-                                  updateOption(selectedFieldIndex, optionIndex, {
-                                    value: e.target.value,
-                                  })
-                                }
-                                placeholder="Value"
-                                className="flex-1"
-                              />
-                              <Input
-                                value={option.label}
-                                onChange={(e) =>
-                                  updateOption(selectedFieldIndex, optionIndex, {
-                                    label: e.target.value,
-                                  })
-                                }
-                                placeholder="Label"
-                                className="flex-1"
-                              />
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => removeOption(selectedFieldIndex, optionIndex)}
-                              >
-                                <Trash2 className="h-4 w-4 text-destructive" />
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Validation Rules */}
-                    {(selectedField.type === 'text' ||
-                      selectedField.type === 'textarea' ||
-                      selectedField.type === 'number') && (
-                      <div className="space-y-2 pt-4 border-t">
-                        <Label className="text-base">Validation Rules</Label>
-
-                        <div className="grid grid-cols-2 gap-2">
-                          <div className="space-y-2">
-                            <Label htmlFor="field-min">
-                              {selectedField.type === 'number' ? 'Min Value' : 'Min Length'}
-                            </Label>
-                            <Input
-                              id="field-min"
-                              type="number"
-                              value={selectedField.validation?.min ?? ''}
-                              onChange={(e) =>
-                                updateField(selectedFieldIndex, {
-                                  validation: {
-                                    ...selectedField.validation,
-                                    min: e.target.value ? Number(e.target.value) : undefined,
-                                  },
-                                })
-                              }
-                              placeholder="Optional"
-                            />
-                          </div>
-
-                          <div className="space-y-2">
-                            <Label htmlFor="field-max">
-                              {selectedField.type === 'number' ? 'Max Value' : 'Max Length'}
-                            </Label>
-                            <Input
-                              id="field-max"
-                              type="number"
-                              value={selectedField.validation?.max ?? ''}
-                              onChange={(e) =>
-                                updateField(selectedFieldIndex, {
-                                  validation: {
-                                    ...selectedField.validation,
-                                    max: e.target.value ? Number(e.target.value) : undefined,
-                                  },
-                                })
-                              }
-                              placeholder="Optional"
-                            />
-                          </div>
-                        </div>
-
-                        {selectedField.type !== 'number' && (
-                          <>
-                            <div className="space-y-2">
-                              <Label htmlFor="field-pattern">Regex Pattern</Label>
-                              <Input
-                                id="field-pattern"
-                                value={selectedField.validation?.pattern || ''}
-                                onChange={(e) =>
-                                  updateField(selectedFieldIndex, {
-                                    validation: {
-                                      ...selectedField.validation,
-                                      pattern: e.target.value,
-                                    },
-                                  })
-                                }
-                                placeholder="e.g., ^[A-Z0-9]+$"
-                              />
-                            </div>
-
-                            <div className="space-y-2">
-                              <Label htmlFor="field-custom-message">
-                                Custom Validation Message
-                              </Label>
-                              <Input
-                                id="field-custom-message"
-                                value={selectedField.validation?.customMessage || ''}
-                                onChange={(e) =>
-                                  updateField(selectedFieldIndex, {
-                                    validation: {
-                                      ...selectedField.validation,
-                                      customMessage: e.target.value,
-                                    },
-                                  })
-                                }
-                                placeholder="Optional custom error message"
-                              />
-                            </div>
-                          </>
-                        )}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <p className="text-sm text-muted-foreground text-center py-8">
-                    Select a field from the list to edit its properties
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
         </TabsContent>
 
-        <TabsContent value="preview">
+        {/* ── Preview ── */}
+        <TabsContent value="preview" className="mt-4">
           <Card>
             <CardHeader>
               <CardTitle>Form Preview</CardTitle>
-              <CardDescription>
-                This is how the form will appear to organization admins
-              </CardDescription>
+              <CardDescription>How this form appears to org admins</CardDescription>
             </CardHeader>
             <CardContent>
               {schema.fields.length > 0 ? (
@@ -611,44 +660,37 @@ export function ConnectorSchemaBuilder({ initialSchema, onChange }: SchemaBuilde
                   schema={schema}
                   initialValues={{}}
                   existingSecrets={[]}
-                  onSubmit={async () => {
-                    // Preview only - no actual submission
-                  }}
+                  onSubmit={async () => {}}
                   loading={false}
+                  previewOnly
                 />
               ) : (
                 <p className="text-sm text-muted-foreground text-center py-8">
-                  No fields to preview. Add fields to see the generated form.
+                  Add fields to see the form preview.
                 </p>
               )}
             </CardContent>
           </Card>
         </TabsContent>
 
-        <TabsContent value="json">
-          <Card>
-            <CardHeader>
-              <CardTitle>JSON Schema</CardTitle>
-              <CardDescription>View or edit the raw JSON schema</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                value={JSON.stringify(schema, null, 2)}
-                onChange={(e) => {
-                  try {
-                    const parsed = JSON.parse(e.target.value);
-                    updateSchema(parsed);
-                  } catch (error) {
-                    // Invalid JSON, don't update
-                  }
-                }}
-                rows={20}
-                className="font-mono text-sm"
-              />
-            </CardContent>
-          </Card>
-        </TabsContent>
       </Tabs>
+
+      {/* Add Field Dialog */}
+      <AddFieldDialog
+        open={addOpen}
+        onClose={() => setAddOpen(false)}
+        library={library}
+        existingKeys={existingKeys}
+        onAdd={addField}
+        onCreated={(entry) => setLibrary((prev) => [...prev, entry])}
+      />
+
+      {/* Edit Field Dialog */}
+      <EditFieldDialog
+        field={editingField}
+        onClose={() => setEditingField(null)}
+        onSave={saveEdit}
+      />
     </div>
   );
 }

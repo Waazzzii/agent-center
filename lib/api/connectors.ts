@@ -29,7 +29,6 @@ export async function createConnector(
     connector_id: string;
     config?: Record<string, any>;
     secrets?: Record<string, any>;
-    is_enabled?: boolean;
   }
 ) {
   const response = await apiClient.post<OrganizationConnector>(
@@ -45,7 +44,6 @@ export async function updateConnector(
   data: {
     config?: Record<string, any>;
     secrets?: Record<string, any>;
-    is_enabled?: boolean;
     mcp_enabled?: boolean;
     agent_enabled?: boolean;
     centers_enabled?: boolean;
@@ -62,14 +60,11 @@ export async function deleteConnector(orgId: string, connectorId: string) {
   await apiClient.delete(`/admin/organizations/${orgId}/connectors/${connectorId}`);
 }
 
-export async function getConnectorOAuthUrl(orgId: string, connectorId: string): Promise<string> {
-  const response = await apiClient.get<{ auth_url: string }>(
-    `/admin/organizations/${orgId}/connectors/${connectorId}/oauth/authorize`
+export async function checkConnectorHealth(orgId: string, connectorId: string): Promise<OrganizationConnector> {
+  const response = await apiClient.post<OrganizationConnector>(
+    `/admin/organizations/${orgId}/connectors/${connectorId}/health-check`
   );
-  return response.data.auth_url;
+  return response.data;
 }
 
-export async function disconnectConnectorOAuth(orgId: string, connectorId: string): Promise<void> {
-  await apiClient.delete(`/admin/organizations/${orgId}/connectors/${connectorId}/oauth`);
-}
 

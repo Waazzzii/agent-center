@@ -105,6 +105,24 @@ export interface ConnectorConfigSchema {
   oauth?: boolean;  // True for connectors that use OAuth (e.g. Gmail)
 }
 
+// Field definition from connector_configurations (shared library)
+export interface ConnectorConfiguration {
+  id: string;
+  key: string;
+  label: string;
+  type: string;
+  is_secret: boolean;
+  is_required: boolean;
+  placeholder: string | null;
+  help_text: string | null;
+  default_value: string | null;
+  validation: Record<string, any> | null;
+  options: Array<{ label: string; value: string }> | null;
+  is_system: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
 // Base connector definition (catalog)
 export interface Connector {
   id: string;
@@ -115,8 +133,6 @@ export interface Connector {
   documentation_url?: string;
   available_endpoints: string[];
   configuration_schema?: ConnectorConfigSchema;
-  /** How the agent authenticates with this connector */
-  agent_auth_type?: 'none' | 'google_oauth';
   /** Instruction shown to org admins in the AI Agent → Connectors tab */
   agent_instruction?: string | null;
   is_active: boolean;
@@ -155,13 +171,8 @@ export interface OrganizationConnector {
     health_status?: TokenHealthStatus;  // Current health status
     // Note: Error details are in audit_log, not sent to frontend
   } | null;
-  /** How the agent authenticates with this connector */
-  agent_auth_type?: 'none' | 'google_oauth';
   /** Instruction shown to org admins in the AI Agent → Connectors tab */
   agent_instruction?: string | null;
-  /** Agent-specific OAuth state (oauth_connected, connected_email, token_expiry) */
-  agent_config: Record<string, any>;
-  is_enabled: boolean;
   /** Exposed as an MCP tool endpoint */
   mcp_enabled?: boolean;
   /** Available for use by AI agents */
@@ -293,7 +304,6 @@ export interface CreateConnectorDto {
   documentation_url?: string;
   available_endpoints?: string[];
   configuration_schema?: ConnectorConfigSchema;
-  agent_auth_type?: 'none' | 'google_oauth';
   agent_instruction?: string;
   is_active?: boolean;
   is_public?: boolean;
@@ -308,7 +318,6 @@ export interface UpdateConnectorDto {
   documentation_url?: string;
   available_endpoints?: string[];
   configuration_schema?: ConnectorConfigSchema;
-  agent_auth_type?: 'none' | 'google_oauth';
   agent_instruction?: string;
   is_active?: boolean;
   is_public?: boolean;
@@ -343,13 +352,11 @@ export interface CreateConnectorConfigDto {
   connector_id: string;
   configuration?: Record<string, any>;
   secrets?: Record<string, string>;
-  is_enabled?: boolean;
 }
 
 export interface UpdateConnectorConfigDto {
   configuration?: Record<string, any>;
   secrets?: Record<string, string>;
-  is_enabled?: boolean;
 }
 
 export interface APIError {
@@ -418,7 +425,6 @@ export interface ConnectorOption {
   connector_key: string;
   connector_name: string;
   connector_icon_url: string | null;
-  is_enabled: boolean;
   mcp_enabled: boolean;
   agent_enabled: boolean;
   centers_enabled: boolean;

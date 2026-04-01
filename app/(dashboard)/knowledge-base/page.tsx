@@ -583,6 +583,13 @@ export default function KnowledgeBasePage() {
     } catch { setAutoDomainStatus('failed'); }
   };
 
+  const handleRetryCustomDomain = async () => {
+    if (!selectedOrgId) return;
+    setCustomDomainStatus('verifying');
+    try { await setProductDomainStatus(selectedOrgId, 'kb', 'custom', 'verifying'); } catch { /* best-effort */ }
+    startPolling('custom');
+  };
+
   const handleSaveThemeTab = async () => {
     if (!selectedOrgId) return;
     try {
@@ -933,7 +940,8 @@ export default function KnowledgeBasePage() {
                   )}
                   {customDomainStatus === 'failed' && (
                     <p className="text-xs text-destructive">
-                      Could not verify the custom domain after 30 minutes. Check that the CNAME record above is correctly set at your DNS provider.
+                      Could not verify the custom domain after 30 minutes. Check that the CNAME record above is correctly set at your DNS provider and{' '}
+                      <button className="underline" onClick={handleRetryCustomDomain}>try again</button>.
                     </p>
                   )}
                 </div>

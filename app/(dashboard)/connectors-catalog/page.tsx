@@ -4,14 +4,36 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { getConnectors, deleteConnector } from '@/lib/api/connectors-base';
+import { getConnectors, deleteConnector, createConnector } from '@/lib/api/connectors-base';
 import { Connector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import { Switch } from '@/components/ui/switch';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Plus, Edit, Trash2, ExternalLink } from 'lucide-react';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+
+const EMPTY_FORM = {
+  key: '',
+  name: '',
+  description: '',
+  icon_url: '',
+  documentation_url: '',
+  is_active: true,
+  is_public: false,
+};
 
 export default function ConnectorsCatalogPage() {
   const router = useRouter();
@@ -22,17 +44,20 @@ export default function ConnectorsCatalogPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Create modal state
+  const [createOpen, setCreateOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [formData, setFormData] = useState(EMPTY_FORM);
+
   useEffect(() => {
     if (!admin) {
       router.push('/login');
       return;
     }
-
     if (!isSuperAdmin() || !isSuperAdminView()) {
       router.push('/users');
       return;
     }
-
     loadConnectors();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [admin]);
@@ -58,9 +83,7 @@ export default function ConnectorsCatalogPage() {
       cancelText: 'Cancel',
       variant: 'destructive',
     });
-
     if (!confirmed) return;
-
     try {
       await deleteConnector(id);
       toast.success('Connector deleted successfully');
@@ -70,11 +93,34 @@ export default function ConnectorsCatalogPage() {
     }
   };
 
+  const handleCreate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!formData.key || !formData.name) {
+      toast.error('Key and name are required');
+      return;
+    }
+    try {
+      setCreating(true);
+      const created = await createConnector(formData);
+      toast.success('Connector created — configure it below');
+      setCreateOpen(false);
+      setFormData(EMPTY_FORM);
+      router.push(`/connectors-catalog/${created.id}/edit`);
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to create connector');
+    } finally {
+      setCreating(false);
+    }
+  };
+
+  const set = (field: keyof typeof EMPTY_FORM, value: string | boolean) =>
+    setFormData((f) => ({ ...f, [field]: value }));
+
   if (!admin || loading) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
-          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent" />
           <p className="text-muted-foreground">Loading...</p>
         </div>
       </div>
@@ -86,9 +132,7 @@ export default function ConnectorsCatalogPage() {
       <div className="container mx-auto p-6">
         <div className="rounded-lg border border-destructive bg-destructive/10 p-4">
           <p className="text-destructive">{error}</p>
-          <Button onClick={loadConnectors} className="mt-4">
-            Retry
-          </Button>
+          <Button onClick={loadConnectors} className="mt-4">Retry</Button>
         </div>
       </div>
     );
@@ -101,7 +145,7 @@ export default function ConnectorsCatalogPage() {
           <h1 className="text-3xl font-bold">Connectors Catalog</h1>
           <p className="text-muted-foreground">Manage available connectors in the system</p>
         </div>
-        <Button onClick={() => router.push('/connectors-catalog/create')} className="w-full sm:w-auto">
+        <Button onClick={() => setCreateOpen(true)} className="w-full sm:w-auto">
           <Plus className="mr-2 h-4 w-4" />
           Add Connector
         </Button>
@@ -145,7 +189,7 @@ export default function ConnectorsCatalogPage() {
               {
                 key: 'status',
                 label: 'Status',
-                render: (connector) => (
+                render: (connector) =>
                   connector.is_active ? (
                     <span className="inline-flex items-center rounded-full bg-green-100 dark:bg-green-900/30 px-2 py-1 text-xs font-medium text-green-800 dark:text-green-400">
                       Active
@@ -154,13 +198,12 @@ export default function ConnectorsCatalogPage() {
                     <span className="inline-flex items-center rounded-full bg-gray-100 dark:bg-gray-800 px-2 py-1 text-xs font-medium text-gray-800 dark:text-gray-400">
                       Inactive
                     </span>
-                  )
-                ),
+                  ),
               },
               {
                 key: 'visibility',
                 label: 'Visibility',
-                render: (connector) => (
+                render: (connector) =>
                   connector.is_public ? (
                     <span className="inline-flex items-center rounded-full bg-blue-100 dark:bg-blue-900/30 px-2 py-1 text-xs font-medium text-blue-800 dark:text-blue-400">
                       Public
@@ -169,8 +212,7 @@ export default function ConnectorsCatalogPage() {
                     <span className="inline-flex items-center rounded-full bg-purple-100 dark:bg-purple-900/30 px-2 py-1 text-xs font-medium text-purple-800 dark:text-purple-400">
                       Private
                     </span>
-                  )
-                ),
+                  ),
               },
               {
                 key: 'actions',
@@ -255,6 +297,107 @@ export default function ConnectorsCatalogPage() {
           />
         </CardContent>
       </Card>
+
+      {/* Create Connector Modal */}
+      <Dialog open={createOpen} onOpenChange={(v) => { if (!v) { setCreateOpen(false); setFormData(EMPTY_FORM); } }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Add Connector</DialogTitle>
+            <DialogDescription>
+              Enter the basic details. You'll configure the schema and access definitions after creation.
+            </DialogDescription>
+          </DialogHeader>
+
+          <form id="create-connector-form" onSubmit={handleCreate}>
+            <div className="space-y-4">
+              <div className="grid gap-4 grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="c-key">Key *</Label>
+                  <Input
+                    id="c-key"
+                    value={formData.key}
+                    onChange={(e) => set('key', e.target.value)}
+                    placeholder="google-drive"
+                    required
+                    autoFocus
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="c-name">Name *</Label>
+                  <Input
+                    id="c-name"
+                    value={formData.name}
+                    onChange={(e) => set('name', e.target.value)}
+                    placeholder="Google Drive"
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="c-description">Description</Label>
+                <Textarea
+                  id="c-description"
+                  value={formData.description}
+                  onChange={(e) => set('description', e.target.value)}
+                  placeholder="Brief description of the connector"
+                  rows={2}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="c-icon">Icon URL</Label>
+                <Input
+                  id="c-icon"
+                  type="url"
+                  value={formData.icon_url}
+                  onChange={(e) => set('icon_url', e.target.value)}
+                  placeholder="https://example.com/icon.png"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="c-docs">Documentation URL</Label>
+                <Input
+                  id="c-docs"
+                  type="url"
+                  value={formData.documentation_url}
+                  onChange={(e) => set('documentation_url', e.target.value)}
+                  placeholder="https://docs.example.com"
+                />
+              </div>
+
+              <div className="flex gap-6 pt-1">
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="c-active"
+                    checked={formData.is_active}
+                    onCheckedChange={(v) => set('is_active', v)}
+                  />
+                  <Label htmlFor="c-active" className="cursor-pointer">Active</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch
+                    id="c-public"
+                    checked={formData.is_public}
+                    onCheckedChange={(v) => set('is_public', v)}
+                  />
+                  <Label htmlFor="c-public" className="cursor-pointer">Public</Label>
+                </div>
+              </div>
+            </div>
+          </form>
+
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => { setCreateOpen(false); setFormData(EMPTY_FORM); }}>
+              Cancel
+            </Button>
+            <Button type="submit" form="create-connector-form" disabled={creating}>
+              {creating ? 'Creating...' : 'Create & Configure'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

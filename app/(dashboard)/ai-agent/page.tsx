@@ -12,7 +12,7 @@ import {
   removeAnthropicKey,
   type AiAgentStatus,
 } from '@/lib/api/ai-agent';
-import { getConnectors, updateConnector, getConnectorOAuthUrl, disconnectConnectorOAuth } from '@/lib/api/connectors';
+import { getConnectors, updateConnector } from '@/lib/api/connectors';
 import type { OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -46,8 +46,6 @@ export default function AiAgentPage() {
 
   const [connectors, setConnectors] = useState<OrganizationConnector[]>([]);
   const [connectorsLoading, setConnectorsLoading] = useState(false);
-  const [oauthConnecting, setOauthConnecting] = useState<string | null>(null);
-  const [oauthDisconnecting, setOauthDisconnecting] = useState<string | null>(null);
   const [agentEnableToggling, setAgentEnableToggling] = useState<string | null>(null);
 
   useEffect(() => {
@@ -168,40 +166,6 @@ export default function AiAgentPage() {
       toast.error(err.message || 'Failed to remove API key');
     } finally {
       setKeyLoading(false);
-    }
-  };
-
-  const handleConnectOAuth = async (connectorId: string) => {
-    if (!selectedOrgId) return;
-    try {
-      setOauthConnecting(connectorId);
-      const authUrl = await getConnectorOAuthUrl(selectedOrgId, connectorId);
-      window.location.href = authUrl;
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to start OAuth flow');
-      setOauthConnecting(null);
-    }
-  };
-
-  const handleDisconnectOAuth = async (connector: OrganizationConnector) => {
-    if (!selectedOrgId) return;
-    const confirmed = await confirm({
-      title: `Disconnect ${connector.connector_name}`,
-      description: `This will remove the connected account. The agent will no longer be able to use ${connector.connector_name}.`,
-      confirmText: 'Disconnect',
-      cancelText: 'Cancel',
-      variant: 'destructive',
-    });
-    if (!confirmed) return;
-    try {
-      setOauthDisconnecting(connector.id);
-      await disconnectConnectorOAuth(selectedOrgId, connector.id);
-      await loadConnectors();
-      toast.success(`${connector.connector_name} disconnected`);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to disconnect');
-    } finally {
-      setOauthDisconnecting(null);
     }
   };
 
@@ -461,16 +425,10 @@ export default function AiAgentPage() {
                 ) : (
                   <div className="divide-y">
                     {connectors.map((connector) => {
-                      const isOAuth = connector.agent_auth_type === 'google_oauth';
-                      const isOAuthConnected = connector.agent_config?.oauth_connected === 'true';
-                      const connectedEmail = connector.agent_config?.connected_email as string | undefined;
-                      const isThisConnecting = oauthConnecting === connector.id;
-                      const isThisDisconnecting = oauthDisconnecting === connector.id;
                       const isThisToggling = agentEnableToggling === connector.id;
 
                       return (
-                        <div key={connector.id} className="py-4 first:pt-0 last:pb-0 space-y-3">
-                          {/* Name + agent_enabled toggle */}
+                        <div key={connector.id} className="py-4 first:pt-0 last:pb-0">
                           <div className="flex items-center justify-between gap-4">
                             <div className="space-y-0.5 min-w-0">
                               <p className="text-sm font-medium">{connector.connector_name}</p>
@@ -490,41 +448,6 @@ export default function AiAgentPage() {
                               />
                             </div>
                           </div>
-
-                          {/* OAuth section — only shown if agent is enabled */}
-                          {connector.agent_enabled && isOAuth && (
-                            <div className="flex items-center justify-between rounded-lg border border-muted bg-muted/30 px-3 py-2">
-                              <div>
-                                {isOAuthConnected ? (
-                                  <p className="text-xs text-muted-foreground">Connected as {connectedEmail}</p>
-                                ) : (
-                                  <p className="text-xs text-amber-600 dark:text-amber-400">
-                                    No account connected — login required
-                                  </p>
-                                )}
-                              </div>
-                              {isOAuthConnected ? (
-                                  <Button
-                                    size="sm"
-                                    variant="outline"
-                                    onClick={() => handleDisconnectOAuth(connector)}
-                                    disabled={isThisDisconnecting}
-                                    className="text-xs h-7"
-                                  >
-                                    {isThisDisconnecting ? 'Disconnecting…' : 'Disconnect'}
-                                  </Button>
-                                ) : (
-                                  <Button
-                                    size="sm"
-                                    onClick={() => handleConnectOAuth(connector.id)}
-                                    disabled={isThisConnecting}
-                                    className="text-xs h-7"
-                                  >
-                                    {isThisConnecting ? 'Connecting…' : 'Connect Account'}
-                                  </Button>
-                                )}
-                            </div>
-                          )}
                         </div>
                       );
                     })}

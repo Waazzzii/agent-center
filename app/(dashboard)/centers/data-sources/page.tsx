@@ -293,7 +293,7 @@ export default function DataSourcesPage() {
                             </SelectItem>
                             {options.map((c) => (
                               <SelectItem key={c.id} value={c.id}>
-                                {c.connector_name}{!c.is_enabled && ' (disabled)'}
+                                {c.connector_name}
                               </SelectItem>
                             ))}
                             {options.length === 0 && (

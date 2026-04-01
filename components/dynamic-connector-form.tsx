@@ -8,23 +8,20 @@ import { schemaToZod } from '@/lib/schema-to-zod';
 import { FieldRenderer } from './form-fields/field-renderer';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Loader2, Lock, Settings } from 'lucide-react';
+import { Loader2, Lock, Settings, RefreshCw } from 'lucide-react';
 import { toast } from 'sonner';
-import { TokenHealthStatusDisplay } from './token-health-status';
-import type { TokenHealthStatus } from '@/types/api.types';
 
 interface DynamicConnectorFormProps {
   schema: ConnectorConfigSchema;
   initialValues?: Record<string, any>;
   existingSecrets?: string[]; // Keys of secrets that exist (for required validation)
   maskedSecrets?: Record<string, string>; // Masked secret values (e.g., {"api_key": "••••••••1234"})
-  // Token health status (for connectors with expiring tokens)
-  tokenHealthStatus?: TokenHealthStatus;
-  tokenExpiresAt?: string;
-  tokenLastRenewedAt?: string;
   onSubmit: (config: Record<string, any>, secrets: Record<string, string>) => Promise<void>;
   loading?: boolean;
   disabled?: boolean;
+  previewOnly?: boolean;
+  onHealthCheck?: () => void;
+  healthChecking?: boolean;
 }
 
 export function DynamicConnectorForm({
@@ -32,12 +29,12 @@ export function DynamicConnectorForm({
   initialValues = {},
   existingSecrets = [],
   maskedSecrets = {},
-  tokenHealthStatus,
-  tokenExpiresAt,
-  tokenLastRenewedAt,
   onSubmit,
   loading = false,
   disabled = false,
+  previewOnly = false,
+  onHealthCheck,
+  healthChecking = false,
 }: DynamicConnectorFormProps) {
   // Track original masked values to detect if user changed them
   const [secretMasks] = useState<Record<string, string>>(maskedSecrets);
@@ -80,7 +77,7 @@ export function DynamicConnectorForm({
   const {
     control,
     handleSubmit,
-    formState: { errors },
+    formState: { errors, isDirty },
   } = useForm({
     resolver: zodResolver(zodSchema),
     defaultValues: formInitialValues,
@@ -210,15 +207,6 @@ export function DynamicConnectorForm({
             </div>
           </CardHeader>
           <CardContent className="space-y-4">
-            {/* Token Health Status */}
-            {tokenHealthStatus && (
-              <TokenHealthStatusDisplay
-                healthStatus={tokenHealthStatus}
-                expiresAt={tokenExpiresAt}
-                lastRenewedAt={tokenLastRenewedAt}
-              />
-            )}
-
             {/* Secret Fields */}
             {secretFields.map((field) => (
               <FieldRenderer
@@ -234,18 +222,31 @@ export function DynamicConnectorForm({
         </Card>
       )}
 
-      <div className="flex justify-end pt-4">
-        <Button type="submit" disabled={loading || disabled}>
-          {loading ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Saving...
-            </>
-          ) : (
-            'Save Configuration'
+      {!previewOnly && (
+        <div className="flex justify-end gap-2 pt-4">
+          {onHealthCheck && (
+            <Button
+              type="button"
+              variant="outline"
+              disabled={healthChecking || loading}
+              onClick={onHealthCheck}
+            >
+              <RefreshCw className={`h-4 w-4 mr-2 ${healthChecking ? 'animate-spin' : ''}`} />
+              {healthChecking ? 'Testing...' : 'Test Connection'}
+            </Button>
           )}
-        </Button>
-      </div>
+          <Button type="submit" disabled={loading || disabled || !isDirty}>
+            {loading ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Verifying...
+              </>
+            ) : (
+              'Save Configuration'
+            )}
+          </Button>
+        </div>
+      )}
     </form>
   );
 }

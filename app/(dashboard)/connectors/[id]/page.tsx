@@ -120,15 +120,19 @@ export default function ConnectorDetailPage({ params }: { params: Promise<{ id: 
 
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <div className="text-sm font-medium text-muted-foreground">Status</div>
+              <div className="text-sm font-medium text-muted-foreground">Connection</div>
               <div className="mt-1">
-                {connector.is_enabled ? (
+                {connector.secret_info?.health_status === 'healthy' ? (
                   <span className="inline-flex items-center rounded-full bg-green-100 px-2 py-1 text-xs font-medium text-green-800">
-                    Enabled
+                    Connected
+                  </span>
+                ) : connector.secret_info?.health_status === 'renewal_failed' ? (
+                  <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-1 text-xs font-medium text-red-800">
+                    Failed
                   </span>
                 ) : (
                   <span className="inline-flex items-center rounded-full bg-gray-100 px-2 py-1 text-xs font-medium text-gray-800">
-                    Disabled
+                    Unknown
                   </span>
                 )}
               </div>

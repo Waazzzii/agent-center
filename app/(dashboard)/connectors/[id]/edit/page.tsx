@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
-import { getConnector, updateConnector, deleteConnector } from '@/lib/api/connectors';
+import { getConnector, updateConnector, deleteConnector, checkConnectorHealth } from '@/lib/api/connectors';
 import { getConnector as getBaseConnector } from '@/lib/api/connectors-base';
 import { getAccessGroups } from '@/lib/api/access-groups';
 import { getAccessDefinitions } from '@/lib/api/permissions';
@@ -16,7 +16,9 @@ import { DynamicConnectorForm } from '@/components/dynamic-connector-form';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { ArrowLeft, ExternalLink, Trash2, CheckCircle2 } from 'lucide-react';
+import { ArrowLeft, ExternalLink, Trash2, CheckCircle2, XCircle, RefreshCw } from 'lucide-react';
+import { TokenHealthStatusDisplay } from '@/components/token-health-status';
+import type { TokenHealthStatus } from '@/types/api.types';
 import { toast } from 'sonner';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
@@ -27,6 +29,7 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
   const { confirm } = useConfirmDialog();
   const permitted = useRequirePermission('admin_connectors');
   const [loading, setLoading] = useState(false);
+  const [healthChecking, setHealthChecking] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [connector, setConnector] = useState<OrganizationConnector | null>(null);
   const [agItems, setAgItems] = useState<{ group: AccessGroup; enabledLabels: string[] }[]>([]);
@@ -38,9 +41,6 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
     connector_name: string;
     connector_key: string;
   } | null>(null);
-  const [formData, setFormData] = useState({
-    is_enabled: true,
-  });
 
   useEffect(() => {
     if (!isOrgAdminView() || !selectedOrgId || !permitted) {
@@ -72,15 +72,25 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
         connector_name: connectorData.connector_name,
         connector_key: connectorData.connector_key,
       });
-      setFormData({
-        is_enabled: connectorData.is_enabled,
-      });
     } catch (error: any) {
       const errorMessage = error.response?.data?.message || error.message || 'Failed to load connector';
       toast.error(errorMessage);
       router.push('/connectors');
     } finally {
       setInitialLoading(false);
+    }
+  };
+
+  const handleHealthCheck = async () => {
+    if (!selectedOrgId) return;
+    setHealthChecking(true);
+    try {
+      const updated = await checkConnectorHealth(selectedOrgId, connectorId);
+      setConnector(updated);
+    } catch (error: any) {
+      toast.error(error.response?.data?.message || error.message || 'Health check failed');
+    } finally {
+      setHealthChecking(false);
     }
   };
 
@@ -192,53 +202,85 @@ export default function EditConnectorPage({ params }: { params: Promise<{ id: st
           </CardDescription>
         </CardHeader>
         <CardContent>
-          {/* Connection status — hardcoded as Connected for now */}
-          <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950 px-4 py-3 text-sm mb-6">
-            <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />
-            <span className="font-medium text-green-800 dark:text-green-200">Connected</span>
+          {/* Connection status bar */}
+          <div className="mb-3">
+            {connector?.secret_info?.health_status === 'healthy' ? (
+              <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950 px-4 py-3 text-sm">
+                <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />
+                <span className="font-medium text-green-800 dark:text-green-200">Connected</span>
+              </div>
+            ) : connector?.secret_info?.health_status === 'renewal_failed' ? (
+              <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950 px-4 py-3 text-sm">
+                <XCircle className="h-4 w-4 text-red-600 dark:text-red-400 shrink-0" />
+                <span className="font-medium text-red-800 dark:text-red-200">Connection failed</span>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
+                <span className="h-2 w-2 rounded-full bg-muted-foreground/30 shrink-0" />
+                <span className="text-muted-foreground">Not yet verified</span>
+              </div>
+            )}
           </div>
 
-          {schema && schema.fields.length > 0 && connector ? (
-            <div className="space-y-6">
-              <DynamicConnectorForm
-                key={`${connectorId}-${connector.updated_at}`}
-                schema={schema}
-                initialValues={connector.configuration}
-                existingSecrets={connector.secret_info?.secret_fields || []}
-                maskedSecrets={
-                  connector.secret_info?.secret_fields.reduce((acc, fieldKey) => {
-                    if (connector.configuration[fieldKey]) {
-                      acc[fieldKey] = connector.configuration[fieldKey];
-                    }
-                    return acc;
-                  }, {} as Record<string, string>) || {}
-                }
-                tokenHealthStatus={connector.secret_info?.health_status}
-                tokenExpiresAt={connector.secret_info?.expires_at}
-                tokenLastRenewedAt={connector.secret_info?.last_renewed_at}
-                onSubmit={async (config, secrets) => {
-                  if (!selectedOrgId) return;
-                  setLoading(true);
-                  try {
-                    await updateConnector(selectedOrgId, connectorId, {
-                      config,
-                      secrets: Object.keys(secrets).length > 0 ? secrets : undefined,
-                      is_enabled: connector.is_enabled,
-                    });
-                    toast.success('Connector updated successfully');
-                    await loadConnector();
-                  } catch (error: any) {
-                    const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
-                    toast.error(errorMessage);
-                  } finally {
-                    setLoading(false);
-                  }
-                }}
-                loading={loading}
+          {/* Token health — compact notification, only for connectors with expiring tokens */}
+          {connector?.secret_info?.expires_at && (
+            <div className="mb-6">
+              <TokenHealthStatusDisplay
+                healthStatus={connector.secret_info.health_status as TokenHealthStatus}
+                expiresAt={connector.secret_info.expires_at}
+                lastRenewedAt={connector.secret_info.last_renewed_at}
               />
-
             </div>
-          ) : null}
+          )}
+          {!connector?.secret_info?.expires_at && <div className="mb-6" />}
+
+          {schema && schema.fields.length > 0 && connector ? (
+            <DynamicConnectorForm
+              key={`${connectorId}-${connector.updated_at}`}
+              schema={schema}
+              initialValues={connector.configuration}
+              existingSecrets={connector.secret_info?.secret_fields || []}
+              maskedSecrets={
+                connector.secret_info?.secret_fields.reduce((acc, fieldKey) => {
+                  if (connector.configuration[fieldKey]) {
+                    acc[fieldKey] = connector.configuration[fieldKey];
+                  }
+                  return acc;
+                }, {} as Record<string, string>) || {}
+              }
+              onSubmit={async (config, secrets) => {
+                if (!selectedOrgId) return;
+                setLoading(true);
+                try {
+                  await updateConnector(selectedOrgId, connectorId, {
+                    config,
+                    secrets: Object.keys(secrets).length > 0 ? secrets : undefined,
+                  });
+                  toast.success('Connector updated successfully');
+                  await loadConnector();
+                } catch (error: any) {
+                  const errorMessage = error.response?.data?.message || error.message || 'Failed to update connector';
+                  toast.error(errorMessage);
+                } finally {
+                  setLoading(false);
+                }
+              }}
+              loading={loading}
+              onHealthCheck={handleHealthCheck}
+              healthChecking={healthChecking}
+            />
+          ) : (
+            <div className="flex justify-end pt-4">
+              <Button
+                variant="outline"
+                disabled={healthChecking}
+                onClick={handleHealthCheck}
+              >
+                <RefreshCw className={`h-4 w-4 mr-2 ${healthChecking ? 'animate-spin' : ''}`} />
+                {healthChecking ? 'Testing...' : 'Test Connection'}
+              </Button>
+            </div>
+          )}
         </CardContent>
       </Card>
         </TabsContent>

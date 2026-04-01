@@ -19,6 +19,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from 'sonner';
 
 export default function ConnectorsPage() {
@@ -63,7 +64,6 @@ export default function ConnectorsPage() {
       const newConn = await createConnector(selectedOrgId, {
         connector_id: connector.id,
         config: {},
-        is_enabled: true,
       });
       toast.success(`${connector.name} added`);
       router.push(`/connectors/${newConn.id}/edit`);
@@ -126,12 +126,12 @@ export default function ConnectorsPage() {
           {catalogConnectors.map((connector) => {
             const orgConn = orgByBase[connector.id];
             const isAdded = Boolean(orgConn);
-            const isEnabled = isAdded && orgConn.is_enabled;
             const isMcp = isAdded && orgConn.mcp_enabled === true;
             const isAgent = isAdded && orgConn.agent_enabled === true;
             const isCenters = isAdded && orgConn.centers_enabled === true;
             const isAdding = addingId === connector.id;
-            const isRemoving = isAdded && removingId === orgConn.id;
+            const isRemoving = isAdded && removingId === (orgConn?.id ?? '');
+            const healthStatus = isAdded ? (orgConn.secret_info?.health_status ?? 'unknown') : null;
 
             return (
               <Card key={connector.id} className="flex flex-col">
@@ -151,17 +151,22 @@ export default function ConnectorsPage() {
                       )}
                       <CardTitle className="text-base leading-tight">{connector.name}</CardTitle>
                     </div>
-                    {connector.documentation_url && (
-                      <a
-                        href={connector.documentation_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-muted-foreground hover:text-foreground shrink-0 mt-0.5"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <ExternalLink className="h-4 w-4" />
-                      </a>
-                    )}
+                    <div className="flex items-center gap-2 shrink-0 mt-0.5">
+                      {healthStatus !== null && (
+                        <ConnectionDot status={healthStatus} />
+                      )}
+                      {connector.documentation_url && (
+                        <a
+                          href={connector.documentation_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-muted-foreground hover:text-foreground"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <ExternalLink className="h-4 w-4" />
+                        </a>
+                      )}
+                    </div>
                   </div>
                   {connector.description && (
                     <CardDescription className="mt-1 line-clamp-2">
@@ -216,6 +221,39 @@ export default function ConnectorsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// ── Connection dot ─────────────────────────────────────────────────────────────
+
+function ConnectionDot({ status }: { status: string }) {
+  const isConnected = status === 'healthy';
+  const isFailed = status === 'renewal_failed';
+
+  const tooltip = isConnected
+    ? 'Connected — last health check passed'
+    : isFailed
+    ? 'Not connected — last health check failed'
+    : 'Connection unknown — not yet verified';
+
+  return (
+    <TooltipProvider delayDuration={200}>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span
+            className={[
+              'h-2.5 w-2.5 rounded-full shrink-0 cursor-default',
+              isConnected
+                ? 'bg-green-500'
+                : isFailed
+                ? 'bg-red-500'
+                : 'bg-muted-foreground/30',
+            ].join(' ')}
+          />
+        </TooltipTrigger>
+        <TooltipContent side="top">{tooltip}</TooltipContent>
+      </Tooltip>
+    </TooltipProvider>
   );
 }
 

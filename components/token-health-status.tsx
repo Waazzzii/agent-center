@@ -1,8 +1,7 @@
 'use client';
 
 import { TokenHealthStatus as HealthStatus } from '@/types/api.types';
-import { AlertCircle, AlertTriangle, CheckCircle, Clock, HelpCircle, XCircle } from 'lucide-react';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { AlertTriangle, CheckCircle, Clock, XCircle } from 'lucide-react';
 
 interface TokenHealthStatusProps {
   healthStatus?: HealthStatus;
@@ -15,134 +14,64 @@ export function TokenHealthStatusDisplay({
   expiresAt,
   lastRenewedAt,
 }: TokenHealthStatusProps) {
+  if (!healthStatus || healthStatus === 'unknown') return null;
 
-  // Don't show anything if no health status
-  if (!healthStatus || healthStatus === 'unknown') {
-    return null;
-  }
+  const formatDate = (dateStr: string) =>
+    new Date(dateStr).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
-  const formatDate = (dateStr: string) => {
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-    });
+  const daysUntil = (dateStr: string) => {
+    const diff = new Date(dateStr).getTime() - Date.now();
+    return Math.floor(diff / (1000 * 60 * 60 * 24));
   };
 
-  const formatDateTime = (dateStr: string) => {
-    return new Date(dateStr).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric',
-      hour: 'numeric',
-      minute: '2-digit',
-      hour12: true,
-    });
+  const daysAgo = (dateStr: string) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    return Math.floor(diff / (1000 * 60 * 60 * 24));
   };
 
-  const calculateDaysUntil = (dateStr: string) => {
-    const target = new Date(dateStr);
-    const now = new Date();
-    const diffMs = target.getTime() - now.getTime();
-    return Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  };
-
-  const calculateDaysSince = (dateStr: string) => {
-    const past = new Date(dateStr);
-    const now = new Date();
-    const diffMs = now.getTime() - past.getTime();
-    return Math.floor(diffMs / (1000 * 60 * 60 * 24));
-  };
-
-  // Healthy status
   if (healthStatus === 'healthy') {
+    const parts: string[] = [];
+    if (expiresAt) parts.push(`expires ${formatDate(expiresAt)}`);
+    if (lastRenewedAt) {
+      const n = daysAgo(lastRenewedAt);
+      parts.push(`refreshed ${n === 0 ? 'today' : `${n} day${n !== 1 ? 's' : ''} ago`}`);
+    }
     return (
-      <Alert className="border-green-200 bg-green-50">
-        <CheckCircle className="h-4 w-4 text-green-600" />
-        <AlertTitle className="text-green-900">Token is healthy</AlertTitle>
-        <AlertDescription className="text-green-800">
-          {lastRenewedAt && (
-            <p className="mb-1">Last refreshed: {formatDateTime(lastRenewedAt)}</p>
-          )}
-          {expiresAt && (
-            <p>Expires: {formatDate(expiresAt)}</p>
-          )}
-        </AlertDescription>
-      </Alert>
+      <div className="flex items-center gap-2 rounded-md border border-green-200 bg-green-50 dark:border-green-800 dark:bg-green-950 px-3 py-2 text-sm text-green-800 dark:text-green-200">
+        <CheckCircle className="h-3.5 w-3.5 text-green-600 dark:text-green-400 shrink-0" />
+        <span>Token valid{parts.length > 0 ? ` · ${parts.join(' · ')}` : ''}</span>
+      </div>
     );
   }
 
-  // Needs renewal status
   if (healthStatus === 'needs_renewal') {
-    const daysUntil = expiresAt ? calculateDaysUntil(expiresAt) : 0;
+    const days = expiresAt ? daysUntil(expiresAt) : 0;
     return (
-      <Alert className="border-orange-200 bg-orange-50">
-        <Clock className="h-4 w-4 text-orange-600" />
-        <AlertTitle className="text-orange-900">Token expiring soon</AlertTitle>
-        <AlertDescription className="text-orange-800">
-          {expiresAt && (
-            <>
-              <p className="mb-1">
-                Will expire: {formatDate(expiresAt)} (in {daysUntil} day{daysUntil !== 1 ? 's' : ''})
-              </p>
-              <p className="text-sm">Automatic renewal scheduled</p>
-            </>
-          )}
-        </AlertDescription>
-      </Alert>
+      <div className="flex items-center gap-2 rounded-md border border-orange-200 bg-orange-50 dark:border-orange-800 dark:bg-orange-950 px-3 py-2 text-sm text-orange-800 dark:text-orange-200">
+        <Clock className="h-3.5 w-3.5 text-orange-600 dark:text-orange-400 shrink-0" />
+        <span>Token expiring in {days} day{days !== 1 ? 's' : ''}{expiresAt ? ` (${formatDate(expiresAt)})` : ''} · renewal scheduled</span>
+      </div>
     );
   }
 
-  // Renewal failed status
   if (healthStatus === 'renewal_failed') {
     return (
-      <Alert className="border-red-200 bg-red-50">
-        <AlertTriangle className="h-4 w-4 text-red-600" />
-        <AlertTitle className="text-red-900">Token renewal failed</AlertTitle>
-        <AlertDescription className="text-red-800">
-          <p className="mb-2">
-            Token was renewed by the provider but failed to save. Immediate action required.
-          </p>
-          <p className="font-semibold">
-            Action: Contact connector support to request a new token renewal.
-          </p>
-          <p className="mt-2 text-xs text-red-600">
-            Check audit logs for error details.
-          </p>
-        </AlertDescription>
-      </Alert>
+      <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950 px-3 py-2 text-sm text-red-800 dark:text-red-200">
+        <AlertTriangle className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />
+        <span>Token renewal failed · check audit logs</span>
+      </div>
     );
   }
 
-  // Expired status
   if (healthStatus === 'expired') {
-    const daysAgo = expiresAt ? calculateDaysSince(expiresAt) : 0;
+    const n = expiresAt ? daysAgo(expiresAt) : 0;
     return (
-      <Alert className="border-red-200 bg-red-50">
-        <XCircle className="h-4 w-4 text-red-600" />
-        <AlertTitle className="text-red-900">Token expired</AlertTitle>
-        <AlertDescription className="text-red-800">
-          <p className="mb-2">
-            This connector will not work until the token is renewed.
-          </p>
-          {expiresAt && (
-            <p className="text-sm">
-              Expired: {formatDate(expiresAt)} ({daysAgo} day{daysAgo !== 1 ? 's' : ''} ago)
-            </p>
-          )}
-        </AlertDescription>
-      </Alert>
+      <div className="flex items-center gap-2 rounded-md border border-red-200 bg-red-50 dark:border-red-800 dark:bg-red-950 px-3 py-2 text-sm text-red-800 dark:text-red-200">
+        <XCircle className="h-3.5 w-3.5 text-red-600 dark:text-red-400 shrink-0" />
+        <span>Token expired {n > 0 ? `${n} day${n !== 1 ? 's' : ''} ago` : ''}{expiresAt ? ` (${formatDate(expiresAt)})` : ''} · renewal required</span>
+      </div>
     );
   }
 
-  // Unknown status (shouldn't reach here, but just in case)
-  return (
-    <Alert className="border-gray-200 bg-gray-50">
-      <HelpCircle className="h-4 w-4 text-gray-600" />
-      <AlertTitle className="text-gray-900">Token status unknown</AlertTitle>
-      <AlertDescription className="text-gray-800">
-        No expiration tracking available for this connector.
-      </AlertDescription>
-    </Alert>
-  );
+  return null;
 }
