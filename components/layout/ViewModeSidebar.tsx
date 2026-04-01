@@ -84,25 +84,10 @@ const MAIN_ICONS: Record<string, React.ElementType> = {
   '/skills':        Wand2,
 };
 const SETTINGS_ICONS: Record<string, React.ElementType> = {
-  '/access-groups':  UsersRound,
   '/ai-agent':       Bot,
-  '/audit-logs':     FileText,
-  '/centers/data-sources': Layers,
-  '/connectors':     Plug,
-  '/oauth-clients':  Key,
-  '/organization':   Building2,
-  '/users':          UserCircle,
+  '/centers/agents': Settings,
 };
-const CHILDREN_ICONS: Record<string, React.ElementType> = {
-  '/centers/data-sources':  Database,
-  '/centers/products':      Globe,
-  '/users':          UserRound,
-  '/access-groups':  UsersRound,
-  '/ai-agent':       Bot,
-  '/connectors':     Plug,
-  '/audit-logs':     FileText,
-  '/oauth-clients':  Key,
-};
+const CHILDREN_ICONS: Record<string, React.ElementType> = {};
 
 const orgMainNavItems: NavItem[] = mainItems.map(({ children: _ch, ...i }) => ({ ...i, icon: MAIN_ICONS[i.href] ?? Bot }));
 const orgSettingsNavItems: NavItem[] = settingsItems.map(({ children, ...i }) => ({
@@ -112,7 +97,7 @@ const orgSettingsNavItems: NavItem[] = settingsItems.map(({ children, ...i }) =>
 })) as NavItem[];
 
 // Paths that belong to the settings panel (triggers settings mode)
-const SETTINGS_PATHS = ['/users', '/connectors', '/access-groups', '/oauth-clients', '/knowledge-base', '/audit-logs', '/organization', '/ai-agent', '/centers'];
+const SETTINGS_PATHS = ['/ai-agent', '/centers'];
 
 export function ViewModeSidebar() {
   const pathname = usePathname();

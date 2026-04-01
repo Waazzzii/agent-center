@@ -18,38 +18,10 @@ export const orgMainNavItems: NavItem[] = [
   { label: 'Skills',            href: '/skills',        permissionKeys: ['agents_manager'] },
 ];
 
-/** Settings nav — shown in the settings panel, alphabetical */
+/** Settings nav — shown in the settings panel */
 export const orgSettingsNavItems: NavItem[] = [
-  {
-    label: 'Access',
-    href: '/access-groups',
-    permissionKeys: ['admin_users', 'admin_groups'],
-    children: [
-      { label: 'Users',   href: '/users',         permissionKeys: ['admin_users'] },
-      { label: 'Groups',  href: '/access-groups', permissionKeys: ['admin_groups'] },
-    ],
-  },
-  { label: 'AI Agent', href: '/ai-agent', permissionKeys: ['admin_ai_agent'] },
-  { label: 'Connectors', href: '/connectors', permissionKeys: ['admin_connectors'] },
-  {
-    label: 'Audit',
-    href: '/audit-logs',
-    permissionKeys: ['admin_audit_logs', 'admin_oauth_clients'],
-    children: [
-      { label: 'Logs',   href: '/audit-logs',    permissionKeys: ['admin_audit_logs'] },
-      { label: 'OAuth',  href: '/oauth-clients', permissionKeys: ['admin_oauth_clients'] },
-    ],
-  },
-  {
-    label: 'Centers',
-    href: '/centers/data-sources',
-    permissionKeys: ['admin_data_sources', 'admin_products'],
-    children: [
-      { label: 'Data Sources', href: '/centers/data-sources', permissionKeys: ['admin_data_sources'] },
-      { label: 'Products',     href: '/centers/products',     permissionKeys: ['admin_products'] },
-    ],
-  },
-  { label: 'Organization', href: '/organization', permissionKeys: ['admin_organization'] },
+  { label: 'AI Agent',     href: '/ai-agent',       permissionKeys: ['admin_ai_agent'] },
+  { label: 'Agent Center', href: '/centers/agents', permissionKeys: ['admin_agent_center'] },
 ];
 
 /**
