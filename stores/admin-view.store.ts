@@ -32,13 +32,13 @@ interface AdminViewState {
 export const useAdminViewStore = create<AdminViewState>()(
   persist(
     (set, get) => ({
-      viewMode: 'super_admin',
+      viewMode: 'org_admin',
       selectedOrgId: null,
       selectedOrgName: null,
 
       switchToSuperAdminView: () => {
         set({
-          viewMode: 'super_admin',
+          viewMode: 'org_admin',
           selectedOrgId: null,
           selectedOrgName: null,
         });
@@ -64,7 +64,7 @@ export const useAdminViewStore = create<AdminViewState>()(
 
       clearView: () => {
         set({
-          viewMode: 'super_admin',
+          viewMode: 'org_admin',
           selectedOrgId: null,
           selectedOrgName: null,
         });

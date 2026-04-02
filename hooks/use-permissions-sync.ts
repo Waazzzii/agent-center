@@ -6,7 +6,7 @@
  * Opens a Server-Sent Events connection to /admin/me/events.
  * When the backend publishes a `permissions_changed` event for this user
  * (triggered by any access group assignment or removal), the hook silently
- * re-fetches /admin/me and updates the Zustand store — no re-login needed.
+ * re-fetches /products/me and updates the Zustand store — no re-login needed.
  *
  * Authentication uses a one-time ticket (POST /admin/me/events/ticket) so the
  * real JWT never appears in server logs or browser history.
@@ -17,7 +17,7 @@
 import { useEffect, useRef } from "react";
 import { useAuthStore } from "@/stores/auth.store";
 import apiClient from "@/lib/api/client";
-import type { AdminUser } from "@/types/api.types";
+import type { ProductUser } from "@/types/api.types";
 
 const BASE_RETRY_MS = 2_000;
 const MAX_RETRY_MS = 60_000;
@@ -53,8 +53,8 @@ export function usePermissionsSync() {
 
       es.addEventListener("permissions_changed", async () => {
         try {
-          const { data } = await apiClient.get<AdminUser>("/admin/me");
-          updateAdmin(data);
+          const { data } = await apiClient.get<{ user: ProductUser }>("/products/me");
+          updateAdmin(data.user);
         } catch {
           // Non-fatal — permissions will be refreshed on next token renewal
         }

@@ -21,7 +21,7 @@ const PAGE_SIZE = 20;
 export default function SkillsPage() {
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agents_manager');
+  const permitted = useRequirePermission('agent_center_user');
   const { confirm } = useConfirmDialog();
 
   const [skills, setSkills] = useState<Skill[]>([]);
@@ -45,9 +45,9 @@ export default function SkillsPage() {
     try {
       setLoading(true);
       const data = await getSkills(selectedOrgId, { page: pg, limit: PAGE_SIZE });
-      setSkills(data.skills);
+      setSkills(data.items ?? []);
       setTotal(data.total);
-      setTotalPages(data.total_pages);
+      setTotalPages(data.pages);
       setPage(pg);
     } catch (err: any) {
       toast.error(err.message || 'Failed to load skills');
@@ -122,8 +122,7 @@ export default function SkillsPage() {
     try {
       setImporting(true);
       const result = await importSkills(selectedOrgId, parsed);
-      toast.success(`Imported ${result.created} skill(s)`);
-      if (result.errors.length) toast.warning(`${result.errors.length} error(s) during import`);
+      toast.success(`Imported ${result.imported} skill(s)`);
       setImportOpen(false);
       setImportJson('');
       await loadSkills(1);

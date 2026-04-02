@@ -5,19 +5,15 @@ import { useAuthStore } from "@/stores/auth.store"
 import { refreshAccessToken } from "@/lib/auth/oauth"
 import { start } from "@/lib/auth/token-refresh"
 import apiClient from "@/lib/api/client"
-import type { AdminUser } from "@/types/api.types"
+import type { ProductUser } from "@/types/api.types"
 
 /**
- * Mounts the token refresh scheduler for wazzi-frontend (admin UI).
+ * Mounts the token refresh scheduler for agent-center.
  *
  * Token storage: localStorage (access_token, refresh_token).
  * Expiry:        decoded from the JWT's exp claim.
- * Refresh:       calls the backend /oauth/token endpoint directly.
- *
- * Cross-tab sync (extraListeners):
- *   When the tab that wins the lock writes new tokens to localStorage, the
- *   browser fires a StorageEvent on every other tab for the same origin.
- *   Those tabs pick up the new expiry and reschedule — no extra network call.
+ * Refresh:       calls wazzi-backend /oauth/token, then re-fetches /products/me
+ *                to keep the resolved permissions current.
  */
 
 function getTokenExp(token: string | null): number | null {
@@ -33,10 +29,10 @@ function getTokenExp(token: string | null): number | null {
 }
 
 export function TokenRefreshProvider() {
-  const admin = useAuthStore((s) => s.admin)
+  const admin        = useAuthStore((s) => s.admin)
   const updateTokens = useAuthStore((s) => s.updateTokens)
-  const updateAdmin = useAuthStore((s) => s.updateAdmin)
-  const clearAuth = useAuthStore((s) => s.clearAuth)
+  const updateAdmin  = useAuthStore((s) => s.updateAdmin)
+  const clearAuth    = useAuthStore((s) => s.clearAuth)
 
   useEffect(() => {
     if (!admin) return
@@ -52,13 +48,16 @@ export function TokenRefreshProvider() {
           localStorage.setItem("access_token", result.accessToken)
           localStorage.setItem("refresh_token", result.refreshToken)
           updateTokens(result.accessToken, result.refreshToken)
-          // Refresh admin data so permissions stay current after any access group changes
+
+          // Re-fetch resolved user so permissions stay current after any
+          // access level changes
           try {
-            const { data } = await apiClient.get<AdminUser>("/admin/me")
-            updateAdmin(data)
+            const { data } = await apiClient.get<{ user: ProductUser }>("/products/me")
+            updateAdmin(data.user)
           } catch {
-            // Non-fatal — stale admin is better than a broken refresh loop
+            // Non-fatal — stale permissions are better than a broken refresh loop
           }
+
           return Math.floor(Date.now() / 1000) + result.expiresIn
         } catch {
           return null
@@ -66,12 +65,9 @@ export function TokenRefreshProvider() {
       },
 
       onSessionExpired: clearAuth,
-
-      lockName: "admin-token-refresh",
+      lockName: "agent-center-token-refresh",
       loginPath: "/login",
 
-      // StorageEvent fires on other tabs when this tab writes to localStorage,
-      // allowing them to reschedule without making their own network call.
       extraListeners: (reschedule) => {
         const handleStorage = (e: StorageEvent): void => {
           if (e.key !== "access_token" || !e.newValue) return
@@ -85,7 +81,7 @@ export function TokenRefreshProvider() {
         return () => window.removeEventListener("storage", handleStorage)
       },
     })
-  }, [admin, updateTokens, clearAuth])
+  }, [admin, updateTokens, clearAuth, updateAdmin])
 
   return null
 }

@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import {
   getAgent, updateAgent, deleteAgent,
-  createAction, updateAction, deleteAction, reorderActions,
+  getActions, createAction, updateAction, deleteAction, reorderActions,
   createTrigger, deleteTrigger,
   generateWebhookKey, getWebhookKey,
   getApprovals, runAgent,
@@ -272,8 +272,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      let [agentData, connData, hitlData, skillsData] = await Promise.all([
+      let [agentData, actionsData, connData, hitlData, skillsData] = await Promise.all([
         getAgent(selectedOrgId, agentId),
+        getActions(selectedOrgId, agentId),
         getConnectors(selectedOrgId),
         getApprovals(selectedOrgId),
         getSkills(selectedOrgId),
@@ -287,12 +288,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setAgentName(agentData.name);
       setAgentDesc(agentData.description ?? '');
       setAgentActive(agentData.is_active);
-      setActions(agentData.actions.sort((a, b) => a.order_index - b.order_index));
+      setActions((actionsData ?? []).sort((a, b) => a.order_index - b.order_index));
       setTriggers(agentData.triggers);
       const webhookTrigger = agentData.triggers.find((t) => t.trigger_type === 'webhook');
       if (webhookTrigger) loadWebhookKey(webhookTrigger.id);
       setConnectors(connData.connectors);
-      setSkills(skillsData.skills.filter((s) => s.is_active));
+      setSkills((skillsData.items ?? []).filter((s) => s.is_active));
       setPendingHitlCount(hitlData.items.filter((h) => h.agent_id === agentId && h.status === 'awaiting_approval').length);
     } catch (err: any) {
       toast.error('Failed to load agent');
@@ -336,14 +337,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId || !actionForm.name.trim()) return;
     try {
       setSavingAction(true);
+      const validConnectorIds = new Set(connectors.map((c) => c.id));
+      const validSkillIds = new Set(skills.map((s) => s.id));
       const payload = {
         name: actionForm.name.trim(),
         action_type: actionForm.action_type,
         ...(actionForm.action_type === 'agent' ? {
           prompt: actionForm.prompt.trim(),
           model: actionForm.model,
-          connector_ids: actionForm.connector_ids,
-          skill_ids: actionForm.skill_ids,
+          connector_ids: actionForm.connector_ids.filter((id) => validConnectorIds.has(id)),
+          skill_ids: actionForm.skill_ids.filter((id) => validSkillIds.has(id)),
         } : {
           approval_instructions: actionForm.approval_instructions.trim(),
         }),
@@ -386,15 +389,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       const config: Record<string, unknown> = {};
       if (triggerForm.trigger_type === 'cron') config.cron_expr = triggerForm.cron_expr;
       if (triggerForm.description) config.description = triggerForm.description;
-      const trigger = await createTrigger(selectedOrgId, agentId, { trigger_type: triggerForm.trigger_type, config });
+      const trigger = await createTrigger(selectedOrgId, agentId, { trigger_type: triggerForm.trigger_type, trigger_config: config });
       toast.success('Trigger created');
       setTriggerDialogOpen(false);
       await loadAll();
       // Webhook triggers require a key — generate and reveal it immediately
       if (trigger.trigger_type === 'webhook') {
         const keyResult = await generateWebhookKey(selectedOrgId, agentId, trigger.id);
-        setWebhookKey(keyResult.key);
-        setNewRawKey(keyResult.raw_key);
+        setNewRawKey(keyResult.key);
+        await loadWebhookKey(trigger.id);
       }
     } catch (err: any) {
       toast.error(err.response?.data?.message || err.message || 'Failed to create trigger');
@@ -438,8 +441,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       const result = await generateWebhookKey(selectedOrgId, agentId, triggerId);
-      setNewRawKey(result.raw_key);
-      setWebhookKey(result.key);
+      setNewRawKey(result.key);
+      await loadWebhookKey(triggerId);
     } catch (err: any) {
       toast.error(err.message || 'Failed to generate key');
     }
@@ -574,8 +577,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     )}
                     {trigger.trigger_type === 'cron' && (
                       <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
-                        <code className="bg-background border px-1.5 py-0.5 rounded font-mono">{String(trigger.config.cron_expr ?? '')}</code>
-                        <span>{describeCron(String(trigger.config.cron_expr ?? ''))}</span>
+                        <code className="bg-background border px-1.5 py-0.5 rounded font-mono">{String(trigger.trigger_config.cron_expr ?? '')}</code>
+                        <span>{describeCron(String(trigger.trigger_config.cron_expr ?? ''))}</span>
                       </p>
                     )}
                     {trigger.trigger_type === 'webhook' && (

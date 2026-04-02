@@ -37,8 +37,10 @@ import {
   History,
   Copy,
   Eye,
+  Monitor,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -141,110 +143,53 @@ function TriggerBadge({ type }: { type: string }) {
 
 // ─── Expanded Actions Panel ───────────────────────────────────
 
-// Same grid as the run-level table so columns align when expanded
 const RUN_COLS = 'grid-cols-[1fr_140px_120px_90px_80px_160px_32px]';
+const ACTION_COLS = 'grid-cols-[1fr_140px_160px]';
+
+const ACTION_TYPE_LABEL: Record<string, string> = {
+  agent: 'Agent Step',
+  approval: 'Approval',
+};
 
 function ActionsPanel({ actions }: { actions: ExecutionAction[] }) {
-  const [outputAction, setOutputAction] = useState<ExecutionAction | null>(null);
-
   if (actions.length === 0) return <p className="text-xs text-muted-foreground py-2 px-4">No action steps recorded.</p>;
 
   return (
     <div className="border-t bg-muted/30">
-      {/* Column headers — desktop only, same grid as run table */}
-      <div className={`hidden md:grid ${RUN_COLS} gap-3 px-4 py-2 border-b bg-muted/50 text-xs font-semibold uppercase tracking-wider text-muted-foreground`}>
-        <span>Action</span>
+      {/* Column headers — desktop only */}
+      <div className={`hidden md:grid ${ACTION_COLS} gap-3 px-4 py-2 border-b bg-muted/50 text-xs font-semibold uppercase tracking-wider text-muted-foreground`}>
+        <span>Step</span>
         <span>Status</span>
-        <span>Executed By</span>
-        <span />
-        <span>Duration</span>
         <span>Started</span>
-        <span />
       </div>
 
       <div className="divide-y">
-        {actions.map((a, i) => {
-          const dur = a.started_at && a.completed_at
-            ? formatDuration(new Date(a.completed_at).getTime() - new Date(a.started_at).getTime())
-            : null;
-          return (
-            <div key={a.id}>
-              {/* Desktop row — columns aligned with run table above */}
-              <div className={`hidden md:grid ${RUN_COLS} gap-3 items-center px-4 py-2.5`}>
-                <div className="min-w-0 flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">{i + 1}</span>
-                  <div className="min-w-0">
-                    <span className="font-medium text-sm truncate block">{a.action_name}</span>
-                    {a.error_message && (
-                      <span className="text-xs text-red-600 flex items-center gap-1 mt-0.5 truncate">
-                        <AlertCircle className="h-3 w-3 shrink-0" />{a.error_message}
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <ActionStatusBadge status={a.status} />
-                <span className="text-xs text-muted-foreground truncate">{a.executed_by ?? '—'}</span>
-                <span />
-                <span className="text-xs text-muted-foreground tabular-nums">{dur ?? '—'}</span>
-                <span className="text-xs text-muted-foreground">{a.started_at ? formatDate(a.started_at) : '—'}</span>
-                {a.output ? (
-                  <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setOutputAction(a)}>
-                    <Eye className="h-3.5 w-3.5" />
-                  </Button>
-                ) : (
-                  <span />
-                )}
+        {actions.map((a, i) => (
+          <div key={a.id}>
+            {/* Desktop row */}
+            <div className={`hidden md:grid ${ACTION_COLS} gap-3 items-center px-4 py-2.5`}>
+              <div className="min-w-0 flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">{i + 1}</span>
+                <span className="font-medium text-sm truncate">{ACTION_TYPE_LABEL[a.action_type] ?? a.action_type}</span>
               </div>
-
-              {/* Mobile row */}
-              <div className="md:hidden px-4 py-2.5 space-y-1.5">
-                <div className="flex items-center gap-2">
-                  <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">{i + 1}</span>
-                  <span className="font-medium text-sm truncate flex-1">{a.action_name}</span>
-                  <ActionStatusBadge status={a.status} />
-                </div>
-                <div className="flex items-center gap-3 pl-7 flex-wrap">
-                  {a.executed_by && <span className="text-xs text-muted-foreground">{a.executed_by}</span>}
-                  {dur && <span className="text-xs text-muted-foreground">{dur}</span>}
-                  {a.started_at && <span className="text-xs text-muted-foreground">{formatDate(a.started_at)}</span>}
-                  {a.output && (
-                    <Button variant="outline" size="sm" className="h-6 text-xs px-2" onClick={() => setOutputAction(a)}>View output</Button>
-                  )}
-                </div>
-                {a.error_message && (
-                  <div className="pl-7 flex items-start gap-1.5 text-xs text-red-600">
-                    <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />{a.error_message}
-                  </div>
-                )}
-              </div>
+              <ActionStatusBadge status={a.status} />
+              <span className="text-xs text-muted-foreground">{a.started_at ? formatDate(a.started_at) : '—'}</span>
             </div>
-          );
-        })}
-      </div>
 
-      {/* Output modal */}
-      <Dialog open={!!outputAction} onOpenChange={(o) => { if (!o) setOutputAction(null); }}>
-        <DialogContent className="max-w-2xl flex flex-col max-h-[80vh]">
-          <DialogHeader>
-            <DialogTitle>{outputAction?.action_name} — Output</DialogTitle>
-          </DialogHeader>
-          <div className="flex-1 overflow-auto min-h-0">
-            <pre className="text-xs bg-muted rounded-md p-3 whitespace-pre-wrap break-words leading-relaxed max-h-[55vh] overflow-auto">
-              {outputAction?.output}
-            </pre>
+            {/* Mobile row */}
+            <div className="md:hidden px-4 py-2.5 space-y-1">
+              <div className="flex items-center gap-2">
+                <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">{i + 1}</span>
+                <span className="font-medium text-sm truncate flex-1">{ACTION_TYPE_LABEL[a.action_type] ?? a.action_type}</span>
+                <ActionStatusBadge status={a.status} />
+              </div>
+              {a.started_at && (
+                <div className="pl-7 text-xs text-muted-foreground">{formatDate(a.started_at)}</div>
+              )}
+            </div>
           </div>
-          <DialogFooter className="gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => { navigator.clipboard.writeText(outputAction?.output ?? ''); toast.success('Copied to clipboard'); }}
-            >
-              <Copy className="mr-1.5 h-3.5 w-3.5" />Copy
-            </Button>
-            <Button size="sm" onClick={() => setOutputAction(null)}>Close</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+        ))}
+      </div>
     </div>
   );
 }
@@ -255,7 +200,7 @@ const PAGE_SIZE = 15;
 
 export default function AgentHistoryPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agents_manager');
+  const permitted = useRequirePermission('agent_center_user');
   const searchParams = useSearchParams();
 
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -265,6 +210,7 @@ export default function AgentHistoryPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [browserHITL, setBrowserHITL] = useState<{ runId: string; agentId: string; agentName: string } | null>(null);
 
   // Pill-based filters
   type FilterKey = 'agent' | 'status' | 'trigger' | 'from' | 'to';
@@ -294,9 +240,9 @@ export default function AgentHistoryPage() {
       if (fromF)    params.from         = new Date(fromF.value).toISOString();
       if (toF)      { const d = new Date(toF.value); d.setHours(23, 59, 59, 999); params.to = d.toISOString(); }
       const data = await getExecutionHistory(selectedOrgId, params);
-      setRuns(data.runs);
+      setRuns(data.items ?? []);
       setTotal(data.total);
-      setTotalPages(data.total_pages);
+      setTotalPages(data.pages);
     } catch (err: any) {
       toast.error(err.message || 'Failed to load history');
     } finally {
@@ -552,7 +498,10 @@ export default function AgentHistoryPage() {
                   <div className="divide-y">
                     {runs.map((run) => {
                       const isExpanded = expandedRows.has(run.id);
-                      const completedSteps = run.actions.filter((a) => a.status === 'completed' || a.status === 'approved').length;
+                      const completedSteps = run.action_logs.filter((a) => a.status === 'completed' || a.status === 'approved').length;
+                      const durationMs = run.started_at && run.completed_at
+                        ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
+                        : null;
                       return (
                         <div key={run.id}>
                           <button
@@ -567,8 +516,8 @@ export default function AgentHistoryPage() {
                               </div>
                               <div className="flex items-center gap-2 flex-wrap">
                                 <TriggerBadge type={run.trigger_type} />
-                                <span className="text-xs text-muted-foreground">{completedSteps}/{run.actions.length} steps</span>
-                                <span className="text-xs text-muted-foreground">{formatDuration(run.duration_ms)}</span>
+                                <span className="text-xs text-muted-foreground">{completedSteps}/{run.action_logs.length} steps</span>
+                                <span className="text-xs text-muted-foreground">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
                               </div>
                               <div className="flex items-center justify-between">
                                 <span className="text-xs text-muted-foreground">{formatDate(run.started_at)}</span>
@@ -583,15 +532,31 @@ export default function AgentHistoryPage() {
                               </div>
                               <StatusBadge status={run.status} />
                               <TriggerBadge type={run.trigger_type} />
-                              <span className="text-sm text-muted-foreground">{completedSteps}/{run.actions.length}</span>
-                              <span className="text-sm text-muted-foreground tabular-nums">{formatDuration(run.duration_ms)}</span>
+                              <span className="text-sm text-muted-foreground">{completedSteps}/{run.action_logs.length}</span>
+                              <span className="text-sm text-muted-foreground tabular-nums">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
                               <span className="text-xs text-muted-foreground">{formatDate(run.started_at)}</span>
-                              <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', isExpanded && 'rotate-180')} />
+                              <div className="flex items-center gap-1">
+                                {run.status === 'executing' && (
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                                    title="Open live browser view"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name });
+                                    }}
+                                  >
+                                    <Monitor className="h-3.5 w-3.5" />
+                                  </Button>
+                                )}
+                                <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', isExpanded && 'rotate-180')} />
+                              </div>
                             </div>
                           </button>
 
                           {/* Expanded action steps */}
-                          {isExpanded && <ActionsPanel actions={run.actions} />}
+                          {isExpanded && <ActionsPanel actions={run.action_logs} />}
                         </div>
                       );
                     })}
@@ -657,6 +622,17 @@ export default function AgentHistoryPage() {
             </CardContent>
           </Card>
         </>
+      )}
+
+      {/* Browser HITL dialog — opens when a user clicks the monitor icon on an executing run */}
+      {browserHITL && (
+        <BrowserHITLDialog
+          open={!!browserHITL}
+          onOpenChange={(o) => { if (!o) setBrowserHITL(null); }}
+          runId={browserHITL.runId}
+          agentId={browserHITL.agentId}
+          agentName={browserHITL.agentName}
+        />
       )}
     </div>
   );

@@ -47,7 +47,7 @@ export async function initiateLogin(): Promise<void> {
   sessionStorage.setItem('oauth_state', state);
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-  const clientId = process.env.NEXT_PUBLIC_ADMIN_CLIENT_ID || 'admin-console';
+  const clientId = process.env.NEXT_PUBLIC_CLIENT_ID || 'admin-console';
   const redirectUri = process.env.NEXT_PUBLIC_REDIRECT_URI || `${window.location.origin}/callback`;
 
   const params = new URLSearchParams({
@@ -78,7 +78,7 @@ export async function exchangeCodeForTokens(code: string): Promise<{
   }
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-  const clientId = process.env.NEXT_PUBLIC_ADMIN_CLIENT_ID || '';
+  const clientId = process.env.NEXT_PUBLIC_CLIENT_ID || '';
   const redirectUri = process.env.NEXT_PUBLIC_REDIRECT_URI || `${window.location.origin}/callback`;
 
   const tokenUrl = `${apiUrl}/oauth/token`;
@@ -141,7 +141,7 @@ export async function refreshAccessToken(
   expiresIn: number;
 }> {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-  const clientId = process.env.NEXT_PUBLIC_ADMIN_CLIENT_ID || 'admin-console';
+  const clientId = process.env.NEXT_PUBLIC_CLIENT_ID || 'admin-console';
 
   const response = await fetch(`${apiUrl}/oauth/token`, {
     method: 'POST',

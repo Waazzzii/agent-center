@@ -23,7 +23,6 @@ import {
 } from '@/components/ui/select';
 import { toast } from 'sonner';
 import type { CreateUserDto } from '@/types/api.types';
-import { AdminRole } from '@/types/api.types';
 import { useAuthStore } from '@/stores/auth.store';
 
 interface CreateUserModalProps {
@@ -43,7 +42,7 @@ export function CreateUserModal({ open, onOpenChange, organizationId }: CreateUs
     last_name: '',
   });
 
-  const canSetAdminRole = admin?.role === AdminRole.SUPER_ADMIN || admin?.role === AdminRole.ORG_ADMIN;
+  const canSetAdminRole = admin?.is_super_admin === true;
 
   useEffect(() => {
     if (!open) return;

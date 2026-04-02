@@ -9,7 +9,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { ArrowLeft } from 'lucide-react';
 
@@ -22,7 +21,6 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [content, setContent] = useState('');
-  const [isActive, setIsActive] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -41,7 +39,6 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
       setName(data.name);
       setDescription(data.description ?? '');
       setContent(data.content);
-      setIsActive(data.is_active);
     } catch (err: any) {
       toast.error('Failed to load skill');
       router.push('/skills');
@@ -58,7 +55,6 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
         name: name.trim(),
         description: description.trim() || undefined,
         content: content.trim(),
-        is_active: isActive,
       });
       toast.success('Skill saved');
       setDirty(false);
@@ -112,10 +108,6 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
               rows={10}
               className="font-mono text-sm"
             />
-          </div>
-          <div className="flex items-center gap-3">
-            <Switch id="active" checked={isActive} onCheckedChange={(v) => { setIsActive(v); markDirty(); }} />
-            <Label htmlFor="active">Active</Label>
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => router.push('/skills')}>Cancel</Button>

@@ -6,7 +6,7 @@ import { exchangeCodeForTokens } from '@/lib/auth/oauth';
 import { useAuthStore } from '@/stores/auth.store';
 import { useUIStore } from '@/stores/ui.store';
 import apiClient from '@/lib/api/client';
-import { AdminUser, AdminRole } from '@/types/api.types';
+import { ProductUser } from '@/types/api.types';
 
 function CallbackContent() {
   const router = useRouter();
@@ -48,22 +48,19 @@ function CallbackContent() {
         localStorage.setItem('access_token', accessToken);
         localStorage.setItem('refresh_token', refreshToken);
 
-        const response = await apiClient.get<AdminUser>('/admin/me');
-        const admin = response.data;
+        const response = await apiClient.get<{ user: ProductUser }>('/products/me');
+        const admin = response.data.user;
 
         // Store auth state
         setAuth(admin, accessToken, refreshToken);
 
-        // Honour any stored post-login destination (e.g. deep-linked from wazzi-kb)
+        // Honour any stored post-login destination (e.g. deep-linked from another center)
         const intendedPath = sessionStorage.getItem('post_login_redirect');
         sessionStorage.removeItem('post_login_redirect');
         if (intendedPath && intendedPath !== '/login') {
           router.push(intendedPath);
-        } else if (admin.role === AdminRole.SUPER_ADMIN) {
-          router.push('/organizations');
         } else {
-          // org_user: land on the first page they have access to (layout will redirect if needed)
-          router.push('/skills');
+          router.push('/agents');
         }
       } catch (err: any) {
         console.error('[AUTH] Authentication failed:', err.message);

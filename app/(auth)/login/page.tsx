@@ -37,11 +37,7 @@ export default function LoginPage() {
         router.replace(intendedPath);
         return;
       }
-      if (admin.role === 'super_admin') {
-        router.replace('/organizations');
-      } else {
-        router.replace('/users');
-      }
+      router.replace('/agents');
     }
   }, [admin, router]);
 
@@ -106,7 +102,7 @@ export default function LoginPage() {
             />
           </div>
           <p className="text-sm sm:text-base font-medium text-muted-foreground">
-            Admin Portal
+            Agent Center
           </p>
         </div>
 
@@ -119,7 +115,7 @@ export default function LoginPage() {
               Welcome
             </h2>
             <p className="text-sm text-muted-foreground">
-              Please log in with your Google account that is authorized to access the Admin Portal
+              Please log in with your Google account that is authorized to access the Agent Center
             </p>
           </div>
 

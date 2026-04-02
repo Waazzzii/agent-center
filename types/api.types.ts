@@ -3,29 +3,33 @@
  * Shared types for API requests and responses
  */
 
-export enum AdminRole {
-  SUPER_ADMIN = 'super_admin',
-  ORG_ADMIN   = 'org_admin',
-  ORG_USER    = 'org_user',
-}
-
-/** Roles that bypass per-permission checks (org_admin is still scoped to their orgs) */
-export const BYPASS_PERMISSION_ROLES = [AdminRole.SUPER_ADMIN, AdminRole.ORG_ADMIN];
-
-export interface AdminUser {
+/**
+ * ProductUser — shape returned by GET /products/me
+ * Used as the auth context for all product centers (agent-center, kb, etc.)
+ */
+export interface ProductUser {
   id: string;
   email: string;
-  role: AdminRole;
-  assignedOrganizations: string[];
-  /**
-   * Fully-resolved effective permissions per org (catalog defaults merged with explicit overrides).
-   * Only populated for org_user — super_admin bypasses all permission checks.
-   */
-  orgPermissions: Record<string, Record<string, boolean>>;
-  createdAt: string;
-  updatedAt: string;
-  lastLoginAt: string | null;
+  /** The org context the token was issued for */
+  organization_id: string;
+  /** Product slug, e.g. "agent-center" */
+  product: string;
+  is_super_admin: boolean;
+  /** Flat effective-permissions map for the current org context */
+  permissions: Record<string, boolean>;
+  /** All org memberships — used for multi-org access checks */
+  memberships: Array<{
+    organization_id: string;
+    permissions: Record<string, boolean>;
+  }>;
 }
+
+/**
+ * @deprecated Use ProductUser instead.
+ * Kept so TypeScript doesn't break files that still reference AdminUser
+ * before they are migrated.
+ */
+export type AdminUser = ProductUser;
 
 export interface PermissionDefinition {
   key: string;

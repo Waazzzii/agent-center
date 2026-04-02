@@ -17,7 +17,7 @@ import { NoPermissionContent } from '@/components/layout/no-permission-content';
 export default function AgentsPage() {
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agents_manager');
+  const permitted = useRequirePermission('agent_center_user');
   const { confirm } = useConfirmDialog();
 
   const [agents, setAgents] = useState<Agent[]>([]);

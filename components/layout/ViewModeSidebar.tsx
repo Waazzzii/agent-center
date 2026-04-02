@@ -6,18 +6,11 @@ import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
-import { AdminRole } from '@/types/api.types';
 import {
-  Building2,
-  Key,
   LogOut,
   Menu,
   Moon,
   Sun,
-  Shield,
-  Database,
-  Ticket,
-  FileText,
   ChevronDown,
   ChevronRight,
   X,
@@ -28,16 +21,8 @@ import {
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { useUIStore } from '@/stores/ui.store';
 import { logout } from '@/lib/auth/oauth';
-import { getOrganizations } from '@/lib/api/organizations';
-import type { Organization } from '@/types/api.types';
 import { orgMainNavItems as mainItems } from '@/lib/nav';
 
 interface NavChild {
@@ -51,20 +36,9 @@ interface NavItem {
   label: string;
   href: string;
   icon: React.ElementType;
-  superAdminOnly?: boolean;
   permissionKeys?: string[];
   children?: NavChild[];
 }
-
-// Super Admin system-level nav
-const superAdminNavItems: NavItem[] = [
-  { label: 'Organizations',      href: '/organizations',      icon: Building2, superAdminOnly: true },
-  { label: 'Connectors Catalog', href: '/connectors-catalog', icon: Database,  superAdminOnly: true },
-  { label: 'OAuth Clients',      href: '/oauth-clients',      icon: Key,       superAdminOnly: true },
-  { label: 'Administrators',     href: '/administrators',     icon: Shield,    superAdminOnly: true },
-  { label: 'Refresh Tokens',     href: '/refresh-tokens',    icon: Ticket,    superAdminOnly: true },
-  { label: 'Audit Logs',         href: '/audit-logs',        icon: FileText,  superAdminOnly: true },
-];
 
 // Merge icons onto shared nav items so they work in the sidebar
 const MAIN_ICONS: Record<string, React.ElementType> = {
@@ -77,17 +51,12 @@ const orgMainNavItems: NavItem[] = mainItems.map(({ children: _ch, ...i }) => ({
 
 export function ViewModeSidebar() {
   const pathname = usePathname();
-  const { admin, isSuperAdmin, hasPermission, isOrgAdmin, hasOrgAccess } = useAuthStore();
-  const { viewMode, selectedOrgName, selectedOrgId, switchToOrgAdminView } = useAdminViewStore();
+  const { admin, hasPermission } = useAuthStore();
+  const { selectedOrgId } = useAdminViewStore();
   const { sidebarOpen, toggleSidebar, theme, toggleTheme } = useUIStore();
-  const [organizations, setOrganizations] = useState<Organization[]>([]);
-  const [loading, setLoading] = useState(false);
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
-  // Tracks items the user has explicitly collapsed so auto-expand doesn't override them
   const manuallyClosed = useRef<Set<string>>(new Set());
 
-  // Auto-expand parent items whose children (or own href) match the current path,
-  // but respect items the user has manually collapsed.
   useEffect(() => {
     const newExpanded = new Set<string>();
     for (const item of orgMainNavItems) {
@@ -104,28 +73,6 @@ export function ViewModeSidebar() {
       setExpandedItems((prev) => new Set([...prev, ...newExpanded]));
     }
   }, [pathname]);
-
-  useEffect(() => {
-    if (viewMode === 'org_admin') {
-      loadOrganizations();
-    }
-  }, [viewMode]);
-
-  const loadOrganizations = async () => {
-    try {
-      setLoading(true);
-      const { organizations: orgs } = await getOrganizations();
-      setOrganizations(orgs);
-    } catch (error) {
-      console.error('Failed to load organizations:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSwitchOrganization = (org: Organization) => {
-    switchToOrgAdminView(org.id, org.name);
-  };
 
   const toggleExpanded = (href: string) => {
     setExpandedItems((prev) => {
@@ -148,20 +95,10 @@ export function ViewModeSidebar() {
     await logout();
   };
 
-  const bypassPermissions = isSuperAdmin() || isOrgAdmin();
-
-  // Build visible nav list
-  let visibleNavItems: NavItem[];
-
-  if (viewMode === 'super_admin') {
-    visibleNavItems = superAdminNavItems;
-  } else {
-    visibleNavItems = orgMainNavItems.filter((item) => {
-      if (bypassPermissions) return true;
-      if (!item.permissionKeys || !selectedOrgId) return false;
-      return item.permissionKeys.some((key) => hasPermission(selectedOrgId, key));
-    });
-  }
+  const visibleNavItems = orgMainNavItems.filter((item) => {
+    if (!item.permissionKeys || !selectedOrgId) return true;
+    return item.permissionKeys.some((key) => hasPermission(selectedOrgId, key));
+  });
 
   const renderNavItem = (item: NavItem) => {
     const Icon = item.icon;
@@ -169,14 +106,11 @@ export function ViewModeSidebar() {
     const isExpanded = hasChildren && expandedItems.has(item.href);
     const isChildActive = hasChildren && item.children!.some((c) => pathname.startsWith(c.href));
     const isActive = !hasChildren && pathname.startsWith(item.href);
-    // A parent whose own href matches a child's href is a pure grouper (no dedicated page).
-    // Other parents (e.g. Centers) navigate to their own page AND can be toggled via the chevron.
     const isGrouper = hasChildren && item.children!.some((c) => c.href === item.href);
 
     const visibleChildren = hasChildren
       ? item.children!.filter((child) => {
-          if (bypassPermissions) return true;
-          if (!child.permissionKeys || !selectedOrgId) return false;
+          if (!child.permissionKeys || !selectedOrgId) return true;
           return child.permissionKeys.some((k) => hasPermission(selectedOrgId, k));
         })
       : [];
@@ -193,7 +127,6 @@ export function ViewModeSidebar() {
             )}
           >
             {isGrouper ? (
-              // Pure grouper: whole row toggles — no dedicated page to navigate to
               <button
                 className="flex flex-1 items-center gap-3 px-3 py-2 text-left"
                 onClick={() => toggleExpanded(item.href)}
@@ -206,13 +139,11 @@ export function ViewModeSidebar() {
                 }
               </button>
             ) : (
-              // Navigable parent: label navigates (and re-expands), chevron independently toggles
               <>
                 <Link
                   href={item.href}
                   className="flex flex-1 items-center gap-3 px-3 py-2"
                   onClick={() => {
-                    // Intentional navigation clears manual-close so section re-expands
                     manuallyClosed.current.delete(item.href);
                     setExpandedItems((prev) => new Set([...prev, item.href]));
                     if (sidebarOpen) toggleSidebar();
@@ -250,7 +181,6 @@ export function ViewModeSidebar() {
           </Link>
         )}
 
-        {/* Children */}
         {hasChildren && isExpanded && visibleChildren.length > 0 && (
           <div className="mt-0.5 ml-4 space-y-0.5 border-l border-sidebar-border pl-3">
             {visibleChildren.map((child) => {
@@ -281,18 +211,6 @@ export function ViewModeSidebar() {
 
   return (
     <>
-      {viewMode === 'super_admin' && (
-        <Button
-          variant="ghost"
-          size="icon"
-          className="fixed left-4 top-4 z-50 md:hidden h-12 w-12 rounded-lg bg-background/95 backdrop-blur shadow-lg border"
-          onClick={toggleSidebar}
-          aria-label="Toggle menu"
-        >
-          <Menu className="h-6 w-6" />
-        </Button>
-      )}
-
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={toggleSidebar} />
       )}
@@ -316,62 +234,21 @@ export function ViewModeSidebar() {
             </Button>
           </div>
 
-          {/* Organization Selector / Mode badge */}
-          {viewMode === 'org_admin' ? (
-            <div className="border-b px-4 py-3">
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" className="w-full justify-between" disabled={loading}>
-                    <div className="flex items-center gap-2">
-                      <Building2 className="h-4 w-4 text-primary" />
-                      <span className="truncate text-sm font-medium">
-                        {selectedOrgName || 'Select Organization'}
-                      </span>
-                    </div>
-                    <ChevronDown className="h-4 w-4 opacity-50" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-[240px]">
-                  {loading ? (
-                    <div className="p-2 text-center text-sm text-muted-foreground">Loading...</div>
-                  ) : organizations.length === 0 ? (
-                    <div className="p-2 text-center text-sm text-muted-foreground">No organizations available</div>
-                  ) : (
-                    organizations.map((org) => (
-                      <DropdownMenuItem
-                        key={org.id}
-                        onClick={() => handleSwitchOrganization(org)}
-                        className="cursor-pointer"
-                        disabled={org.id === selectedOrgId}
-                      >
-                        <div className="flex items-center gap-2 w-full">
-                          <Building2 className="h-4 w-4 text-muted-foreground" />
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium truncate">{org.name}</div>
-                            <div className="text-xs text-muted-foreground truncate">{org.slug}</div>
-                          </div>
-                          {org.id === selectedOrgId && (
-                            <div className="h-2 w-2 rounded-full bg-primary flex-shrink-0" />
-                          )}
-                        </div>
-                      </DropdownMenuItem>
-                    ))
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
-          ) : (
-            <div className="border-b px-4 py-3">
-              <div className="inline-flex items-center gap-2 rounded-full px-3 py-1 text-xs font-medium bg-primary/10 text-primary">
-                <Shield className="h-3 w-3" />
-                Super Admin View
-              </div>
-            </div>
-          )}
+          {/* Mobile menu button (visible only on mobile when sidebar is closed) */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="fixed left-4 top-4 z-50 md:hidden h-12 w-12 rounded-lg bg-background/95 backdrop-blur shadow-lg border"
+            onClick={toggleSidebar}
+            aria-label="Toggle menu"
+            style={{ display: sidebarOpen ? 'none' : undefined }}
+          >
+            <Menu className="h-6 w-6" />
+          </Button>
 
           {/* Navigation */}
           <nav className="flex-1 space-y-1 overflow-y-auto p-4">
-            {visibleNavItems.length === 0 && viewMode === 'org_admin' && (
+            {visibleNavItems.length === 0 && (
               <div className="py-4 text-center text-sm text-muted-foreground">
                 No access granted yet
               </div>
@@ -386,22 +263,6 @@ export function ViewModeSidebar() {
                 <div className="mb-3 rounded-lg bg-sidebar-accent p-3">
                   <div className="text-xs font-medium text-muted-foreground">Signed in as</div>
                   <div className="mt-1 text-sm font-semibold">{admin.email}</div>
-                  <div className="mt-1">
-                    <span
-                      className={cn(
-                        'inline-block rounded-full px-2 py-0.5 text-xs font-medium',
-                        admin.role === AdminRole.SUPER_ADMIN
-                          ? 'bg-primary/10 text-primary'
-                          : admin.role === AdminRole.ORG_ADMIN
-                          ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400'
-                          : 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-400'
-                      )}
-                    >
-                      {admin.role === AdminRole.SUPER_ADMIN ? 'Super Admin'
-                      : admin.role === AdminRole.ORG_ADMIN ? 'Administrator'
-                      : 'User'}
-                    </span>
-                  </div>
                 </div>
                 <div className="mb-3 flex gap-2">
                   <Button variant="outline" size="icon" onClick={toggleTheme} className="flex-shrink-0">

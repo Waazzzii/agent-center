@@ -41,7 +41,7 @@ function statusBadge(status: string) {
 
 export default function ApprovalsPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agents_manager');
+  const permitted = useRequirePermission('agent_center_user');
 
   const [items, setItems] = useState<AgentApprovalItem[]>([]);
   const [total, setTotal] = useState(0);

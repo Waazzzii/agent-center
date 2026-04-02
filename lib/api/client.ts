@@ -1,6 +1,7 @@
 /**
  * API Client
- * Axios instance with automatic token refresh and interceptors
+ * Axios instance pointing at wazzi-backend (auth, organizations, etc.)
+ * with automatic token refresh and 401 retry interceptors.
  */
 
 import axios, { type AxiosError } from 'axios';
@@ -17,35 +18,30 @@ function clearAuthAndRedirect(): void {
 }
 
 const apiClient = axios.create({
-  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000',
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  baseURL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000',
+  headers: { 'Content-Type': 'application/json' },
   withCredentials: true,
 });
 
 let isRefreshing = false;
 let refreshQueue: Array<(token: string) => void> = [];
 
-// Request interceptor: Add auth token to requests
+// Attach bearer token to every request
 apiClient.interceptors.request.use(
   (config) => {
     const token = localStorage.getItem('access_token');
-    if (token) {
-      config.headers.Authorization = `Bearer ${token}`;
-    }
+    if (token) config.headers.Authorization = `Bearer ${token}`;
     return config;
   },
   (error) => Promise.reject(error)
 );
 
-// Response interceptor: Handle token refresh on 401
+// Handle 401 — attempt token refresh then retry
 apiClient.interceptors.response.use(
   (response) => response,
   async (error: AxiosError) => {
     const originalRequest = error.config as any;
 
-    // If 401 and not already retrying
     if (error.response?.status === 401 && !originalRequest._retry) {
       if (!isRefreshing) {
         isRefreshing = true;
@@ -53,7 +49,6 @@ apiClient.interceptors.response.use(
 
         try {
           const refreshToken = localStorage.getItem('refresh_token');
-
           if (!refreshToken) {
             isRefreshing = false;
             clearAuthAndRedirect();
@@ -62,22 +57,20 @@ apiClient.interceptors.response.use(
 
           const { accessToken, refreshToken: newRefreshToken } = await refreshAccessToken(refreshToken);
 
-          // Update stored tokens
           localStorage.setItem('access_token', accessToken);
-          if (newRefreshToken) {
-            localStorage.setItem('refresh_token', newRefreshToken);
-          }
+          if (newRefreshToken) localStorage.setItem('refresh_token', newRefreshToken);
+
+          // Sync auth store without importing it here (avoids circular deps)
+          // TokenRefreshProvider handles the full store update on its own cycle.
+          // We just update localStorage so subsequent requests pick up the new token.
 
           isRefreshing = false;
-
-          // Retry queued requests with new token
-          refreshQueue.forEach((callback) => callback(accessToken));
+          refreshQueue.forEach((cb) => cb(accessToken));
           refreshQueue = [];
 
-          // Retry original request
           originalRequest.headers.Authorization = `Bearer ${accessToken}`;
           return apiClient(originalRequest);
-        } catch (refreshError) {
+        } catch {
           isRefreshing = false;
           refreshQueue = [];
           clearAuthAndRedirect();
@@ -85,21 +78,16 @@ apiClient.interceptors.response.use(
         }
       }
 
-      // If already refreshing, queue this request
-      return new Promise((resolve, reject) => {
-        refreshQueue.push((token: string) => {
+      return new Promise((resolve) => {
+        refreshQueue.push((token) => {
           originalRequest.headers.Authorization = `Bearer ${token}`;
           resolve(apiClient(originalRequest));
         });
       });
     }
 
-    // 403 = permission denied — always reject so the caller decides how to handle it.
-    // Pages use useRequirePermission() to gate API calls and render <NoPermissionContent />
-    // inline, preserving the current URL and sidebar context.
-    if (error.response?.status === 403) {
-      return Promise.reject(error);
-    }
+    // 403 — permission denied; let callers handle it (useRequirePermission renders NoPermissionContent)
+    if (error.response?.status === 403) return Promise.reject(error);
 
     return Promise.reject(error);
   }

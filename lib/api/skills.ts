@@ -1,4 +1,4 @@
-import apiClient from './client';
+import agentClient from './agent-client';
 
 export interface Skill {
   id: string;
@@ -14,16 +14,11 @@ export interface Skill {
 }
 
 export interface SkillsPage {
-  skills: Skill[];
+  items: Skill[];
   total: number;
   page: number;
   limit: number;
-  total_pages: number;
-}
-
-export async function getSkills(orgId: string, params?: { page?: number; limit?: number }) {
-  const res = await apiClient.get<SkillsPage>(`/admin/organizations/${orgId}/skills`, { params });
-  return res.data;
+  pages: number;
 }
 
 export interface SkillUsage {
@@ -33,42 +28,51 @@ export interface SkillUsage {
   agent_name: string;
 }
 
-export async function getSkillUsages(orgId: string, skillId: string) {
-  const res = await apiClient.get<{ actions: SkillUsage[] }>(`/admin/organizations/${orgId}/skills/${skillId}/usages`);
-  return res.data.actions;
+export async function getSkills(orgId: string, params?: { page?: number; limit?: number }) {
+  const res = await agentClient.get<SkillsPage>(`/api/admin/${orgId}/skills`, { params });
+  return res.data;
 }
 
 export async function getSkill(orgId: string, skillId: string) {
-  const res = await apiClient.get<Skill>(`/admin/organizations/${orgId}/skills/${skillId}`);
+  const res = await agentClient.get<Skill>(`/api/admin/${orgId}/skills/${skillId}`);
+  return res.data;
+}
+
+export async function getSkillUsages(orgId: string, skillId: string) {
+  const res = await agentClient.get<SkillUsage[]>(`/api/admin/${orgId}/skills/${skillId}/usages`);
   return res.data;
 }
 
 export async function createSkill(orgId: string, data: { name: string; description?: string; content: string }) {
-  const res = await apiClient.post<Skill>(`/admin/organizations/${orgId}/skills`, data);
+  const res = await agentClient.post<Skill>(`/api/admin/${orgId}/skills`, data);
   return res.data;
 }
 
-export async function updateSkill(orgId: string, skillId: string, data: { name?: string; description?: string; content?: string; is_active?: boolean }) {
-  const res = await apiClient.put<Skill>(`/admin/organizations/${orgId}/skills/${skillId}`, data);
+export async function updateSkill(orgId: string, skillId: string, data: { name?: string; description?: string; content?: string }) {
+  const res = await agentClient.put<Skill>(`/api/admin/${orgId}/skills/${skillId}`, data);
   return res.data;
 }
 
 export async function deleteSkill(orgId: string, skillId: string) {
-  await apiClient.delete(`/admin/organizations/${orgId}/skills/${skillId}`);
+  await agentClient.delete(`/api/admin/${orgId}/skills/${skillId}`);
 }
 
 export async function exportSkills(orgId: string) {
-  const res = await apiClient.get<Skill[]>(`/admin/organizations/${orgId}/skills/export`);
+  const res = await agentClient.get<Skill[]>(`/api/admin/${orgId}/skills/export`);
   return res.data;
 }
 
 export async function importSkills(orgId: string, skills: { name: string; description?: string; content: string }[]) {
-  const res = await apiClient.post<{ created: number; errors: string[] }>(`/admin/organizations/${orgId}/skills/import`, { skills });
+  const res = await agentClient.post<{ imported: number; skills: Skill[] }>(
+    `/api/admin/${orgId}/skills/import`,
+    { skills }
+  );
   return res.data;
 }
 
-
-export async function pushSkillToAnthropic(orgId: string, skillId: string, apiKey: string) {
-  const res = await apiClient.post<{ external_ref: string }>(`/admin/organizations/${orgId}/skills/${skillId}/push-to-anthropic`, { api_key: apiKey });
+export async function pushSkillToAnthropic(orgId: string, skillId: string) {
+  const res = await agentClient.post<{ externalRef: string }>(
+    `/api/admin/${orgId}/skills/${skillId}/push-to-anthropic`
+  );
   return res.data;
 }

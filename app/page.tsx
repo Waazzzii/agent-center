@@ -10,7 +10,7 @@ export default function HomePage() {
 
   useEffect(() => {
     if (admin) {
-      router.push('/organizations');
+      router.push('/agents');
     } else {
       router.push('/login');
     }

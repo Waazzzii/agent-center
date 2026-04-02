@@ -69,7 +69,7 @@ export function ResponsiveTable<T>({
     }
   };
 
-  if (data.length === 0) {
+  if (!data || data.length === 0) {
     return (
       <div className="py-12 text-center text-muted-foreground">
         {emptyMessage}
