@@ -251,19 +251,27 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
         )}
 
         {/* ── Browser viewport ───────────────────────────────── */}
-        <div className="flex-1 min-h-0 bg-black overflow-hidden">
+        <div className="flex-1 min-h-0 bg-black overflow-hidden relative">
             {loadingNovnc ? (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
                 <Loader2 className="h-8 w-8 animate-spin" />
                 <p className="text-sm">Starting browser view…</p>
               </div>
             ) : iframeUrl ? (
-              <iframe
-                src={iframeUrl}
-                className="w-full h-full border-0"
-                title="Agent browser view"
-                allow="clipboard-read; clipboard-write"
-              />
+              <>
+                <iframe
+                  src={iframeUrl}
+                  className="w-full h-full border-0"
+                  title="Agent browser view"
+                  allow="clipboard-read; clipboard-write"
+                />
+                {/* Block mouse/keyboard interaction with the browser except when
+                    login is required — that's the only state where the human
+                    needs to type credentials directly into the browser. */}
+                {!isAuthRequired && (
+                  <div className="absolute inset-0 cursor-not-allowed" />
+                )}
+              </>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
                 <Monitor className="h-10 w-10 opacity-30" />
