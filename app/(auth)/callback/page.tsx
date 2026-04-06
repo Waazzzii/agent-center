@@ -55,8 +55,8 @@ function CallbackContent() {
         setAuth(admin, accessToken, refreshToken);
 
         // Honour any stored post-login destination (e.g. deep-linked from another center)
-        const intendedPath = sessionStorage.getItem('post_login_redirect');
-        sessionStorage.removeItem('post_login_redirect');
+        const intendedPath = localStorage.getItem('post_login_redirect');
+        localStorage.removeItem('post_login_redirect');
         if (intendedPath && intendedPath !== '/login') {
           router.push(intendedPath);
         } else {

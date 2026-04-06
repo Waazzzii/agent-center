@@ -90,7 +90,7 @@ export function ResponsiveTable<T>({
               {columns.map((column) => (
                 <th
                   key={column.key}
-                  className={cn('text-foreground h-10 px-2 text-left align-middle font-medium', column.thClassName)}
+                  className={cn('text-foreground h-10 px-2 first:pl-4 text-left align-middle font-medium', column.thClassName)}
                 >
                   {column.sortable && onSort ? (
                     <button
@@ -132,7 +132,7 @@ export function ResponsiveTable<T>({
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className={cn('p-2 align-middle', !column.desktopRender && 'overflow-hidden', column.tdClassName)}
+                      className={cn('p-2 first:pl-4 align-middle', !column.desktopRender && 'overflow-hidden', column.tdClassName)}
                     >
                       {column.desktopRender ? (
                         column.desktopRender(item)

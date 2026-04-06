@@ -6,6 +6,7 @@ export interface Agent {
   name: string;
   description?: string | null;
   is_active: boolean;
+  requires_browser: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -14,7 +15,7 @@ export interface AgentAction {
   id: string;
   agent_id: string;
   name: string;
-  action_type: 'agent' | 'approval';
+  action_type: 'agent' | 'approval' | 'login';
   prompt?: string | null;
   connector_ids?: string[] | null;
   model: string;
@@ -51,7 +52,7 @@ export interface AgentApprovalItem {
   action_id: string;
   action_name: string;
   action_type: string;
-  status: 'awaiting_approval' | 'approved' | 'denied';
+  status: 'awaiting_approval' | 'approved' | 'denied' | 'aborted';
   output: string | null;
   executed_by: string | null;
   started_at: string;
@@ -62,15 +63,15 @@ export interface AgentApprovalItem {
 }
 
 export interface AgentDetail extends Agent {
-  actions: AgentAction[];
-  triggers: AgentTrigger[];
+  actions: AgentAction[] | null;
+  triggers: AgentTrigger[] | null;
 }
 
 /** Status of a browser-based agent run (tracked in agent-backend memory) */
 export interface BrowserRunStatus {
   runId: string;
   agentId: string;
-  status: 'pending' | 'running' | 'auth_required' | 'completed' | 'failed';
+  status: 'pending' | 'running' | 'auth_required' | 'awaiting_approval' | 'completed' | 'failed' | 'aborted';
   steps: Array<{ iteration?: number; role?: string; timestamp: string; content?: unknown }>;
   error: string | null;
   createdAt: string;
@@ -78,9 +79,10 @@ export interface BrowserRunStatus {
 }
 
 export interface NoVNCInfo {
-  agentId: string;
+  runId: string;
   wsUrl: string;
-  /** Relative path to embed in an iframe: /novnc/vnc.html?... */
+  novncPort: number;
+  /** Relative path to embed in an iframe: /live/run/:runId */
   viewerUrl: string;
 }
 
@@ -105,7 +107,7 @@ export async function createAgent(orgId: string, data: { name: string; descripti
   return res.data;
 }
 
-export async function updateAgent(orgId: string, agentId: string, data: { name?: string; description?: string; is_active?: boolean }) {
+export async function updateAgent(orgId: string, agentId: string, data: { name?: string; description?: string; is_active?: boolean; requires_browser?: boolean }) {
   const res = await agentClient.patch<Agent>(`/api/admin/${orgId}/agents/${agentId}`, data);
   return res.data;
 }
@@ -189,7 +191,7 @@ export interface ApprovalsListResponse {
   total_pages: number;
 }
 
-export async function getApprovals(orgId: string, params?: { status?: string; page?: number; limit?: number }) {
+export async function getApprovals(orgId: string, params?: { status?: string; agent_id?: string; execution_id?: string; page?: number; limit?: number }) {
   const res = await agentClient.get<ApprovalsListResponse>(`/api/admin/${orgId}/approvals`, { params });
   return res.data;
 }
@@ -211,9 +213,11 @@ export interface ExecutionRun {
   agent_id: string;
   organization_id: string;
   agent_name: string;
+  agent_requires_browser: boolean;
   trigger_type: 'webhook' | 'cron' | 'manual';
   trigger_id: string | null;
-  status: 'executing' | 'completed' | 'failed' | 'awaiting_approval';
+  status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval';
+  display_status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'awaiting_login';
   error_message: string | null;
   started_at: string;
   completed_at: string | null;
@@ -223,9 +227,12 @@ export interface ExecutionRun {
 
 export interface ExecutionAction {
   id: string;
-  action_type: 'agent' | 'approval';
+  action_name: string | null;
+  action_type: 'agent' | 'approval' | 'login';
   status: string;
   started_at: string;
+  output: string | null;
+  error_message: string | null;
 }
 
 export interface ExecutionHistoryResponse {
@@ -275,9 +282,18 @@ export async function resumeBrowserRun(runId: string): Promise<void> {
 }
 
 /**
- * Get the noVNC viewer URL for a given agentId.
+ * Abort a running or paused agent run immediately.
  */
-export async function getNoVNCInfo(agentId: string): Promise<NoVNCInfo> {
-  const res = await agentClient.get<NoVNCInfo>(`/novnc/${agentId}`);
+export async function abortBrowserRun(runId: string): Promise<void> {
+  await agentClient.post(`/agent/run/${runId}/abort`);
+}
+
+/**
+ * Get the noVNC viewer URL for a specific run.
+ * Also lazily starts x11vnc + websockify for that run's pool slot
+ * so the browser is visible as soon as the dialog opens.
+ */
+export async function getNoVNCInfo(runId: string): Promise<NoVNCInfo> {
+  const res = await agentClient.get<NoVNCInfo>(`/novnc/run/${runId}`);
   return res.data;
 }

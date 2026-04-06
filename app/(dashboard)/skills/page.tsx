@@ -4,19 +4,37 @@ import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { getSkills, deleteSkill, importSkills, getSkillUsages, type Skill } from '@/lib/api/skills';
+import { getSkills, deleteSkill, getSkillUsages, type Skill, type SkillUsage } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { Textarea } from '@/components/ui/textarea';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Upload, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Pencil, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 
 const PAGE_SIZE = 20;
+
+function AssignedTo({ usages }: { usages: SkillUsage[] }) {
+  if (!usages || usages.length === 0) {
+    return <span className="text-muted-foreground text-sm">None</span>;
+  }
+  const MAX_SHOW = 2;
+  const shown = usages.slice(0, MAX_SHOW);
+  const extra = usages.length - MAX_SHOW;
+  return (
+    <span className="text-sm">
+      {shown.map((u, i) => (
+        <span key={u.action_id}>
+          {i > 0 && <span className="text-muted-foreground">, </span>}
+          <span className="font-medium">{u.agent_name}</span>
+          <span className="text-muted-foreground"> ({u.action_name})</span>
+        </span>
+      ))}
+      {extra > 0 && <span className="text-muted-foreground"> +{extra} more</span>}
+    </span>
+  );
+}
 
 export default function SkillsPage() {
   const router = useRouter();
@@ -30,10 +48,6 @@ export default function SkillsPage() {
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
 
-  // Import dialog
-  const [importOpen, setImportOpen] = useState(false);
-  const [importJson, setImportJson] = useState('');
-  const [importing, setImporting] = useState(false);
 
   useEffect(() => {
     if (selectedOrgId) loadSkills(1);
@@ -61,12 +75,11 @@ export default function SkillsPage() {
   const handleDelete = async (skillId: string, name: string) => {
     if (!selectedOrgId) return;
 
-    // Fetch usages before confirming
-    let usages: { action_id: string; action_name: string; agent_id: string; agent_name: string }[] = [];
+    let usages: SkillUsage[] = [];
     try {
       usages = await getSkillUsages(selectedOrgId, skillId);
     } catch {
-      // non-fatal — proceed without usage info
+      // non-fatal
     }
 
     const description = (
@@ -109,41 +122,6 @@ export default function SkillsPage() {
     }
   };
 
-  const handleImport = async () => {
-    if (!selectedOrgId) return;
-    let parsed: { name: string; description?: string; content: string }[];
-    try {
-      parsed = JSON.parse(importJson);
-      if (!Array.isArray(parsed)) throw new Error('Expected a JSON array');
-    } catch {
-      toast.error('Invalid JSON — expected an array of { name, content } objects');
-      return;
-    }
-    try {
-      setImporting(true);
-      const result = await importSkills(selectedOrgId, parsed);
-      toast.success(`Imported ${result.imported} skill(s)`);
-      setImportOpen(false);
-      setImportJson('');
-      await loadSkills(1);
-    } catch (err: any) {
-      toast.error(err.message || 'Import failed');
-    } finally {
-      setImporting(false);
-    }
-  };
-
-  const sourceLabel: Record<Skill['source'], string> = {
-    manual: 'Manual',
-    anthropic_import: 'Anthropic',
-    file_import: 'Import',
-  };
-
-  const sourceVariant: Record<Skill['source'], 'default' | 'secondary' | 'outline'> = {
-    manual: 'default',
-    anthropic_import: 'secondary',
-    file_import: 'outline',
-  };
 
   if (loading && selectedOrgId) {
     return (
@@ -160,18 +138,12 @@ export default function SkillsPage() {
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="text-3xl font-bold">Skills</h1>
-          <p className="text-muted-foreground">Reusable prompt instructions synced with the Anthropic Prompt Library</p>
+          <p className="text-muted-foreground">Reusable prompt instructions for agent steps</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => setImportOpen(true)} disabled={!selectedOrgId}>
-            <Upload className="mr-2 h-4 w-4" />
-            Import
-          </Button>
-          <Button disabled={!selectedOrgId} onClick={() => router.push('/skills/create')}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Skill
-          </Button>
-        </div>
+        <Button size="sm" disabled={!selectedOrgId} onClick={() => router.push('/skills/create')}>
+          <Plus className="mr-2 h-4 w-4" />
+          New Skill
+        </Button>
       </div>
 
       {!selectedOrgId ? (
@@ -191,7 +163,7 @@ export default function SkillsPage() {
               data={skills}
               getRowKey={(s) => s.id}
               onRowClick={(s) => router.push(`/skills/${s.id}/edit`)}
-              emptyMessage="No skills yet. Create one or sync from Anthropic."
+              emptyMessage="No skills yet. Create one or import from JSON."
               columns={[
                 {
                   key: 'name',
@@ -208,20 +180,13 @@ export default function SkillsPage() {
                   ),
                 },
                 {
-                  key: 'source',
-                  label: 'Source',
-                  render: (s) => <Badge variant={sourceVariant[s.source]}>{sourceLabel[s.source]}</Badge>,
-                },
-                {
-                  key: 'status',
-                  label: 'Status',
-                  render: (s) => s.is_active
-                    ? <Badge variant="default">Active</Badge>
-                    : <Badge variant="secondary">Inactive</Badge>,
+                  key: 'assigned_to',
+                  label: 'Assigned To',
+                  render: (s) => <AssignedTo usages={s.usages ?? []} />,
                 },
                 {
                   key: 'actions',
-                  label: 'Actions',
+                  label: '',
                   desktopRender: (s) => (
                     <div className="flex items-center justify-end gap-2">
                       <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/skills/${s.id}/edit`); }}>
@@ -276,31 +241,6 @@ export default function SkillsPage() {
           </CardContent>
         </Card>
       )}
-
-      {/* Import Dialog */}
-      <Dialog open={importOpen} onOpenChange={setImportOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Import Skills</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
-            <p className="text-sm text-muted-foreground">Paste a JSON array of skills. Each item needs <code>name</code> and <code>content</code>.</p>
-            <Textarea
-              placeholder={'[\n  { "name": "Summarize", "content": "Summarize the following..." }\n]'}
-              value={importJson}
-              onChange={(e) => setImportJson(e.target.value)}
-              rows={8}
-              className="font-mono text-xs"
-            />
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setImportOpen(false)}>Cancel</Button>
-            <Button onClick={handleImport} disabled={importing || !importJson.trim()}>
-              {importing ? 'Importing…' : 'Import'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
     </div>
   );

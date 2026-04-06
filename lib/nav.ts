@@ -13,9 +13,10 @@ export interface NavItem {
 /** Main org nav — shown in the regular (non-settings) panel, alphabetical */
 export const orgMainNavItems: NavItem[] = [
   { label: 'Agentic Workflows', href: '/agents',        permissionKeys: ['agent_center_user'] },
-  { label: 'Agent History',     href: '/agent-history', permissionKeys: ['agent_center_user'] },
+  { label: 'Agent Executions',  href: '/agent-history', permissionKeys: ['agent_center_user'] },
   { label: 'Approvals',         href: '/approvals',     permissionKeys: ['agent_center_user'] },
   { label: 'Skills',            href: '/skills',        permissionKeys: ['agent_center_user'] },
+  { label: 'Access',            href: '/access',        permissionKeys: ['agent_center_user'] },
 ];
 
 /** Settings nav — no settings in the Agent Center */

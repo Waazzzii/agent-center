@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "next-themes";
 import { TokenRefreshProvider } from "@/components/auth/TokenRefreshProvider";
+import { getAgentCenterBranding } from "@/lib/branding";
+import { headers } from "next/headers";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -22,13 +24,6 @@ export const metadata: Metadata = {
   },
   description: "Wazzi Admin Dashboard - Manage organizations, connectors, users, and OAuth clients",
   applicationName: "Wazzi",
-  icons: {
-    icon: [
-      { url: '/favicon.png', type: 'image/png' },
-      { url: '/favicon.ico', sizes: '32x32' },
-    ],
-    apple: '/apple-icon',
-  },
 };
 
 export const viewport: Viewport = {
@@ -42,13 +37,34 @@ export const viewport: Viewport = {
   ],
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const incomingHeaders = await headers();
+  const host = incomingHeaders.get("host") ?? "";
+
+  const branding = await getAgentCenterBranding(host);
+
+  const faviconVersion = branding.favicon_storage_path?.split("/").pop()?.split(".")[0]?.slice(-12);
+  const logoVersion    = branding.logo_storage_path?.split("/").pop()?.split(".")[0]?.slice(-12);
+
+  const faviconHref = branding.favicon_storage_path
+    ? `/api/branding/favicon?v=${faviconVersion}`
+    : branding.logo_storage_path
+    ? `/api/branding/logo?v=${logoVersion}`
+    : '/favicon.png';
+
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <link rel="icon" href={faviconHref} />
+        <link rel="apple-touch-icon" href={faviconHref} />
+        {branding.custom_theme && (
+          <style id="agc-custom-theme" dangerouslySetInnerHTML={{ __html: branding.custom_theme }} />
+        )}
+      </head>
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >

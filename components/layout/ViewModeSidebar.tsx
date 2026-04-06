@@ -18,6 +18,7 @@ import {
   Bot,
   CheckCircle,
   History,
+  ShieldCheck,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -46,8 +47,14 @@ const MAIN_ICONS: Record<string, React.ElementType> = {
   '/agent-history': History,
   '/approvals':     CheckCircle,
   '/skills':        Wand2,
+  '/access':        ShieldCheck,
 };
-const orgMainNavItems: NavItem[] = mainItems.map(({ children: _ch, ...i }) => ({ ...i, icon: MAIN_ICONS[i.href] ?? Bot }));
+const CHILD_ICONS: Record<string, React.ElementType> = {};
+const orgMainNavItems: NavItem[] = mainItems.map((item) => ({
+  ...item,
+  icon: MAIN_ICONS[item.href] ?? Bot,
+  children: item.children?.map((child) => ({ ...child, icon: CHILD_ICONS[child.href] ?? Bot })),
+}));
 
 export function ViewModeSidebar() {
   const pathname = usePathname();

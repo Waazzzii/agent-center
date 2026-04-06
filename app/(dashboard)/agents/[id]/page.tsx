@@ -1,6 +1,6 @@
 'use client';
 
-import { use, useEffect, useState, useCallback } from 'react';
+import { use, useEffect, useState, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
@@ -9,36 +9,45 @@ import {
   getActions, createAction, updateAction, deleteAction, reorderActions,
   createTrigger, deleteTrigger,
   generateWebhookKey, getWebhookKey,
-  getApprovals, runAgent,
+  getApprovals,
   type AgentDetail, type AgentAction, type AgentTrigger, type AgentWebhookKey,
 } from '@/lib/api/agents';
 import { getConnectors } from '@/lib/api/connectors';
 import { getSkills, type Skill } from '@/lib/api/skills';
+import {
+  getAgentAccessGroups,
+  getAssignedAccessGroups,
+  getAgentGroupMembers,
+  assignAccessGroupToAgent,
+  unassignAccessGroupFromAgent,
+  type AgentAccessGroup,
+  type AgentAccessGroupMember,
+} from '@/lib/api/agent-access-groups';
 import type { OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { ArrowLeft, Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical, Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Search } from 'lucide-react';
+import {
+  ArrowLeft, Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
+  Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Search, Monitor,
+  LogIn, ShieldCheck, ExternalLink, GitBranch, Settings, Users,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 // ─── Cron description helper ──────────────────────────────────
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
-const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 
 function pad(n: number) { return String(n).padStart(2, '0'); }
-function fmtHour(h: number) {
-  if (h === 0) return '12:00 AM';
-  if (h === 12) return '12:00 PM';
-  return h < 12 ? `${h}:00 AM` : `${h - 12}:00 PM`;
-}
 
 export function describeCron(expr: string): string {
   const parts = expr.trim().split(/\s+/);
@@ -47,7 +56,6 @@ export function describeCron(expr: string): string {
 
   if (min.startsWith('*/')) return `Every ${min.slice(2)} minutes`;
   if (hour.startsWith('*/')) return `Every ${hour.slice(2)} hours`;
-
   if (min === '*' && hour === '*') return 'Every minute';
 
   const minutes = min === '*' ? '00' : pad(parseInt(min));
@@ -78,8 +86,6 @@ export function describeCron(expr: string): string {
 }
 
 function nextFirings(expr: string, count = 3): string[] {
-  // Simple approximation: just show the next occurrences relative to now
-  // for common patterns
   const parts = expr.trim().split(/\s+/);
   if (parts.length !== 5) return [];
   const [min, hour] = parts as [string, string];
@@ -149,7 +155,6 @@ function MultiSelectPicker({
       <Label>{label}</Label>
       {description && <p className="text-xs text-muted-foreground">{description}</p>}
 
-      {/* Pills + Add button on the same row */}
       <div className="flex flex-wrap gap-1.5 items-center">
         {selected.map((item) => (
           <span key={item.id} className={cn(pillBase, pillClass ?? 'bg-secondary text-secondary-foreground border-border')}>
@@ -175,7 +180,6 @@ function MultiSelectPicker({
         )}
       </div>
 
-      {/* Search dropdown — shown below when open */}
       {open && (
         <div className="rounded-md border shadow-sm bg-background">
           <div className="flex items-center border-b px-2 gap-1.5">
@@ -219,6 +223,30 @@ function MultiSelectPicker({
   );
 }
 
+// ─── User avatar ──────────────────────────────────────────────
+
+function UserAvatar({ firstName, lastName, email }: { firstName: string | null; lastName: string | null; email: string }) {
+  const initials = firstName && lastName
+    ? `${firstName[0]}${lastName[0]}`
+    : firstName
+    ? firstName[0]!
+    : email[0]!;
+  return (
+    <div className="h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0 select-none">
+      {initials.toUpperCase()}
+    </div>
+  );
+}
+
+// Group badge colors (cycled by index)
+const GROUP_BADGE_COLORS = [
+  'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-950/30 dark:border-blue-800 dark:text-blue-400',
+  'bg-violet-50 border-violet-200 text-violet-700 dark:bg-violet-950/30 dark:border-violet-800 dark:text-violet-400',
+  'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-400',
+  'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400',
+  'bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-950/30 dark:border-rose-800 dark:text-rose-400',
+];
+
 // ─── Main Component ───────────────────────────────────────────
 
 export default function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -239,7 +267,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // Action dialog
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [editingAction, setEditingAction] = useState<AgentAction | null>(null);
-  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '' });
+  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '' });
   const [savingAction, setSavingAction] = useState(false);
 
   // Trigger dialog
@@ -254,14 +282,22 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
-  // Manual run
-  const [runningAgent, setRunningAgent] = useState(false);
-
-  // Agent edit
-  const [editingAgent, setEditingAgent] = useState(false);
+  // Settings (inline, replaces modal)
   const [agentName, setAgentName] = useState('');
   const [agentDesc, setAgentDesc] = useState('');
   const [agentActive, setAgentActive] = useState(true);
+  const [agentRequiresBrowser, setAgentRequiresBrowser] = useState(false);
+  const [settingsDirty, setSettingsDirty] = useState(false);
+  const [savingSettings, setSavingSettings] = useState(false);
+
+  // Access groups
+  const [assignedGroups, setAssignedGroups] = useState<AgentAccessGroup[]>([]);
+  const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
+
+  // Approvers tab — group members loaded lazily
+  const [groupMembers, setGroupMembers] = useState<Record<string, AgentAccessGroupMember[]>>({});
+  const [membersLoading, setMembersLoading] = useState(false);
+  const [activeTab, setActiveTab] = useState('workflow');
 
   useEffect(() => {
     if (selectedOrgId && agentId) loadAll();
@@ -272,15 +308,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      let [agentData, actionsData, connData, hitlData, skillsData] = await Promise.all([
+      let [agentData, actionsData, connData, hitlData, skillsData, assignedGroupsData, allGroupsData] = await Promise.all([
         getAgent(selectedOrgId, agentId),
         getActions(selectedOrgId, agentId),
         getConnectors(selectedOrgId),
         getApprovals(selectedOrgId),
         getSkills(selectedOrgId),
+        getAssignedAccessGroups(selectedOrgId, agentId),
+        getAgentAccessGroups(selectedOrgId),
       ]);
-      // Ensure a manual trigger always exists as the default fallback
-      if (agentData.triggers.length === 0) {
+      if ((agentData.triggers ?? []).length === 0) {
         await createTrigger(selectedOrgId, agentId, { trigger_type: 'manual' });
         agentData = await getAgent(selectedOrgId, agentId);
       }
@@ -288,12 +325,17 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setAgentName(agentData.name);
       setAgentDesc(agentData.description ?? '');
       setAgentActive(agentData.is_active);
+      setAgentRequiresBrowser(agentData.requires_browser ?? false);
+      setSettingsDirty(false);
       setActions((actionsData ?? []).sort((a, b) => a.order_index - b.order_index));
-      setTriggers(agentData.triggers);
-      const webhookTrigger = agentData.triggers.find((t) => t.trigger_type === 'webhook');
+      const triggers = agentData.triggers ?? [];
+      setTriggers(triggers);
+      const webhookTrigger = triggers.find((t) => t.trigger_type === 'webhook');
       if (webhookTrigger) loadWebhookKey(webhookTrigger.id);
       setConnectors(connData.connectors);
-      setSkills((skillsData.items ?? []).filter((s) => s.is_active));
+      setSkills(skillsData.items ?? []);
+      setAssignedGroups(assignedGroupsData);
+      setAllGroups(allGroupsData);
       setPendingHitlCount(hitlData.items.filter((h) => h.agent_id === agentId && h.status === 'awaiting_approval').length);
     } catch (err: any) {
       toast.error('Failed to load agent');
@@ -311,24 +353,65 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     } catch { /* silent */ }
   };
 
+  // Load members for all assigned groups (used by Approvers tab)
+  const loadGroupMembers = useCallback(async (groups: AgentAccessGroup[]) => {
+    if (!selectedOrgId || groups.length === 0) { setGroupMembers({}); return; }
+    setMembersLoading(true);
+    try {
+      const results = await Promise.all(
+        groups.map(async (g) => ({ groupId: g.id, members: await getAgentGroupMembers(selectedOrgId, g.id) }))
+      );
+      const map: Record<string, AgentAccessGroupMember[]> = {};
+      for (const { groupId, members } of results) map[groupId] = members;
+      setGroupMembers(map);
+    } catch {
+      toast.error('Failed to load group members');
+    } finally {
+      setMembersLoading(false);
+    }
+  }, [selectedOrgId]);
+
+  // Trigger member load when switching to approvers tab
+  const handleTabChange = (tab: string) => {
+    setActiveTab(tab);
+    if (tab === 'approvers') loadGroupMembers(assignedGroups);
+  };
+
+  // Reload members after group assignment changes on the approvers tab
+  useEffect(() => {
+    if (activeTab === 'approvers') loadGroupMembers(assignedGroups);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [assignedGroups]);
+
   // ── Actions ──
 
-  const openNewAction = () => {
+  const openNewAction = (type: 'agent' | 'approval' | 'login') => {
     setEditingAction(null);
-    setActionForm({ name: '', action_type: 'agent', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '' });
+    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '' });
     setActionDialogOpen(true);
   };
 
   const openEditAction = (action: AgentAction) => {
     setEditingAction(action);
+    let loginUrl = '';
+    let loginVerify = '';
+    if (action.action_type === 'login' && action.prompt) {
+      try {
+        const parsed = JSON.parse(action.prompt);
+        loginUrl = parsed.url ?? '';
+        loginVerify = parsed.verify ?? '';
+      } catch { /* leave empty */ }
+    }
     setActionForm({
       name: action.name,
       action_type: action.action_type,
-      prompt: action.prompt ?? '',
+      prompt: action.action_type === 'login' ? '' : (action.prompt ?? ''),
       model: action.model ?? 'claude-sonnet-4-6',
       connector_ids: action.connector_ids ?? [],
       skill_ids: action.skill_ids ?? [],
       approval_instructions: action.approval_instructions ?? '',
+      loginUrl,
+      loginVerify,
     });
     setActionDialogOpen(true);
   };
@@ -339,18 +422,31 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setSavingAction(true);
       const validConnectorIds = new Set(connectors.map((c) => c.id));
       const validSkillIds = new Set(skills.map((s) => s.id));
-      const payload = {
-        name: actionForm.name.trim(),
-        action_type: actionForm.action_type,
-        ...(actionForm.action_type === 'agent' ? {
+
+      let payload: Record<string, unknown>;
+      if (actionForm.action_type === 'agent') {
+        payload = {
+          name: actionForm.name.trim(),
+          action_type: 'agent',
           prompt: actionForm.prompt.trim(),
           model: actionForm.model,
           connector_ids: actionForm.connector_ids.filter((id) => validConnectorIds.has(id)),
           skill_ids: actionForm.skill_ids.filter((id) => validSkillIds.has(id)),
-        } : {
+        };
+      } else if (actionForm.action_type === 'login') {
+        payload = {
+          name: actionForm.name.trim(),
+          action_type: 'login',
+          prompt: JSON.stringify({ url: actionForm.loginUrl.trim(), verify: actionForm.loginVerify.trim() }),
+          model: actionForm.model,
+        };
+      } else {
+        payload = {
+          name: actionForm.name.trim(),
+          action_type: 'approval',
           approval_instructions: actionForm.approval_instructions.trim(),
-        }),
-      };
+        };
+      }
       if (editingAction) {
         await updateAction(selectedOrgId, agentId, editingAction.id, payload);
         toast.success('Action updated');
@@ -393,7 +489,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       toast.success('Trigger created');
       setTriggerDialogOpen(false);
       await loadAll();
-      // Webhook triggers require a key — generate and reveal it immediately
       if (trigger.trigger_type === 'webhook') {
         const keyResult = await generateWebhookKey(selectedOrgId, agentId, trigger.id);
         setNewRawKey(keyResult.key);
@@ -413,7 +508,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!confirmed) return;
     try {
       await deleteTrigger(selectedOrgId, agentId, triggerId);
-      // Always ensure a manual trigger exists as the fallback
       if (deletedTrigger?.trigger_type !== 'manual') {
         await createTrigger(selectedOrgId, agentId, { trigger_type: 'manual' });
       }
@@ -421,19 +515,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       await loadAll();
     } catch (err: any) {
       toast.error(err.message || 'Failed to remove trigger');
-    }
-  };
-
-  const handleRunAgent = async () => {
-    if (!selectedOrgId) return;
-    try {
-      setRunningAgent(true);
-      await runAgent(selectedOrgId, agentId);
-      toast.success('Agent run started — execution will be logged as Manual');
-    } catch (err: any) {
-      toast.error(err.response?.data?.message || err.message || 'Failed to run agent');
-    } finally {
-      setRunningAgent(false);
     }
   };
 
@@ -448,26 +529,45 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
-  // ── Agent edit ──
+  // ── Settings ──
 
-  const handleSaveAgent = async () => {
+  const handleSaveSettings = async () => {
     if (!selectedOrgId) return;
     try {
-      await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined, is_active: agentActive });
+      setSavingSettings(true);
+      await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined, is_active: agentActive, requires_browser: agentRequiresBrowser });
       toast.success('Agent updated');
-      setEditingAgent(false);
+      setSettingsDirty(false);
       await loadAll();
     } catch (err: any) {
       toast.error(err.message || 'Failed to update agent');
+    } finally {
+      setSavingSettings(false);
     }
   };
 
+  // ── Computed ──
+
   const triggerIcon = { webhook: <Webhook className="h-4 w-4" />, cron: <Clock className="h-4 w-4" />, manual: <Play className="h-4 w-4" /> };
   const triggerLabel = { webhook: 'Webhook', cron: 'Cron Schedule', manual: 'Manual Only' };
-
-  // Only one trigger is supported in the UI
-  // Prefer webhook/cron over manual — manual is just the fallback
   const trigger = triggers.find(t => t.trigger_type !== 'manual') ?? triggers.find(t => t.trigger_type === 'manual') ?? null;
+
+  // Build user → groups mapping for Approvers tab
+  const authorizedUsers = useMemo(() => {
+    const map = new Map<string, { user: AgentAccessGroupMember; groups: Array<{ group: AgentAccessGroup; colorClass: string }> }>();
+    assignedGroups.forEach((group, groupIdx) => {
+      const colorClass = GROUP_BADGE_COLORS[groupIdx % GROUP_BADGE_COLORS.length]!;
+      for (const member of (groupMembers[group.id] ?? [])) {
+        if (!map.has(member.id)) map.set(member.id, { user: member, groups: [] });
+        map.get(member.id)!.groups.push({ group, colorClass });
+      }
+    });
+    return Array.from(map.values()).sort((a, b) => {
+      const nameA = [a.user.first_name, a.user.last_name].filter(Boolean).join(' ') || a.user.email;
+      const nameB = [b.user.first_name, b.user.last_name].filter(Boolean).join(' ') || b.user.email;
+      return nameA.localeCompare(nameB);
+    });
+  }, [assignedGroups, groupMembers]);
 
   const handleDropAction = async (dropIdx: number) => {
     if (dragIndex === null || dragIndex === dropIdx) return;
@@ -503,35 +603,22 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         </Button>
 
         <div className="flex-1 min-w-0">
-          <div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <h1 className="text-2xl font-bold">{agent.name}</h1>
-              <Badge variant={agent.is_active ? 'default' : 'secondary'}>{agent.is_active ? 'Active' : 'Inactive'}</Badge>
-              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setEditingAgent(true)}>
-                <Pencil className="h-3.5 w-3.5" />
-              </Button>
-            </div>
-            {agent.description && <p className="text-sm text-muted-foreground mt-0.5">{agent.description}</p>}
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl font-bold">{agent.name}</h1>
+            <Badge variant={agent.is_active ? 'default' : 'secondary'}>{agent.is_active ? 'Active' : 'Inactive'}</Badge>
+            {agent.requires_browser && (
+              <Badge variant="outline" className="gap-1 border-sky-400 text-sky-600 dark:text-sky-400">
+                <Monitor className="h-3 w-3" />Browser
+              </Badge>
+            )}
           </div>
+          {agent.description && <p className="text-sm text-muted-foreground mt-0.5">{agent.description}</p>}
         </div>
 
-        {/* Quick links — top right */}
+        {/* Quick links */}
         <div className="flex items-center gap-2 shrink-0">
-          <Button
-            variant="outline"
-            size="sm"
-            className="h-8 text-xs gap-1.5"
-            disabled={runningAgent || !agent.is_active}
-            onClick={handleRunAgent}
-            title="Runs the agent manually — logged as Manual trigger"
-          >
-            {runningAgent
-              ? <RefreshCw className="h-3.5 w-3.5 animate-spin" />
-              : <PlayCircle className="h-3.5 w-3.5 text-green-600" />}
-            Run Now
-          </Button>
           <Link
-            href="/approvals"
+            href={`/approvals?agent_id=${agentId}`}
             className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted/50 transition-colors"
           >
             <CheckCircle2 className="h-3.5 w-3.5 text-orange-500" />
@@ -550,212 +637,457 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         </div>
       </div>
 
-      {/* ── Workflow Builder ─────────────────────────────────── */}
-      <div className="max-w-2xl space-y-0">
+      {/* ── Tabs ─────────────────────────────────────────────── */}
+      <Tabs defaultValue="workflow" onValueChange={handleTabChange}>
+        <TabsList className="grid w-full max-w-sm grid-cols-3">
+          <TabsTrigger value="workflow">
+            <GitBranch className="h-4 w-4 mr-2" />
+            Workflow
+          </TabsTrigger>
+          <TabsTrigger value="settings">
+            <Settings className="h-4 w-4 mr-2" />
+            Settings
+          </TabsTrigger>
+          <TabsTrigger value="approvers">
+            <Users className="h-4 w-4 mr-2" />
+            Approvers
+          </TabsTrigger>
+        </TabsList>
 
-        {/* Trigger */}
-        <div>
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-2 px-1">Trigger</p>
-          {trigger ? (
-            <Card className="border-primary/40 bg-primary/5 dark:bg-primary/10">
-              <CardContent className="py-3 px-4">
-                <div className="flex items-start gap-3">
-                  <div className="p-2 rounded-lg bg-primary/15 text-primary mt-0.5 shrink-0">
-                    {triggerIcon[trigger.trigger_type as keyof typeof triggerIcon]}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-sm">{triggerLabel[trigger.trigger_type as keyof typeof triggerLabel]}</span>
-                    </div>
-                    {trigger.trigger_type === 'manual' && (
-                      <div className="mt-1.5 space-y-2">
-                        <p className="text-xs text-muted-foreground">This agent can only be run manually. Manual executions are always available regardless of trigger type — add a Webhook or Cron trigger to also automate runs.</p>
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setTriggerDialogOpen(true)}>
-                          <Plus className="mr-1.5 h-3 w-3" />Add Webhook or Cron trigger
-                        </Button>
+        {/* ── Workflow Tab ──────────────────────────────────── */}
+        <TabsContent value="workflow" className="mt-4">
+          <div className="max-w-2xl space-y-0">
+
+            {/* Trigger */}
+            <div>
+              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-2 px-1">Trigger</p>
+              {trigger ? (
+                <Card className="border-primary/40 bg-primary/5 dark:bg-primary/10">
+                  <CardContent className="py-3 px-4">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2 rounded-lg bg-primary/15 text-primary mt-0.5 shrink-0">
+                        {triggerIcon[trigger.trigger_type as keyof typeof triggerIcon]}
                       </div>
-                    )}
-                    {trigger.trigger_type === 'cron' && (
-                      <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
-                        <code className="bg-background border px-1.5 py-0.5 rounded font-mono">{String(trigger.trigger_config.cron_expr ?? '')}</code>
-                        <span>{describeCron(String(trigger.trigger_config.cron_expr ?? ''))}</span>
-                      </p>
-                    )}
-                    {trigger.trigger_type === 'webhook' && (
-                      <div className="mt-2 space-y-3">
-                        {/* URL */}
-                        <div className="flex items-center gap-2">
-                          <code className="text-xs bg-background border px-2 py-1 rounded flex-1 truncate font-mono">
-                            {`https://api.wazzi.io/webhooks/agents/${trigger.id}`}
-                          </code>
-                          <Button variant="outline" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => { navigator.clipboard.writeText(`https://api.wazzi.io/webhooks/agents/${trigger.id}`); toast.success('URL copied'); }}>
-                            <Copy className="h-3 w-3" />
-                          </Button>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-semibold text-sm">{triggerLabel[trigger.trigger_type as keyof typeof triggerLabel]}</span>
                         </div>
-                        {/* Call instructions */}
-                        <div className="rounded-md bg-muted/60 border px-3 py-2 space-y-1.5">
-                          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">How to trigger</p>
-                          <pre className="text-xs text-foreground whitespace-pre-wrap break-all leading-relaxed">{`POST https://api.wazzi.io/webhooks/agents/${trigger.id}\nX-Wazzi-Key: <your-api-key>`}</pre>
-                          <p className="text-xs text-muted-foreground">Optionally pass a JSON body — it will be available as the initial input to the first action.</p>
-                        </div>
-                        {/* Key management */}
-                        <div className="space-y-1.5">
-                          <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">API Key</p>
-                          <div className="flex items-center gap-2 text-xs">
-                            <code className="bg-background border px-2 py-1 rounded font-mono flex-1">
-                              {webhookKey ? <>{webhookKey.key_prefix}… <span className="text-muted-foreground">(created {new Date(webhookKey.created_at).toLocaleDateString()})</span></> : <span className="text-muted-foreground">Loading…</span>}
-                            </code>
-                            <Button variant="outline" size="sm" className="h-6 text-xs px-2 shrink-0" onClick={() => handleGenerateKey(trigger.id)}>
-                              <RefreshCw className="mr-1 h-3 w-3" />Regenerate
+                        {trigger.trigger_type === 'manual' && (
+                          <div className="mt-1.5 space-y-2">
+                            <p className="text-xs text-muted-foreground">This agent can only be run manually. Add a Webhook or Cron trigger to also automate runs.</p>
+                            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setTriggerDialogOpen(true)}>
+                              <Plus className="mr-1.5 h-3 w-3" />Add Webhook or Cron trigger
                             </Button>
                           </div>
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                  {trigger.trigger_type !== 'manual' && (
-                    <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => handleDeleteTrigger(trigger.id)}>
-                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                    </Button>
-                  )}
-                </div>
-              </CardContent>
-            </Card>
-          ) : (
-            <Card className="border-dashed border-2 border-primary/30 hover:border-primary/50 transition-colors">
-              <CardContent className="py-6 flex flex-col items-center gap-3">
-                <div className="p-3 rounded-full bg-muted">
-                  <Play className="h-5 w-5 text-muted-foreground" />
-                </div>
-                <div className="text-center">
-                  <p className="text-sm font-medium">No trigger set</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Choose how this agent is initiated</p>
-                </div>
-                <Button size="sm" onClick={() => setTriggerDialogOpen(true)}>
-                  <Plus className="mr-1.5 h-3.5 w-3.5" />Select Trigger
-                </Button>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-
-        {/* Connector: trigger → actions */}
-        <div className="flex justify-center py-1">
-          <div className="flex flex-col items-center">
-            <div className="w-px h-5 bg-border" />
-            <ArrowDown className="h-3.5 w-3.5 text-muted-foreground -mt-px" />
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div>
-          <div className="flex items-center justify-between mb-2 px-1">
-            <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Actions</p>
-            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={openNewAction}>
-              <Plus className="mr-1.5 h-3.5 w-3.5" />Add Action
-            </Button>
-          </div>
-
-          {actions.length === 0 ? (
-            <Card className="border-dashed border-2">
-              <CardContent className="py-8 text-center text-sm text-muted-foreground">
-                No actions yet. Add one to build your workflow.
-              </CardContent>
-            </Card>
-          ) : (
-            <div>
-              {actions.map((action, idx) => (
-                <div key={action.id}>
-                  <Card
-                    className={cn(
-                      'group transition-all duration-150 cursor-default',
-                      dragIndex === idx && 'opacity-40 scale-[0.98]',
-                      dropIndex === idx && dragIndex !== idx && 'ring-2 ring-primary ring-offset-1',
-                    )}
-                    draggable
-                    onDragStart={() => setDragIndex(idx)}
-                    onDragOver={(e) => { e.preventDefault(); setDropIndex(idx); }}
-                    onDragEnd={() => { setDragIndex(null); setDropIndex(null); }}
-                    onDrop={() => handleDropAction(idx)}
-                  >
-                    <CardContent className="py-2.5 px-3">
-                      <div className="flex items-center gap-3">
-                        {/* Drag handle */}
-                        <div className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                          <GripVertical className="h-4 w-4" />
-                        </div>
-                        {/* Step number */}
-                        <div className={cn(
-                          'w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm font-bold select-none',
-                          action.action_type === 'approval'
-                            ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                            : 'bg-primary/10 text-primary'
-                        )}>
-                          {idx + 1}
-                        </div>
-                        {/* Content */}
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-medium text-sm">{action.name}</span>
-                            <Badge variant={action.action_type === 'approval' ? 'outline' : 'secondary'} className={cn('text-xs', action.action_type === 'approval' && 'border-orange-400 text-orange-600')}>
-                              {action.action_type === 'approval' ? 'Approval' : 'Agent'}
-                            </Badge>
-                            {action.action_type === 'agent' && action.connector_ids && action.connector_ids.length > 0 && (
-                              <Badge variant="outline" className="text-xs">{action.connector_ids.length} connector{action.connector_ids.length !== 1 ? 's' : ''}</Badge>
-                            )}
-                            {action.action_type === 'agent' && action.skill_ids && action.skill_ids.length > 0 && (
-                              <Badge variant="outline" className="text-xs border-purple-400 text-purple-600 dark:text-purple-400">{action.skill_ids.length} skill{action.skill_ids.length !== 1 ? 's' : ''}</Badge>
-                            )}
-                          </div>
-                          <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                            {action.action_type === 'agent' ? (action.prompt ?? '—') : (action.approval_instructions ?? '—')}
+                        )}
+                        {trigger.trigger_type === 'cron' && (
+                          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-1.5 flex-wrap">
+                            <code className="bg-background border px-1.5 py-0.5 rounded font-mono">{String(trigger.trigger_config.cron_expr ?? '')}</code>
+                            <span>{describeCron(String(trigger.trigger_config.cron_expr ?? ''))}</span>
                           </p>
-                        </div>
-                        {/* Edit / Delete */}
-                        <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditAction(action)}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleDeleteAction(action.id, action.name)}>
-                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                          </Button>
-                        </div>
+                        )}
+                        {trigger.trigger_type === 'webhook' && (
+                          <div className="mt-2 space-y-3">
+                            <div className="flex items-center gap-2">
+                              <code className="text-xs bg-background border px-2 py-1 rounded flex-1 truncate font-mono">
+                                {`https://api.wazzi.io/webhooks/agents/${trigger.id}`}
+                              </code>
+                              <Button variant="outline" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => { navigator.clipboard.writeText(`https://api.wazzi.io/webhooks/agents/${trigger.id}`); toast.success('URL copied'); }}>
+                                <Copy className="h-3 w-3" />
+                              </Button>
+                            </div>
+                            <div className="rounded-md bg-muted/60 border px-3 py-2 space-y-1.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">How to trigger</p>
+                              <pre className="text-xs text-foreground whitespace-pre-wrap break-all leading-relaxed">{`POST https://api.wazzi.io/webhooks/agents/${trigger.id}\nX-Wazzi-Key: <your-api-key>`}</pre>
+                              <p className="text-xs text-muted-foreground">Optionally pass a JSON body — it will be available as the initial input to the first action.</p>
+                            </div>
+                            <div className="space-y-1.5">
+                              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">API Key</p>
+                              <div className="flex items-center gap-2 text-xs">
+                                <code className="bg-background border px-2 py-1 rounded font-mono flex-1">
+                                  {webhookKey ? <>{webhookKey.key_prefix}… <span className="text-muted-foreground">(created {new Date(webhookKey.created_at).toLocaleDateString()})</span></> : <span className="text-muted-foreground">Loading…</span>}
+                                </code>
+                                <Button variant="outline" size="sm" className="h-6 text-xs px-2 shrink-0" onClick={() => handleGenerateKey(trigger.id)}>
+                                  <RefreshCw className="mr-1 h-3 w-3" />Regenerate
+                                </Button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    </CardContent>
-                  </Card>
-                  {idx < actions.length - 1 && (
-                    <div className="flex justify-center py-1">
-                      <div className="w-px h-4 bg-border" />
+                      {trigger.trigger_type !== 'manual' && (
+                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => handleDeleteTrigger(trigger.id)}>
+                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
+                  </CardContent>
+                </Card>
+              ) : (
+                <Card className="border-dashed border-2 border-primary/30 hover:border-primary/50 transition-colors">
+                  <CardContent className="py-6 flex flex-col items-center gap-3">
+                    <div className="p-3 rounded-full bg-muted">
+                      <Play className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                    <div className="text-center">
+                      <p className="text-sm font-medium">No trigger set</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Choose how this agent is initiated</p>
+                    </div>
+                    <Button size="sm" onClick={() => setTriggerDialogOpen(true)}>
+                      <Plus className="mr-1.5 h-3.5 w-3.5" />Select Trigger
+                    </Button>
+                  </CardContent>
+                </Card>
+              )}
+            </div>
+
+            {/* Connector line */}
+            <div className="flex justify-center py-1">
+              <div className="flex flex-col items-center">
+                <div className="w-px h-5 bg-border" />
+                <ArrowDown className="h-3.5 w-3.5 text-muted-foreground -mt-px" />
+              </div>
+            </div>
+
+            {/* Actions */}
+            <div>
+              <div className="flex items-center justify-between mb-2 px-1">
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Actions</p>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline" className="h-7 text-xs">
+                      <Plus className="mr-1.5 h-3.5 w-3.5" />Add Action
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem onClick={() => openNewAction('agent')}>
+                      <PlayCircle className="mr-2 h-4 w-4" />Agent Step
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => openNewAction('approval')}>
+                      <CheckCircle2 className="mr-2 h-4 w-4" />Approval
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => openNewAction('login')} disabled={!agentRequiresBrowser}>
+                      <LogIn className="mr-2 h-4 w-4" />Login Step
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+
+              {actions.length === 0 ? (
+                <Card className="border-dashed border-2">
+                  <CardContent className="py-8 text-center text-sm text-muted-foreground">
+                    No actions yet. Add one to build your workflow.
+                  </CardContent>
+                </Card>
+              ) : (
+                <div>
+                  {actions.map((action, idx) => (
+                    <div key={action.id}>
+                      <Card
+                        className={cn(
+                          'group transition-all duration-150 cursor-default',
+                          dragIndex === idx && 'opacity-40 scale-[0.98]',
+                          dropIndex === idx && dragIndex !== idx && 'ring-2 ring-primary ring-offset-1',
+                        )}
+                        draggable
+                        onDragStart={() => setDragIndex(idx)}
+                        onDragOver={(e) => { e.preventDefault(); setDropIndex(idx); }}
+                        onDragEnd={() => { setDragIndex(null); setDropIndex(null); }}
+                        onDrop={() => handleDropAction(idx)}
+                      >
+                        <CardContent className="py-2.5 px-3">
+                          <div className="flex items-center gap-3">
+                            <div className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              <GripVertical className="h-4 w-4" />
+                            </div>
+                            <div className={cn(
+                              'w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm font-bold select-none',
+                              action.action_type === 'approval'
+                                ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                                : action.action_type === 'login'
+                                ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+                                : 'bg-primary/10 text-primary'
+                            )}>
+                              {action.action_type === 'login' ? <LogIn className="h-3.5 w-3.5" /> : idx + 1}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="font-medium text-sm">{action.name}</span>
+                                <Badge
+                                  variant={action.action_type === 'approval' ? 'outline' : action.action_type === 'login' ? 'outline' : 'secondary'}
+                                  className={cn('text-xs',
+                                    action.action_type === 'approval' && 'border-orange-400 text-orange-600',
+                                    action.action_type === 'login' && 'border-sky-400 text-sky-600 dark:text-sky-400',
+                                  )}
+                                >
+                                  {action.action_type === 'approval' ? 'Approval' : action.action_type === 'login' ? 'Login' : 'Agent'}
+                                </Badge>
+                                {action.action_type === 'agent' && action.connector_ids && action.connector_ids.length > 0 && (
+                                  <Badge variant="outline" className="text-xs">{action.connector_ids.length} connector{action.connector_ids.length !== 1 ? 's' : ''}</Badge>
+                                )}
+                                {action.action_type === 'agent' && action.skill_ids && action.skill_ids.length > 0 && (
+                                  <Badge variant="outline" className="text-xs border-purple-400 text-purple-600 dark:text-purple-400">{action.skill_ids.length} skill{action.skill_ids.length !== 1 ? 's' : ''}</Badge>
+                                )}
+                              </div>
+                              <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                                {action.action_type === 'login'
+                                  ? (() => { try { const p = JSON.parse(action.prompt ?? '{}'); return p.url || '—'; } catch { return '—'; } })()
+                                  : action.action_type === 'agent'
+                                  ? (action.prompt ?? '—')
+                                  : (action.approval_instructions ?? '—')}
+                              </p>
+                            </div>
+                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditAction(action)}>
+                                <Pencil className="h-3.5 w-3.5" />
+                              </Button>
+                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleDeleteAction(action.id, action.name)}>
+                                <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                              </Button>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                      {idx < actions.length - 1 && (
+                        <div className="flex justify-center py-1">
+                          <div className="w-px h-4 bg-border" />
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </TabsContent>
+
+        {/* ── Settings Tab ──────────────────────────────────── */}
+        <TabsContent value="settings" className="mt-4">
+          <div className="max-w-md space-y-4">
+            <Card>
+              <CardContent className="pt-6 space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="agent-name">Name <span className="text-destructive">*</span></Label>
+                  <Input
+                    id="agent-name"
+                    value={agentName}
+                    onChange={(e) => { setAgentName(e.target.value); setSettingsDirty(true); }}
+                    placeholder="Agent name"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="agent-desc">Description</Label>
+                  <Textarea
+                    id="agent-desc"
+                    value={agentDesc}
+                    onChange={(e) => { setAgentDesc(e.target.value); setSettingsDirty(true); }}
+                    placeholder="Optional description…"
+                    rows={3}
+                  />
+                </div>
+
+                {/* Active toggle */}
+                <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+                  <div>
+                    <p className="text-sm font-medium">Status</p>
+                    <p className="text-xs text-muted-foreground">
+                      {agentActive ? 'Agent is active and will run triggers' : 'Agent is inactive and will not run'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setAgentActive((v) => !v); setSettingsDirty(true); }}
+                    className={cn(
+                      'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
+                      agentActive ? 'bg-primary' : 'bg-muted-foreground/30'
+                    )}
+                  >
+                    <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentActive ? 'translate-x-5' : 'translate-x-0.5')} />
+                  </button>
+                </div>
+
+                {/* Browser toggle */}
+                <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+                  <div>
+                    <p className="text-sm font-medium flex items-center gap-1.5">
+                      <Monitor className="h-3.5 w-3.5 text-sky-500" />Requires Browser
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      {agentRequiresBrowser ? 'Browser tools available to all actions in this agent' : 'No browser — enable to use browser tools or login steps'}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => { setAgentRequiresBrowser((v) => !v); setSettingsDirty(true); }}
+                    className={cn(
+                      'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
+                      agentRequiresBrowser ? 'bg-sky-500' : 'bg-muted-foreground/30'
+                    )}
+                  >
+                    <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentRequiresBrowser ? 'translate-x-5' : 'translate-x-0.5')} />
+                  </button>
+                </div>
+
+                <div className="flex justify-end pt-1">
+                  <Button
+                    onClick={handleSaveSettings}
+                    disabled={!settingsDirty || !agentName.trim() || savingSettings}
+                  >
+                    {savingSettings ? 'Saving…' : 'Save Changes'}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
+        </TabsContent>
+
+        {/* ── Approvers Tab ─────────────────────────────────── */}
+        <TabsContent value="approvers" className="mt-4">
+          <div className="max-w-2xl space-y-4">
+
+            {/* Assigned groups card */}
+            <Card>
+              <CardContent className="pt-5 pb-4 px-4 space-y-3">
+                <div className="flex items-center justify-between">
+                  <p className="text-sm font-medium flex items-center gap-1.5">
+                    <ShieldCheck className="h-4 w-4 text-muted-foreground" />
+                    Access Groups
+                  </p>
+                  <Link href="/access" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
+                    Manage groups
+                    <ExternalLink className="h-3 w-3" />
+                  </Link>
+                </div>
+
+                {assignedGroups.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    No access groups assigned. Add a group to control who can interact with login and approval steps.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5">
+                    {assignedGroups.map((group, idx) => {
+                      const colorClass = GROUP_BADGE_COLORS[idx % GROUP_BADGE_COLORS.length]!;
+                      return (
+                        <span
+                          key={group.id}
+                          className={cn('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium', colorClass)}
+                        >
+                          <ShieldCheck className="h-3 w-3" />
+                          {group.name}
+                          <span className="opacity-60">{group.member_count} member{group.member_count !== 1 ? 's' : ''}</span>
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              if (!selectedOrgId) return;
+                              try {
+                                await unassignAccessGroupFromAgent(selectedOrgId, agentId, group.id);
+                                setAssignedGroups((prev) => prev.filter((g) => g.id !== group.id));
+                              } catch { toast.error('Failed to remove group'); }
+                            }}
+                            className="rounded-sm opacity-50 hover:opacity-100 transition-opacity ml-0.5"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Add group */}
+                {allGroups.filter((g) => !assignedGroups.some((a) => a.id === g.id)).length > 0 && (
+                  <div className={cn(assignedGroups.length > 0 && 'pt-1 border-t')}>
+                    <MultiSelectPicker
+                      label=""
+                      addLabel="Add Access Group"
+                      options={allGroups
+                        .filter((g) => !assignedGroups.some((a) => a.id === g.id))
+                        .map((g) => ({ id: g.id, label: g.name, subLabel: `${g.member_count} member${g.member_count !== 1 ? 's' : ''}` }))}
+                      selectedIds={[]}
+                      onAdd={async (groupId) => {
+                        if (!selectedOrgId) return;
+                        try {
+                          await assignAccessGroupToAgent(selectedOrgId, agentId, groupId);
+                          const group = allGroups.find((g) => g.id === groupId);
+                          if (group) setAssignedGroups((prev) => [...prev, group]);
+                        } catch { toast.error('Failed to assign group'); }
+                      }}
+                      onRemove={() => {}}
+                      pillClass="hidden"
+                    />
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Authorized users */}
+            {assignedGroups.length > 0 && (
+              <Card>
+                <CardContent className="pt-5 pb-4 px-4">
+                  <p className="text-sm font-medium mb-3">
+                    {membersLoading
+                      ? 'Loading users…'
+                      : `${authorizedUsers.length} authorized user${authorizedUsers.length !== 1 ? 's' : ''}`}
+                  </p>
+
+                  {membersLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    </div>
+                  ) : authorizedUsers.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-2">
+                      None of the assigned groups have members yet.
+                    </p>
+                  ) : (
+                    <div className="divide-y">
+                      {authorizedUsers.map(({ user, groups }) => {
+                        const displayName = [user.first_name, user.last_name].filter(Boolean).join(' ');
+                        return (
+                          <div key={user.id} className="flex items-center gap-3 py-2.5">
+                            <UserAvatar firstName={user.first_name} lastName={user.last_name} email={user.email} />
+                            <div className="flex-1 min-w-0">
+                              {displayName && (
+                                <p className="text-sm font-medium leading-tight">{displayName}</p>
+                              )}
+                              <p className={cn('text-xs text-muted-foreground', !displayName && 'text-sm font-medium text-foreground')}>
+                                {user.email}
+                              </p>
+                            </div>
+                            <div className="flex flex-wrap gap-1 justify-end">
+                              {groups.map(({ group, colorClass }) => (
+                                <span
+                                  key={group.id}
+                                  className={cn('inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium', colorClass)}
+                                >
+                                  {group.name}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-
+                </CardContent>
+              </Card>
+            )}
+          </div>
+        </TabsContent>
+      </Tabs>
 
       {/* ── Action Dialog ─────────────────────────────────────── */}
       <Dialog open={actionDialogOpen} onOpenChange={setActionDialogOpen}>
         <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>{editingAction ? 'Edit Action' : 'Add Action'}</DialogTitle>
+            <DialogTitle>
+              {editingAction ? 'Edit' : 'Add'}{' '}
+              {actionForm.action_type === 'approval' ? 'Approval' : actionForm.action_type === 'login' ? 'Login Step' : 'Agent Step'}
+            </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1">
               <Label>Name <span className="text-destructive">*</span></Label>
               <Input placeholder="Action name" value={actionForm.name} onChange={(e) => setActionForm(f => ({ ...f, name: e.target.value }))} />
-            </div>
-            <div className="space-y-1">
-              <Label>Type</Label>
-              <Select value={actionForm.action_type} onValueChange={(v) => setActionForm(f => ({ ...f, action_type: v as 'agent' | 'approval' }))}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="agent">Agent</SelectItem>
-                  <SelectItem value="approval">Approval</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
 
             {actionForm.action_type === 'agent' && (
@@ -778,7 +1110,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <MultiSelectPicker
                   label="Connectors"
                   addLabel="Add Connector"
-                  options={connectors.map((c) => ({ id: c.id, label: (c as any).connector_name ?? c.id }))}
+                  options={connectors.filter((c) => c.agent_enabled).map((c) => ({ id: c.id, label: (c as any).connector_name ?? c.id }))}
                   selectedIds={actionForm.connector_ids}
                   onAdd={(id) => setActionForm((f) => ({ ...f, connector_ids: [...f.connector_ids, id] }))}
                   onRemove={(id) => setActionForm((f) => ({ ...f, connector_ids: f.connector_ids.filter((x) => x !== id) }))}
@@ -796,6 +1128,34 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </>
             )}
 
+            {actionForm.action_type === 'login' && (
+              <>
+                <div className="rounded-md bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 px-3 py-2 text-xs text-sky-700 dark:text-sky-400">
+                  The agent will navigate to the URL and verify it can access the page. If login is required, it will pause and open the browser for you to log in manually.
+                </div>
+                <div className="space-y-1">
+                  <Label>URL to verify <span className="text-destructive">*</span></Label>
+                  <Input
+                    placeholder="https://app.example.com/dashboard"
+                    value={actionForm.loginUrl}
+                    onChange={(e) => setActionForm(f => ({ ...f, loginUrl: e.target.value }))}
+                  />
+                  <p className="text-xs text-muted-foreground">The page the agent will navigate to in order to check login status.</p>
+                </div>
+                <div className="space-y-1">
+                  <Label>How to confirm you're logged in <span className="text-destructive">*</span></Label>
+                  <Textarea
+                    placeholder="I can see the main dashboard with my name and a logout button"
+                    value={actionForm.loginVerify}
+                    onChange={(e) => setActionForm(f => ({ ...f, loginVerify: e.target.value }))}
+                    rows={3}
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">Describe what you expect to see on screen when successfully logged in.</p>
+                </div>
+              </>
+            )}
+
             {actionForm.action_type === 'approval' && (
               <div className="space-y-1">
                 <Label>Instructions for Approver</Label>
@@ -805,7 +1165,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setActionDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSaveAction} disabled={savingAction || !actionForm.name.trim() || (actionForm.action_type === 'agent' && !actionForm.prompt.trim())}>
+            <Button
+              onClick={handleSaveAction}
+              disabled={
+                savingAction ||
+                !actionForm.name.trim() ||
+                (actionForm.action_type === 'agent' && !actionForm.prompt.trim()) ||
+                (actionForm.action_type === 'login' && (!actionForm.loginUrl.trim() || !actionForm.loginVerify.trim()))
+              }
+            >
               {savingAction ? 'Saving…' : editingAction ? 'Update' : 'Add Action'}
             </Button>
           </DialogFooter>
@@ -850,52 +1218,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 A webhook URL and API key will be generated after creation. Use the <code>X-Wazzi-Key</code> header to authenticate requests.
               </div>
             )}
-
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setTriggerDialogOpen(false)}>Cancel</Button>
             <Button onClick={handleSaveTrigger} disabled={savingTrigger}>
               {savingTrigger ? 'Creating…' : 'Create Trigger'}
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Edit Agent Dialog ─────────────────────────────────── */}
-      <Dialog open={editingAgent} onOpenChange={(o) => { if (!o) { setEditingAgent(false); setAgentName(agent.name); setAgentDesc(agent.description ?? ''); setAgentActive(agent.is_active); } }}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Edit Agent</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Name <span className="text-destructive">*</span></Label>
-              <Input value={agentName} onChange={(e) => setAgentName(e.target.value)} placeholder="Agent name" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Description</Label>
-              <Textarea value={agentDesc} onChange={(e) => setAgentDesc(e.target.value)} placeholder="Optional description…" rows={3} />
-            </div>
-            <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
-              <div>
-                <p className="text-sm font-medium">Status</p>
-                <p className="text-xs text-muted-foreground">{agentActive ? 'Agent is active and will run triggers' : 'Agent is inactive and will not run'}</p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setAgentActive((v) => !v)}
-                className={cn(
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
-                  agentActive ? 'bg-primary' : 'bg-muted-foreground/30'
-                )}
-              >
-                <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentActive ? 'translate-x-5' : 'translate-x-0.5')} />
-              </button>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => { setEditingAgent(false); setAgentName(agent.name); setAgentDesc(agent.description ?? ''); setAgentActive(agent.is_active); }}>Cancel</Button>
-            <Button onClick={handleSaveAgent} disabled={!agentName.trim()}>Save Changes</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

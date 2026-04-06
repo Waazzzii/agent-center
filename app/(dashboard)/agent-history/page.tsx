@@ -2,26 +2,26 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   getAgents,
   getExecutionHistory,
+  abortBrowserRun,
   type Agent,
   type ExecutionRun,
-  type ExecutionAction,
 } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Input } from '@/components/ui/input';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   RefreshCw,
-  ChevronDown,
   ChevronRight,
   ChevronLeft,
   Webhook,
@@ -31,13 +31,13 @@ import {
   XCircle,
   PauseCircle,
   Loader2,
-  AlertCircle,
   Filter,
   X,
   History,
-  Copy,
   Eye,
   Monitor,
+  Zap,
+  ArrowUpRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
@@ -80,51 +80,27 @@ function StatusBadge({ status }: { status: string }) {
       <XCircle className="h-3 w-3" />Failed
     </Badge>
   );
+  if (status === 'aborted') return (
+    <Badge variant="outline" className="gap-1.5 border-red-400 text-red-600 dark:text-red-400">
+      <XCircle className="h-3 w-3" />Aborted
+    </Badge>
+  );
   if (status === 'executing') return (
     <Badge variant="outline" className="gap-2 border-blue-300 text-blue-600 dark:text-blue-400">
       <ExecutingDots />Executing
     </Badge>
   );
   if (status === 'awaiting_approval') return (
-    <Badge variant="outline" className="gap-1.5 border-slate-300 text-slate-600 dark:text-slate-400">
+    <Badge variant="outline" className="gap-1.5 border-violet-400 text-violet-600 dark:text-violet-400">
       <PauseCircle className="h-3 w-3" />Awaiting Approval
+    </Badge>
+  );
+  if (status === 'awaiting_login') return (
+    <Badge variant="outline" className="gap-1.5 border-amber-400 text-amber-600 dark:text-amber-400">
+      <Monitor className="h-3 w-3" />Awaiting Login
     </Badge>
   );
   return <Badge variant="secondary">{status}</Badge>;
-}
-
-function ActionStatusBadge({ status }: { status: string }) {
-  if (status === 'completed') return (
-    <Badge variant="outline" className="gap-1 text-xs border-green-500 text-green-600 dark:text-green-400">
-      <CheckCircle2 className="h-3 w-3" />Completed
-    </Badge>
-  );
-  if (status === 'failed') return (
-    <Badge variant="outline" className="gap-1 text-xs border-red-400 text-red-600 dark:text-red-400">
-      <XCircle className="h-3 w-3" />Failed
-    </Badge>
-  );
-  if (status === 'awaiting_approval') return (
-    <Badge variant="outline" className="gap-1.5 text-xs border-slate-300 text-slate-600 dark:text-slate-400">
-      <PauseCircle className="h-3 w-3" />Awaiting Approval
-    </Badge>
-  );
-  if (status === 'approved') return (
-    <Badge variant="outline" className="gap-1 text-xs border-green-500 text-green-600 dark:text-green-400">
-      <CheckCircle2 className="h-3 w-3" />Approved
-    </Badge>
-  );
-  if (status === 'denied') return (
-    <Badge variant="outline" className="gap-1 text-xs border-red-400 text-red-600 dark:text-red-400">
-      <XCircle className="h-3 w-3" />Denied
-    </Badge>
-  );
-  if (status === 'executing') return (
-    <Badge variant="outline" className="gap-1.5 text-xs border-blue-300 text-blue-600 dark:text-blue-400">
-      <ExecutingDots />Executing
-    </Badge>
-  );
-  return <Badge variant="secondary" className="text-xs">{status}</Badge>;
 }
 
 function TriggerBadge({ type }: { type: string }) {
@@ -141,55 +117,130 @@ function TriggerBadge({ type }: { type: string }) {
   );
 }
 
-// ─── Expanded Actions Panel ───────────────────────────────────
+// ─── Runs Table ───────────────────────────────────────────────
 
-const RUN_COLS = 'grid-cols-[1fr_140px_120px_90px_80px_160px_32px]';
-const ACTION_COLS = 'grid-cols-[1fr_140px_160px]';
+const RUN_COLS = 'grid-cols-[1fr_140px_120px_90px_80px_160px_130px]';
 
-const ACTION_TYPE_LABEL: Record<string, string> = {
-  agent: 'Agent Step',
-  approval: 'Approval',
-};
-
-function ActionsPanel({ actions }: { actions: ExecutionAction[] }) {
-  if (actions.length === 0) return <p className="text-xs text-muted-foreground py-2 px-4">No action steps recorded.</p>;
-
+function RunsTable({
+  runs,
+  onOpenBrowser,
+  onAbort,
+  abortingRunId,
+}: {
+  runs: ExecutionRun[];
+  onOpenBrowser: (run: ExecutionRun) => void;
+  onAbort?: (run: ExecutionRun) => void;
+  abortingRunId?: string | null;
+}) {
   return (
-    <div className="border-t bg-muted/30">
-      {/* Column headers — desktop only */}
-      <div className={`hidden md:grid ${ACTION_COLS} gap-3 px-4 py-2 border-b bg-muted/50 text-xs font-semibold uppercase tracking-wider text-muted-foreground`}>
-        <span>Step</span>
-        <span>Status</span>
-        <span>Started</span>
-      </div>
-
-      <div className="divide-y">
-        {actions.map((a, i) => (
-          <div key={a.id}>
-            {/* Desktop row */}
-            <div className={`hidden md:grid ${ACTION_COLS} gap-3 items-center px-4 py-2.5`}>
-              <div className="min-w-0 flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">{i + 1}</span>
-                <span className="font-medium text-sm truncate">{ACTION_TYPE_LABEL[a.action_type] ?? a.action_type}</span>
+    <div className="divide-y">
+      {runs.map((run) => {
+        const completedSteps = (run.action_logs ?? []).filter((a) => a.status === 'completed' || a.status === 'approved').length;
+        const displayStatus = run.display_status ?? run.status;
+        const durationMs = run.started_at && run.completed_at
+          ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
+          : null;
+        return (
+          <div key={run.id}>
+            <div className="w-full">
+              {/* Mobile layout */}
+              <div className="md:hidden px-4 py-3 space-y-2">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-medium text-sm truncate">{run.agent_name}</span>
+                  <StatusBadge status={displayStatus} />
+                </div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <TriggerBadge type={run.trigger_type} />
+                  <span className="text-xs text-muted-foreground">{completedSteps}/{(run.action_logs ?? []).length} steps</span>
+                  <span className="text-xs text-muted-foreground">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-xs text-muted-foreground">{formatDate(run.started_at)}</span>
+                  <div className="flex items-center gap-1">
+                    {displayStatus === 'awaiting_approval' && (
+                      <Link
+                        href={`/approvals?execution_id=${run.id}`}
+                        className="text-violet-500 hover:text-violet-600"
+                        title="Go to approval request"
+                      >
+                        <ArrowUpRight className="h-4 w-4" />
+                      </Link>
+                    )}
+                  </div>
+                </div>
               </div>
-              <ActionStatusBadge status={a.status} />
-              <span className="text-xs text-muted-foreground">{a.started_at ? formatDate(a.started_at) : '—'}</span>
+
+              {/* Desktop layout */}
+              <div className={`hidden md:grid ${RUN_COLS} gap-3 items-center px-4 py-3`}>
+                <div className="min-w-0 truncate">
+                  <span className="text-xs font-mono text-muted-foreground/50 mr-1.5">[{run.id.slice(-4).toUpperCase()}]</span>
+                  <span className="font-medium text-sm">{run.agent_name}</span>
+                </div>
+                <StatusBadge status={displayStatus} />
+                <TriggerBadge type={run.trigger_type} />
+                <span className="text-sm text-muted-foreground">{completedSteps}/{(run.action_logs ?? []).length}</span>
+                <span className="text-sm text-muted-foreground tabular-nums">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
+                <span className="text-xs text-muted-foreground">{formatDate(run.started_at)}</span>
+                <div className="flex items-center justify-end gap-0.5">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                    title="View execution steps"
+                    asChild
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Link href={`/agent-history/${run.id}`}>
+                      <Eye className="h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                  {displayStatus === 'awaiting_approval' && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-violet-500 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-950/40"
+                      title="Go to approval request"
+                      asChild
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Link href={`/approvals?execution_id=${run.id}`}>
+                        <ArrowUpRight className="h-3.5 w-3.5" />
+                      </Link>
+                    </Button>
+                  )}
+                  {run.agent_requires_browser && (run.status === 'executing' || run.status === 'awaiting_approval') && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
+                      title="Open live browser view"
+                      onClick={(e) => { e.stopPropagation(); onOpenBrowser(run); }}
+                    >
+                      <Monitor className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                  {onAbort && (run.status === 'executing' || run.status === 'awaiting_approval') && (
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-7 w-7 text-destructive/70 hover:text-destructive hover:bg-destructive/10"
+                      title="Abort run"
+                      disabled={abortingRunId === run.id}
+                      onClick={(e) => { e.stopPropagation(); onAbort(run); }}
+                    >
+                      {abortingRunId === run.id
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : <XCircle className="h-3.5 w-3.5" />
+                      }
+                    </Button>
+                  )}
+                </div>
+              </div>
             </div>
 
-            {/* Mobile row */}
-            <div className="md:hidden px-4 py-2.5 space-y-1">
-              <div className="flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-muted flex items-center justify-center text-xs font-bold text-muted-foreground shrink-0">{i + 1}</span>
-                <span className="font-medium text-sm truncate flex-1">{ACTION_TYPE_LABEL[a.action_type] ?? a.action_type}</span>
-                <ActionStatusBadge status={a.status} />
-              </div>
-              {a.started_at && (
-                <div className="pl-7 text-xs text-muted-foreground">{formatDate(a.started_at)}</div>
-              )}
-            </div>
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
@@ -198,8 +249,9 @@ function ActionsPanel({ actions }: { actions: ExecutionAction[] }) {
 
 const PAGE_SIZE = 15;
 
-export default function AgentHistoryPage() {
+export default function AgentExecutionsPage() {
   const { selectedOrgId } = useAdminViewStore();
+  const { confirm } = useConfirmDialog();
   const permitted = useRequirePermission('agent_center_user');
   const searchParams = useSearchParams();
 
@@ -209,8 +261,8 @@ export default function AgentHistoryPage() {
   const [totalPages, setTotalPages] = useState(1);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(false);
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [browserHITL, setBrowserHITL] = useState<{ runId: string; agentId: string; agentName: string } | null>(null);
+  const [abortingRunId, setAbortingRunId] = useState<string | null>(null);
 
   // Pill-based filters
   type FilterKey = 'agent' | 'status' | 'trigger' | 'from' | 'to';
@@ -223,6 +275,10 @@ export default function AgentHistoryPage() {
   const initialAgentId = useRef(searchParams.get('agent_id'));
 
   const hasFilters = activeFilters.length > 0;
+
+  // Split runs into active (live) and history (terminal) for display
+  const activeRuns = runs.filter(r => r.status === 'executing' || r.status === 'awaiting_approval');
+  const historyRuns = runs.filter(r => r.status !== 'executing' && r.status !== 'awaiting_approval');
 
   const loadHistory = useCallback(async (pg: number = page, filters: ActiveFilter[] = activeFilters) => {
     if (!selectedOrgId) return;
@@ -264,19 +320,26 @@ export default function AgentHistoryPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId]);
 
-  // Seed agent filter from URL param once agents list is loaded
+  // Seed agent filter from URL param once agents list is loaded, then reload with filter applied
   useEffect(() => {
     if (!initialAgentId.current || agents.length === 0) return;
     const id = initialAgentId.current;
-    const found = agents.find(a => a.id === id);
-    if (found) setActiveFilters([{ key: 'agent', value: id, label: `Agent: ${found.name}` }]);
     initialAgentId.current = null;
-  }, [agents]);
+    const found = agents.find(a => a.id === id);
+    if (!found) return;
+    const seeded: ActiveFilter[] = [{ key: 'agent', value: id, label: `Agent: ${found.name}` }];
+    setActiveFilters(seeded);
+    setPage(1);
+    loadHistory(1, seeded);
+  }, [agents, loadHistory]);
 
   const cancelPending = () => { setPendingType(null); setPendingValue(''); setValueSelectOpen(false); };
 
   const confirmFilter = (type: FilterKey, value: string) => {
-    const statusLabels: Record<string, string> = { completed: 'Completed', failed: 'Failed', executing: 'Executing', awaiting_approval: 'Awaiting Approval' };
+    const statusLabels: Record<string, string> = {
+      executing: 'Executing', awaiting_approval: 'Awaiting Approval',
+      completed: 'Completed', failed: 'Failed',
+    };
     const triggerLabels: Record<string, string> = { webhook: 'Webhook', cron: 'Cron', manual: 'Manual' };
     let label = '';
     if (type === 'status')  label = `Status: ${statusLabels[value] ?? value}`;
@@ -315,27 +378,50 @@ export default function AgentHistoryPage() {
   const goToPage = (pg: number) => {
     setPage(pg);
     loadHistory(pg);
-    setExpandedRows(new Set());
   };
 
-  const toggleRow = (id: string) => {
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
+  const handleAbort = async (run: ExecutionRun) => {
+    const confirmed = await confirm({
+      title: 'Abort Run',
+      description: `This will stop "${run.agent_name}" and close the browser session. Any unsaved progress will be lost. Are you sure?`,
+      confirmText: 'Abort Run',
+      cancelText: 'Keep Running',
+      variant: 'destructive',
     });
+    if (!confirmed) return;
+    setAbortingRunId(run.id);
+    try {
+      await abortBrowserRun(run.id);
+      toast.success('Agent run aborted');
+      loadHistory(page);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? 'Failed to abort run');
+    } finally {
+      setAbortingRunId(null);
+    }
   };
 
   if (!permitted) return <NoPermissionContent />;
+
+  const tableHeader = (
+    <div className={`hidden md:grid ${RUN_COLS} gap-3 px-4 py-2 border-b bg-muted/40 text-xs font-semibold uppercase tracking-wider text-muted-foreground`}>
+      <span>Agent</span>
+      <span>Status</span>
+      <span>Trigger</span>
+      <span>Steps</span>
+      <span>Duration</span>
+      <span>Started</span>
+      <span />
+    </div>
+  );
 
   return (
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Agent History</h1>
-          <p className="text-muted-foreground">Execution logs for all agent runs</p>
+          <h1 className="text-3xl font-bold">Agent Executions</h1>
+          <p className="text-muted-foreground">Live and historical runs for all agents</p>
         </div>
         <Button variant="outline" onClick={() => loadHistory(page)} disabled={loading || !selectedOrgId}>
           <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} />
@@ -375,14 +461,20 @@ export default function AgentHistoryPage() {
               <div className="flex items-center gap-1.5">
                 <span className="text-xs font-medium text-muted-foreground">Status:</span>
                 <Select value="" open={valueSelectOpen} onOpenChange={(o) => { setValueSelectOpen(o); if (!o) cancelPending(); }} onValueChange={(v) => confirmFilter('status', v)}>
-                  <SelectTrigger className="h-8 text-xs w-[170px]">
+                  <SelectTrigger className="h-8 text-xs w-[190px]">
                     <SelectValue placeholder="Select status…" />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="completed">Completed</SelectItem>
-                    <SelectItem value="failed">Failed</SelectItem>
-                    <SelectItem value="executing">Executing</SelectItem>
-                    <SelectItem value="awaiting_approval">Awaiting Approval</SelectItem>
+                    <SelectGroup>
+                      <SelectLabel>Active</SelectLabel>
+                      <SelectItem value="executing">Executing</SelectItem>
+                      <SelectItem value="awaiting_approval">Awaiting Approval</SelectItem>
+                    </SelectGroup>
+                    <SelectGroup>
+                      <SelectLabel>History</SelectLabel>
+                      <SelectItem value="completed">Completed</SelectItem>
+                      <SelectItem value="failed">Failed</SelectItem>
+                    </SelectGroup>
                   </SelectContent>
                 </Select>
               </div>
@@ -454,187 +546,147 @@ export default function AgentHistoryPage() {
             )}
           </div>
 
-          {/* Results */}
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <div>
-                  <CardTitle>Execution Runs</CardTitle>
-                  <CardDescription>
-                    {loading ? 'Loading…' : `${total.toLocaleString()} run${total !== 1 ? 's' : ''} found`}
-                  </CardDescription>
-                </div>
-                {totalPages > 1 && (
-                  <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                    Page {page} of {totalPages}
-                  </div>
-                )}
-              </div>
-            </CardHeader>
-            <CardContent className="p-0">
-              {loading ? (
-                <div className="flex h-40 items-center justify-center">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              ) : runs.length === 0 ? (
-                <div className="py-16 text-center text-muted-foreground">
-                  <History className="mx-auto h-10 w-10 mb-3 opacity-20" />
-                  <p className="text-sm">No runs found{hasFilters ? ' matching the current filters' : ''}.</p>
-                </div>
-              ) : (
-                <div>
-                  {/* Table header */}
-                  <div className={`hidden md:grid ${RUN_COLS} gap-3 px-4 py-2 border-b bg-muted/40 text-xs font-semibold uppercase tracking-wider text-muted-foreground`}>
-                    <span>Agent</span>
-                    <span>Status</span>
-                    <span>Trigger</span>
-                    <span>Steps</span>
-                    <span>Duration</span>
-                    <span>Started</span>
-                    <span />
-                  </div>
+          {loading ? (
+            <div className="flex h-40 items-center justify-center">
+              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+            </div>
+          ) : runs.length === 0 ? (
+            <Card>
+              <CardContent className="py-16 text-center text-muted-foreground">
+                <History className="mx-auto h-10 w-10 mb-3 opacity-20" />
+                <p className="text-sm">No runs found{hasFilters ? ' matching the current filters' : ''}.</p>
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="space-y-4">
+              {/* ── Active Runs ── */}
+              {activeRuns.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-blue-500" />
+                      <CardTitle className="text-base">Active Runs</CardTitle>
+                      <Badge variant="outline" className="gap-1.5 border-blue-300 text-blue-600 dark:text-blue-400 text-xs">
+                        <ExecutingDots />{activeRuns.length}
+                      </Badge>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    {tableHeader}
+                    <RunsTable
+                      runs={activeRuns}
+                      onOpenBrowser={(run) => setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name })}
+                      onAbort={handleAbort}
+                      abortingRunId={abortingRunId}
+                    />
+                  </CardContent>
+                </Card>
+              )}
 
-                  {/* Rows */}
-                  <div className="divide-y">
-                    {runs.map((run) => {
-                      const isExpanded = expandedRows.has(run.id);
-                      const completedSteps = run.action_logs.filter((a) => a.status === 'completed' || a.status === 'approved').length;
-                      const durationMs = run.started_at && run.completed_at
-                        ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
-                        : null;
-                      return (
-                        <div key={run.id}>
-                          <button
-                            className="w-full text-left hover:bg-muted/30 transition-colors"
-                            onClick={() => toggleRow(run.id)}
-                          >
-                            {/* Mobile layout */}
-                            <div className="md:hidden px-4 py-3 space-y-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="font-medium text-sm truncate">{run.agent_name}</span>
-                                <StatusBadge status={run.status} />
-                              </div>
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <TriggerBadge type={run.trigger_type} />
-                                <span className="text-xs text-muted-foreground">{completedSteps}/{run.action_logs.length} steps</span>
-                                <span className="text-xs text-muted-foreground">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
-                              </div>
-                              <div className="flex items-center justify-between">
-                                <span className="text-xs text-muted-foreground">{formatDate(run.started_at)}</span>
-                                <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', isExpanded && 'rotate-180')} />
-                              </div>
-                            </div>
-
-                            {/* Desktop layout */}
-                            <div className={`hidden md:grid ${RUN_COLS} gap-3 items-center px-4 py-3`}>
-                              <div className="min-w-0">
-                                <span className="font-medium text-sm truncate block">{run.agent_name}</span>
-                              </div>
-                              <StatusBadge status={run.status} />
-                              <TriggerBadge type={run.trigger_type} />
-                              <span className="text-sm text-muted-foreground">{completedSteps}/{run.action_logs.length}</span>
-                              <span className="text-sm text-muted-foreground tabular-nums">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
-                              <span className="text-xs text-muted-foreground">{formatDate(run.started_at)}</span>
-                              <div className="flex items-center gap-1">
-                                {run.status === 'executing' && (
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                                    title="Open live browser view"
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name });
-                                    }}
-                                  >
-                                    <Monitor className="h-3.5 w-3.5" />
-                                  </Button>
-                                )}
-                                <ChevronDown className={cn('h-4 w-4 text-muted-foreground transition-transform', isExpanded && 'rotate-180')} />
-                              </div>
-                            </div>
-                          </button>
-
-                          {/* Expanded action steps */}
-                          {isExpanded && <ActionsPanel actions={run.action_logs} />}
+              {/* ── Run History ── */}
+              {historyRuns.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-3">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <CardTitle className="text-base">Run History</CardTitle>
+                        <CardDescription>
+                          {total.toLocaleString()} run{total !== 1 ? 's' : ''} found
+                        </CardDescription>
+                      </div>
+                      {totalPages > 1 && (
+                        <div className="flex items-center gap-1 text-sm text-muted-foreground">
+                          Page {page} of {totalPages}
                         </div>
-                      );
-                    })}
-                  </div>
-                </div>
+                      )}
+                    </div>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    {tableHeader}
+                    <RunsTable
+                      runs={historyRuns}
+                      onOpenBrowser={(run) => setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name })}
+                    />
+
+                    {/* Pagination */}
+                    {totalPages > 1 && (
+                      <div className="flex items-center justify-between border-t px-4 py-3">
+                        <span className="text-xs text-muted-foreground">
+                          Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          <Button
+                            variant="outline" size="sm"
+                            disabled={page <= 1}
+                            onClick={() => goToPage(page - 1)}
+                          >
+                            <ChevronLeft className="h-4 w-4" />
+                          </Button>
+                          {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                            let pg: number;
+                            if (totalPages <= 7) {
+                              pg = i + 1;
+                            } else if (page <= 4) {
+                              pg = i + 1;
+                              if (i === 6) pg = totalPages;
+                              if (i === 5) pg = -1;
+                            } else if (page >= totalPages - 3) {
+                              pg = i === 0 ? 1 : i === 1 ? -1 : totalPages - (6 - i);
+                            } else {
+                              const map = [1, -1, page - 1, page, page + 1, -2, totalPages];
+                              pg = map[i]!;
+                            }
+                            if (pg < 0) return (
+                              <span key={`ellipsis-${i}`} className="px-1 text-muted-foreground text-sm">…</span>
+                            );
+                            return (
+                              <Button
+                                key={pg}
+                                variant={pg === page ? 'default' : 'outline'}
+                                size="sm"
+                                className="w-8 h-8 p-0 text-xs"
+                                onClick={() => goToPage(pg)}
+                              >
+                                {pg}
+                              </Button>
+                            );
+                          })}
+                          <Button
+                            variant="outline" size="sm"
+                            disabled={page >= totalPages}
+                            onClick={() => goToPage(page + 1)}
+                          >
+                            <ChevronRight className="h-4 w-4" />
+                          </Button>
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
               )}
 
-              {/* Pagination */}
-              {totalPages > 1 && !loading && (
-                <div className="flex items-center justify-between border-t px-4 py-3">
-                  <span className="text-xs text-muted-foreground">
-                    Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
-                  </span>
-                  <div className="flex items-center gap-1">
-                    <Button
-                      variant="outline" size="sm"
-                      disabled={page <= 1}
-                      onClick={() => goToPage(page - 1)}
-                    >
-                      <ChevronLeft className="h-4 w-4" />
-                    </Button>
-                    {/* Page number pills */}
-                    {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                      // Show pages around current page
-                      let pg: number;
-                      if (totalPages <= 7) {
-                        pg = i + 1;
-                      } else if (page <= 4) {
-                        pg = i + 1;
-                        if (i === 6) pg = totalPages;
-                        if (i === 5) pg = -1; // ellipsis
-                      } else if (page >= totalPages - 3) {
-                        pg = i === 0 ? 1 : i === 1 ? -1 : totalPages - (6 - i);
-                      } else {
-                        const map = [1, -1, page - 1, page, page + 1, -2, totalPages];
-                        pg = map[i]!;
-                      }
-                      if (pg < 0) return (
-                        <span key={`ellipsis-${i}`} className="px-1 text-muted-foreground text-sm">…</span>
-                      );
-                      return (
-                        <Button
-                          key={pg}
-                          variant={pg === page ? 'default' : 'outline'}
-                          size="sm"
-                          className="w-8 h-8 p-0 text-xs"
-                          onClick={() => goToPage(pg)}
-                        >
-                          {pg}
-                        </Button>
-                      );
-                    })}
-                    <Button
-                      variant="outline" size="sm"
-                      disabled={page >= totalPages}
-                      onClick={() => goToPage(page + 1)}
-                    >
-                      <ChevronRight className="h-4 w-4" />
-                    </Button>
-                  </div>
-                </div>
+              {/* Edge case: all results are active, no history on this page */}
+              {historyRuns.length === 0 && activeRuns.length > 0 && totalPages > 1 && (
+                <p className="text-xs text-center text-muted-foreground pb-2">
+                  All results on this page are active runs. Navigate pages to see history.
+                </p>
               )}
-            </CardContent>
-          </Card>
+            </div>
+          )}
         </>
       )}
 
-      {/* Browser HITL dialog — opens when a user clicks the monitor icon on an executing run */}
+      {/* Browser HITL dialog */}
       {browserHITL && (
         <BrowserHITLDialog
           open={!!browserHITL}
-          onOpenChange={(o) => { if (!o) setBrowserHITL(null); }}
+          onOpenChange={(o) => { if (!o) { setBrowserHITL(null); loadHistory(); } }}
           runId={browserHITL.runId}
           agentId={browserHITL.agentId}
           agentName={browserHITL.agentName}
         />
       )}
+
     </div>
   );
 }
-

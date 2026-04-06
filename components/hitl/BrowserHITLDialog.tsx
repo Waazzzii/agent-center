@@ -5,18 +5,18 @@ import {
   getBrowserRunStatus,
   getNoVNCInfo,
   resumeBrowserRun,
+  abortBrowserRun,
   type BrowserRunStatus,
   type NoVNCInfo,
 } from '@/lib/api/agents';
 import {
   Dialog,
   DialogContent,
-  DialogFooter,
-  DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   Monitor,
@@ -24,29 +24,31 @@ import {
   CheckCircle2,
   XCircle,
   WifiOff,
-  RefreshCw,
+  PauseCircle,
 } from 'lucide-react';
 
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   runId: string;
-  agentId: string;
+  agentId?: string;
   agentName?: string;
 }
 
-const POLL_INTERVAL_MS = 3_000;
+const POLL_INTERVAL_MS = 10_000;
 
 function StatusPill({ status }: { status: BrowserRunStatus['status'] }) {
   const map: Record<
     BrowserRunStatus['status'],
     { label: string; cls: string; icon: React.ReactNode }
   > = {
-    pending:      { label: 'Pending',        cls: 'border-slate-300 text-slate-500',                          icon: <Loader2 className="h-3 w-3 animate-spin" /> },
-    running:      { label: 'Running',         cls: 'border-blue-300 text-blue-600 dark:text-blue-400',        icon: <Loader2 className="h-3 w-3 animate-spin" /> },
-    auth_required:{ label: 'Login Required',  cls: 'border-amber-400 text-amber-600 dark:text-amber-400',     icon: <Monitor className="h-3 w-3" /> },
-    completed:    { label: 'Completed',       cls: 'border-green-500 text-green-600 dark:text-green-400',     icon: <CheckCircle2 className="h-3 w-3" /> },
-    failed:       { label: 'Failed',          cls: 'border-red-400 text-red-600 dark:text-red-400',           icon: <XCircle className="h-3 w-3" /> },
+    pending:           { label: 'Pending',            cls: 'border-slate-300 text-slate-500',                          icon: <Loader2 className="h-3 w-3 animate-spin" /> },
+    running:           { label: 'Running',             cls: 'border-blue-300 text-blue-600 dark:text-blue-400',        icon: <Loader2 className="h-3 w-3 animate-spin" /> },
+    auth_required:     { label: 'Awaiting Login',      cls: 'border-amber-400 text-amber-600 dark:text-amber-400',     icon: <Monitor className="h-3 w-3" /> },
+    awaiting_approval: { label: 'Awaiting Approval',   cls: 'border-violet-400 text-violet-600 dark:text-violet-400',  icon: <PauseCircle className="h-3 w-3" /> },
+    completed:         { label: 'Completed',           cls: 'border-green-500 text-green-600 dark:text-green-400',     icon: <CheckCircle2 className="h-3 w-3" /> },
+    failed:            { label: 'Failed',              cls: 'border-red-400 text-red-600 dark:text-red-400',           icon: <XCircle className="h-3 w-3" /> },
+    aborted:           { label: 'Aborted',             cls: 'border-red-400 text-red-600 dark:text-red-400',           icon: <XCircle className="h-3 w-3" /> },
   };
   const { label, cls, icon } = map[status] ?? map.pending;
   return (
@@ -56,13 +58,29 @@ function StatusPill({ status }: { status: BrowserRunStatus['status'] }) {
   );
 }
 
-export function BrowserHITLDialog({ open, onOpenChange, runId, agentId, agentName }: Props) {
+export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Props) {
+  const { confirm } = useConfirmDialog();
   const [runStatus, setRunStatus] = useState<BrowserRunStatus | null>(null);
   const [novnc, setNovnc] = useState<NoVNCInfo | null>(null);
   const [loadingNovnc, setLoadingNovnc] = useState(false);
   const [resuming, setResuming] = useState(false);
+  const [aborting, setAborting] = useState(false);
   const [pollError, setPollError] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // ── Load browser view immediately on open ────────────────────
+
+  useEffect(() => {
+    if (!open) return;
+
+    // Kick off the VNC session for this run as soon as the dialog opens.
+    // The backend lazily starts x11vnc + websockify on first call.
+    setLoadingNovnc(true);
+    getNoVNCInfo(runId)
+      .then((info) => setNovnc(info))
+      .catch(() => toast.error('Could not load browser view — check that the agent backend is running'))
+      .finally(() => setLoadingNovnc(false));
+  }, [open, runId]);
 
   // ── Polling ──────────────────────────────────────────────────
 
@@ -71,19 +89,6 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentId, agentNam
       const data = await getBrowserRunStatus(runId);
       setRunStatus(data);
       setPollError(false);
-
-      // When auth_required is detected, fetch the noVNC URL once
-      if (data.status === 'auth_required' && !novnc) {
-        setLoadingNovnc(true);
-        try {
-          const info = await getNoVNCInfo(agentId);
-          setNovnc(info);
-        } catch {
-          toast.error('Could not load browser view — check that the noVNC server is running');
-        } finally {
-          setLoadingNovnc(false);
-        }
-      }
 
       // Stop polling when terminal
       if (data.status === 'completed' || data.status === 'failed') {
@@ -105,9 +110,9 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentId, agentNam
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, runId, agentId]);
+  }, [open, runId]);
 
-  // Reset noVNC state when dialog closes
+  // Reset state when dialog closes
   useEffect(() => {
     if (!open) {
       setNovnc(null);
@@ -117,6 +122,27 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentId, agentNam
   }, [open]);
 
   // ── HITL resume ──────────────────────────────────────────────
+
+  const handleAbort = async () => {
+    const confirmed = await confirm({
+      title: 'Abort Run',
+      description: 'This will stop the agent and close the browser session. Any unsaved progress will be lost. Are you sure?',
+      confirmText: 'Abort Run',
+      cancelText: 'Keep Running',
+      variant: 'destructive',
+    });
+    if (!confirmed) return;
+    setAborting(true);
+    try {
+      await abortBrowserRun(runId);
+      toast.success('Agent run aborted');
+      onOpenChange(false);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? 'Failed to abort run');
+    } finally {
+      setAborting(false);
+    }
+  };
 
   const handleDone = async () => {
     setResuming(true);
@@ -147,60 +173,89 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentId, agentNam
     : null;
 
   const isAuthRequired = runStatus?.status === 'auth_required';
-  const isTerminal = runStatus?.status === 'completed' || runStatus?.status === 'failed';
+  const isAwaitingApproval = runStatus?.status === 'awaiting_approval';
+  const isTerminal = runStatus?.status === 'completed' || runStatus?.status === 'failed' || runStatus?.status === 'aborted';
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-4xl w-full flex flex-col" style={{ maxHeight: '90vh' }}>
-        <DialogHeader>
-          <div className="flex items-center gap-3">
-            <Monitor className="h-5 w-5 text-muted-foreground" />
-            <div>
-              <DialogTitle className="text-base">
-                {agentName ? `${agentName} — Live Browser` : 'Live Browser View'}
-              </DialogTitle>
-              <p className="text-xs text-muted-foreground mt-0.5">Run ID: {runId}</p>
-            </div>
-            {runStatus && <StatusPill status={runStatus.status} />}
-            {pollError && (
-              <Badge variant="outline" className="gap-1.5 border-orange-400 text-orange-500 ml-auto">
-                <WifiOff className="h-3 w-3" />Cannot reach agent-backend
-              </Badge>
+      <DialogContent className="flex flex-col p-0 gap-0" style={{ width: '92vw', maxWidth: '1400px', height: '92vh', maxHeight: '92vh' }}>
+        {/* ── Header bar ───────────────────────────────────────── */}
+        <div className="flex items-center gap-3 px-4 py-2.5 border-b shrink-0">
+          <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
+          <DialogTitle className="text-sm font-medium">
+            {agentName ? `${agentName} — Live Browser` : 'Live Browser View'}
+          </DialogTitle>
+          {runStatus && <StatusPill status={runStatus.status} />}
+          {pollError && (
+            <Badge variant="outline" className="gap-1.5 border-orange-400 text-orange-500">
+              <WifiOff className="h-3 w-3" />Cannot reach agent-backend
+            </Badge>
+          )}
+          <div className="ml-auto flex items-center gap-2">
+            {isAuthRequired && (
+              <Button
+                size="sm"
+                onClick={handleDone}
+                disabled={resuming || aborting}
+                className="h-7 bg-green-600 hover:bg-green-700 text-white text-xs"
+              >
+                {resuming
+                  ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Saving…</>
+                  : <><CheckCircle2 className="mr-1 h-3 w-3" />Done — I'm Logged In</>
+                }
+              </Button>
+            )}
+            {!isTerminal && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground"
+                onClick={handleAbort}
+                disabled={aborting || resuming}
+              >
+                {aborting
+                  ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Aborting…</>
+                  : <>Abort Run</>
+                }
+              </Button>
+            )}
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => onOpenChange(false)}>
+              Close
+            </Button>
+          </div>
+        </div>
+
+        {/* ── Banners (auth / approval / terminal) ─────────────── */}
+        {(isAuthRequired || isAwaitingApproval || isTerminal) && (
+          <div className="shrink-0 px-4 py-2 border-b">
+            {isAuthRequired && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                <strong>Login required.</strong> Log in using the browser below, then click <strong>Done — I'm Logged In</strong>.
+              </p>
+            )}
+            {isAwaitingApproval && (
+              <p className="text-xs text-violet-700 dark:text-violet-400">
+                <strong>Awaiting approval.</strong> This step requires manual approval before the agent can continue.
+              </p>
+            )}
+            {isTerminal && (
+              <p className={`text-xs ${runStatus?.status === 'completed' ? 'text-green-700 dark:text-green-400' : runStatus?.status === 'aborted' ? 'text-red-700 dark:text-red-400' : 'text-red-700 dark:text-red-400'}`}>
+                {runStatus?.status === 'completed'
+                  ? 'Agent run completed successfully.'
+                  : runStatus?.status === 'aborted'
+                  ? 'Agent run was aborted.'
+                  : `Agent run failed${runStatus?.error ? `: ${runStatus.error}` : '.'}`}
+              </p>
             )}
           </div>
-        </DialogHeader>
+        )}
 
         {/* ── Browser viewport ───────────────────────────────── */}
-        <div className="flex-1 min-h-0 flex flex-col gap-3">
-
-          {/* Auth-required banner */}
-          {isAuthRequired && (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-800 px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
-              <strong>Login required.</strong> The agent encountered a login page. Please log in
-              using the browser below, then click <strong>Done — I'm Logged In</strong>.
-            </div>
-          )}
-
-          {isTerminal && (
-            <div className={`rounded-lg border px-4 py-3 text-sm ${
-              runStatus?.status === 'completed'
-                ? 'border-green-400 bg-green-50 dark:bg-green-950/30 text-green-800 dark:text-green-300'
-                : 'border-red-400 bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-300'
-            }`}>
-              {runStatus?.status === 'completed'
-                ? 'Agent run completed successfully.'
-                : `Agent run failed${runStatus?.error ? `: ${runStatus.error}` : '.'}`}
-            </div>
-          )}
-
-          {/* noVNC iframe */}
-          <div
-            className="flex-1 rounded-lg border bg-black overflow-hidden"
-            style={{ minHeight: '400px' }}
-          >
+        <div className="flex-1 min-h-0 bg-black overflow-hidden">
             {loadingNovnc ? (
-              <div className="flex h-full items-center justify-center text-white/60">
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
                 <Loader2 className="h-8 w-8 animate-spin" />
+                <p className="text-sm">Starting browser view…</p>
               </div>
             ) : iframeUrl ? (
               <iframe
@@ -209,75 +264,13 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentId, agentNam
                 title="Agent browser view"
                 allow="clipboard-read; clipboard-write"
               />
-            ) : runStatus?.status === 'running' || runStatus?.status === 'pending' ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
-                <Loader2 className="h-8 w-8 animate-spin" />
-                <p className="text-sm">Agent is running — browser view will appear when login is required</p>
-              </div>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
                 <Monitor className="h-10 w-10 opacity-30" />
-                <p className="text-sm">
-                  {!runStatus ? 'Loading run status…' : 'No browser view available'}
-                </p>
+                <p className="text-sm">No browser view available for this run</p>
               </div>
             )}
-          </div>
-
-          {/* Step log — compact scrollable list */}
-          {(runStatus?.steps?.length ?? 0) > 0 && (
-            <div className="rounded-lg border bg-muted/30 max-h-32 overflow-y-auto">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-3 py-2 border-b">
-                Steps ({runStatus!.steps.length})
-              </p>
-              <div className="divide-y">
-                {runStatus!.steps.slice(-10).map((step, i) => (
-                  <div key={i} className="px-3 py-1.5 flex items-center gap-2 text-xs">
-                    <span className="text-muted-foreground tabular-nums w-16 shrink-0">
-                      {new Date(step.timestamp).toLocaleTimeString()}
-                    </span>
-                    {step.role && (
-                      <Badge variant="secondary" className="text-xs py-0 h-4">{step.role}</Badge>
-                    )}
-                    {step.iteration !== undefined && (
-                      <span className="text-muted-foreground">Turn {step.iteration}</span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
         </div>
-
-        {/* ── Footer ───────────────────────────────────────────── */}
-        <DialogFooter className="gap-2 flex-wrap">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => { fetchStatus(); }}
-            disabled={pollError === false && !!intervalRef.current}
-          >
-            <RefreshCw className="mr-1.5 h-3.5 w-3.5" />Refresh status
-          </Button>
-
-          {isAuthRequired && (
-            <Button
-              size="sm"
-              onClick={handleDone}
-              disabled={resuming}
-              className="bg-green-600 hover:bg-green-700 text-white"
-            >
-              {resuming
-                ? <><Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />Saving session…</>
-                : <><CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />Done — I'm Logged In</>
-              }
-            </Button>
-          )}
-
-          <Button size="sm" variant="outline" onClick={() => onOpenChange(false)}>
-            Close
-          </Button>
-        </DialogFooter>
       </DialogContent>
     </Dialog>
   );

@@ -22,7 +22,7 @@ export default function DashboardLayout({
   useEffect(() => {
     if (!admin) {
       if (typeof window !== 'undefined') {
-        sessionStorage.setItem('post_login_redirect', window.location.pathname + window.location.search);
+        localStorage.setItem('post_login_redirect', window.location.pathname + window.location.search);
       }
       router.replace('/login');
       return;
@@ -51,7 +51,7 @@ export default function DashboardLayout({
         <ViewModeSidebar />
         <div className="flex-1 flex flex-col overflow-hidden md:ml-64">
           <main className="flex-1 overflow-y-auto bg-background p-4 md:p-6">
-            <div className="mx-auto w-full max-w-6xl">
+            <div className="mx-auto w-full max-w-6xl h-full">
               {children}
             </div>
           </main>
