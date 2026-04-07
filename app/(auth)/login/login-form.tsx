@@ -22,11 +22,12 @@ function GoogleIcon({ className }: { className?: string }) {
 }
 
 interface LoginFormProps {
+  centerName: string
   hasLogo: boolean
   logoVersion?: string
 }
 
-export function LoginForm({ hasLogo, logoVersion }: LoginFormProps) {
+export function LoginForm({ centerName, hasLogo, logoVersion }: LoginFormProps) {
   const router = useRouter();
   const { admin } = useAuthStore();
   const [error, setError] = useState('');
@@ -124,7 +125,7 @@ export function LoginForm({ hasLogo, logoVersion }: LoginFormProps) {
             )}
           </div>
           <p className="mt-2 text-sm sm:text-base font-medium text-muted-foreground">
-            Agent Center
+            {centerName}
           </p>
         </div>
 

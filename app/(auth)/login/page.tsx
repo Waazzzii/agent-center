@@ -11,5 +11,5 @@ export default async function LoginPage() {
   const logoVersion = branding.logo_storage_path?.split('/').pop()?.split('.')[0]?.slice(-12);
   const hasLogo = !!branding.logo_storage_path;
 
-  return <LoginForm hasLogo={hasLogo} logoVersion={logoVersion} />;
+  return <LoginForm centerName={branding.name ?? "Agent Center"} hasLogo={hasLogo} logoVersion={logoVersion} />;
 }

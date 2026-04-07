@@ -13,6 +13,9 @@ process.env.NODE_PATH = [
 
 const nextConfig: NextConfig = {
   reactStrictMode: false, // Disabled to better mimic production behavior in development
+  images: {
+    unoptimized: true,
+  },
 };
 
 export default nextConfig;

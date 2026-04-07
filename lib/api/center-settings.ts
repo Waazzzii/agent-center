@@ -14,7 +14,7 @@ export interface CenterSettingsResponse {
 
 export async function getCenterSettings(orgId: string): Promise<CenterSettingsResponse> {
   const response = await apiClient.get<CenterSettingsResponse>(
-    `/admin/organizations/${orgId}/center-settings`,
+    `/admin/organizations/${orgId}/product-settings/ac`,
   );
   return response.data;
 }
@@ -26,11 +26,11 @@ export async function updateCenterSettings(
     name?: string | null;
     custom_domain?: string | null;
     custom_theme?: string | null;
-    connector_config?: CenterConnectorConfig;
+    config?: CenterConnectorConfig;
   },
 ): Promise<CenterSettingsResponse> {
   const response = await apiClient.put<CenterSettingsResponse>(
-    `/admin/organizations/${orgId}/center-settings`,
+    `/admin/organizations/${orgId}/product-settings/ac`,
     data,
   );
   return response.data;
