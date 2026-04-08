@@ -69,19 +69,22 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
   const [pollError, setPollError] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // ── Load browser view immediately on open ────────────────────
+  // ── Load browser view once the run has an active browser instance ──
+  // Don't attempt VNC while provisioning/pending — there's no instance yet.
+
+  const browserReadyStatuses: Array<BrowserRunStatus['status']> = ['running', 'auth_required', 'awaiting_approval'];
 
   useEffect(() => {
-    if (!open) return;
+    if (!open || novnc || loadingNovnc) return;
+    if (!runStatus || !browserReadyStatuses.includes(runStatus.status)) return;
 
-    // Kick off the VNC session for this run as soon as the dialog opens.
-    // The backend lazily starts x11vnc + websockify on first call.
     setLoadingNovnc(true);
     getNoVNCInfo(runId)
       .then((info) => setNovnc(info))
       .catch(() => toast.error('Could not load browser view — check that the agent backend is running'))
       .finally(() => setLoadingNovnc(false));
-  }, [open, runId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, runId, runStatus?.status]);
 
   // ── Polling ──────────────────────────────────────────────────
 
@@ -275,8 +278,17 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
               </>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
-                <Monitor className="h-10 w-10 opacity-30" />
-                <p className="text-sm">No browser view available for this run</p>
+                {(runStatus?.status === 'provisioning' || runStatus?.status === 'pending') ? (
+                  <>
+                    <Loader2 className="h-8 w-8 animate-spin opacity-50" />
+                    <p className="text-sm">Starting browser instance…</p>
+                  </>
+                ) : (
+                  <>
+                    <Monitor className="h-10 w-10 opacity-30" />
+                    <p className="text-sm">No browser view available for this run</p>
+                  </>
+                )}
               </div>
             )}
         </div>

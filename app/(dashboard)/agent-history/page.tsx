@@ -226,7 +226,7 @@ function RunsTable({
                       <Monitor className="h-3.5 w-3.5" />
                     </Button>
                   )}
-                  {onAbort && (run.status === 'executing' || run.status === 'awaiting_approval') && (
+                  {onAbort && (run.status === 'executing' || run.status === 'awaiting_approval' || run.status === 'provisioning') && (
                     <Button
                       variant="ghost"
                       size="icon"
