@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
@@ -132,6 +132,7 @@ function RunsTable({
   onAbort?: (run: ExecutionRun) => void;
   abortingRunId?: string | null;
 }) {
+  const router = useRouter();
   return (
     <div className="divide-y">
       {runs.map((run) => {
@@ -141,7 +142,7 @@ function RunsTable({
           ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
           : null;
         return (
-          <div key={run.id}>
+          <div key={run.id} className="cursor-pointer hover:bg-muted/40 transition-colors" onClick={() => router.push(`/agent-history/${run.id}`)}>
             <div className="w-full">
               {/* Mobile layout */}
               <div className="md:hidden px-4 py-3 space-y-2">
@@ -162,6 +163,7 @@ function RunsTable({
                         href={`/approvals?execution_id=${run.id}`}
                         className="text-violet-500 hover:text-violet-600"
                         title="Go to approval request"
+                        onClick={(e) => e.stopPropagation()}
                       >
                         <ArrowUpRight className="h-4 w-4" />
                       </Link>

@@ -5,6 +5,7 @@ import { ThemeProvider } from "next-themes";
 import { TokenRefreshProvider } from "@/components/auth/TokenRefreshProvider";
 import { getAgentCenterBranding } from "@/lib/branding";
 import { headers } from "next/headers";
+import { BrandingProvider } from "@/components/branding/BrandingProvider";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -69,15 +70,17 @@ export default async function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          <TokenRefreshProvider />
-          {children}
-          <Toaster
-            position="top-right"
-            richColors
-            expand={true}
-            visibleToasts={5}
-            closeButton
-          />
+          <BrandingProvider hasLogo={!!branding.logo_storage_path} logoVersion={logoVersion}>
+            <TokenRefreshProvider />
+            {children}
+            <Toaster
+              position="top-right"
+              richColors
+              expand={true}
+              visibleToasts={5}
+              closeButton
+            />
+          </BrandingProvider>
         </ThemeProvider>
       </body>
     </html>

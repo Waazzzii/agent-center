@@ -19,12 +19,14 @@ import {
   CheckCircle,
   History,
   ShieldCheck,
+  Video,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/ui.store';
 import { logout } from '@/lib/auth/oauth';
 import { orgMainNavItems as mainItems } from '@/lib/nav';
+import { useBranding } from '@/components/branding/BrandingProvider';
 
 interface NavChild {
   label: string;
@@ -47,6 +49,7 @@ const MAIN_ICONS: Record<string, React.ElementType> = {
   '/agent-history': History,
   '/approvals':     CheckCircle,
   '/skills':        Wand2,
+  '/record':        Video,
   '/access':        ShieldCheck,
 };
 const CHILD_ICONS: Record<string, React.ElementType> = {};
@@ -60,6 +63,7 @@ export function ViewModeSidebar() {
   const pathname = usePathname();
   const { admin, hasPermission } = useAuthStore();
   const { selectedOrgId } = useAdminViewStore();
+  const { hasLogo, logoVersion } = useBranding();
   const { sidebarOpen, toggleSidebar, theme, toggleTheme } = useUIStore();
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const manuallyClosed = useRef<Set<string>>(new Set());
@@ -230,13 +234,23 @@ export function ViewModeSidebar() {
       >
         <div className="flex h-full flex-col">
           {/* Header */}
-          <div className="flex h-16 items-center justify-between border-b px-4">
-            <div className="flex items-center gap-2.5">
-              <Image src="/logo.png" alt="" width={80} height={80} className="h-11 w-auto" />
-              <Image src="/wazzi_light.png" alt="wazzi.io" width={120} height={40} className="h-3 w-auto dark:hidden" />
-              <Image src="/wazzi_dark.png" alt="wazzi.io" width={120} height={40} className="h-3 w-auto hidden dark:block" />
-            </div>
-            <Button variant="ghost" size="icon" className="md:hidden" onClick={toggleSidebar} aria-label="Close menu">
+          <div className="relative flex h-16 items-center justify-center border-b px-4 py-2">
+            {hasLogo ? (
+              <Image
+                src={`/api/branding/logo${logoVersion ? `?v=${logoVersion}` : ''}`}
+                alt=""
+                width={120}
+                height={40}
+                className="h-10 w-auto object-contain"
+              />
+            ) : (
+              <div className="flex items-center gap-2.5">
+                <Image src="/logo.png" alt="" width={80} height={80} className="h-11 w-auto" />
+                <Image src="/wazzi_light.png" alt="wazzi.io" width={120} height={40} className="h-3 w-auto dark:hidden" />
+                <Image src="/wazzi_dark.png" alt="wazzi.io" width={120} height={40} className="h-3 w-auto hidden dark:block" />
+              </div>
+            )}
+            <Button variant="ghost" size="icon" className="absolute right-2 md:hidden" onClick={toggleSidebar} aria-label="Close menu">
               <X className="h-5 w-5" />
             </Button>
           </div>
