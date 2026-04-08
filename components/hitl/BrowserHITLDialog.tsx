@@ -43,6 +43,7 @@ function StatusPill({ status }: { status: BrowserRunStatus['status'] }) {
     { label: string; cls: string; icon: React.ReactNode }
   > = {
     pending:           { label: 'Pending',            cls: 'border-slate-300 text-slate-500',                          icon: <Loader2 className="h-3 w-3 animate-spin" /> },
+    provisioning:      { label: 'Provisioning',        cls: 'border-slate-300 text-slate-500',                          icon: <Loader2 className="h-3 w-3 animate-spin" /> },
     running:           { label: 'Running',             cls: 'border-blue-300 text-blue-600 dark:text-blue-400',        icon: <Loader2 className="h-3 w-3 animate-spin" /> },
     auth_required:     { label: 'Awaiting Login',      cls: 'border-amber-400 text-amber-600 dark:text-amber-400',     icon: <Monitor className="h-3 w-3" /> },
     awaiting_approval: { label: 'Awaiting Approval',   cls: 'border-violet-400 text-violet-600 dark:text-violet-400',  icon: <PauseCircle className="h-3 w-3" /> },
