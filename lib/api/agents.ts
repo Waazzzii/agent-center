@@ -71,7 +71,7 @@ export interface AgentDetail extends Agent {
 export interface BrowserRunStatus {
   runId: string;
   agentId: string;
-  status: 'pending' | 'running' | 'auth_required' | 'awaiting_approval' | 'completed' | 'failed' | 'aborted';
+  status: 'pending' | 'running' | 'auth_required' | 'awaiting_approval' | 'completed' | 'failed' | 'aborted' | 'provisioning';
   steps: Array<{ iteration?: number; role?: string; timestamp: string; content?: unknown }>;
   error: string | null;
   createdAt: string;
@@ -216,7 +216,7 @@ export interface ExecutionRun {
   agent_requires_browser: boolean;
   trigger_type: 'webhook' | 'cron' | 'manual';
   trigger_id: string | null;
-  status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval';
+  status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'provisioning';
   display_status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'awaiting_login';
   error_message: string | null;
   started_at: string;

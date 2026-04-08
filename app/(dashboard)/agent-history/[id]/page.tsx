@@ -143,6 +143,7 @@ function StatusBadge({ status }: { status: string }) {
   if (status === 'executing') return <Badge variant="outline" className="gap-1.5 border-blue-300 text-blue-600 dark:text-blue-400"><Loader2 className="h-3 w-3 animate-spin" />Executing</Badge>;
   if (status === 'awaiting_approval') return <Badge variant="outline" className="gap-1.5 border-violet-400 text-violet-600 dark:text-violet-400"><PauseCircle className="h-3 w-3" />Awaiting Approval</Badge>;
   if (status === 'awaiting_login')    return <Badge variant="outline" className="gap-1.5 border-amber-400 text-amber-600 dark:text-amber-400"><Monitor className="h-3 w-3" />Awaiting Login</Badge>;
+  if (status === 'provisioning')      return <Badge variant="outline" className="gap-1.5 border-orange-400 text-orange-600 dark:text-orange-400"><Loader2 className="h-3 w-3 animate-spin" />Starting</Badge>;
   return <Badge variant="secondary">{status}</Badge>;
 }
 

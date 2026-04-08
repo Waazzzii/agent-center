@@ -100,6 +100,11 @@ function StatusBadge({ status }: { status: string }) {
       <Monitor className="h-3 w-3" />Awaiting Login
     </Badge>
   );
+  if (status === 'provisioning') return (
+    <Badge variant="outline" className="gap-1.5 border-orange-400 text-orange-600 dark:text-orange-400">
+      <Loader2 className="h-3 w-3 animate-spin" />Starting
+    </Badge>
+  );
   return <Badge variant="secondary">{status}</Badge>;
 }
 
@@ -279,8 +284,8 @@ export default function AgentExecutionsPage() {
   const hasFilters = activeFilters.length > 0;
 
   // Split runs into active (live) and history (terminal) for display
-  const activeRuns = runs.filter(r => r.status === 'executing' || r.status === 'awaiting_approval');
-  const historyRuns = runs.filter(r => r.status !== 'executing' && r.status !== 'awaiting_approval');
+  const activeRuns = runs.filter(r => r.status === 'executing' || r.status === 'awaiting_approval' || r.status === 'provisioning');
+  const historyRuns = runs.filter(r => r.status !== 'executing' && r.status !== 'awaiting_approval' && r.status !== 'provisioning');
 
   const loadHistory = useCallback(async (pg: number = page, filters: ActiveFilter[] = activeFilters) => {
     if (!selectedOrgId) return;
@@ -469,6 +474,7 @@ export default function AgentExecutionsPage() {
                   <SelectContent>
                     <SelectGroup>
                       <SelectLabel>Active</SelectLabel>
+                      <SelectItem value="provisioning">Starting</SelectItem>
                       <SelectItem value="executing">Executing</SelectItem>
                       <SelectItem value="awaiting_approval">Awaiting Approval</SelectItem>
                     </SelectGroup>
