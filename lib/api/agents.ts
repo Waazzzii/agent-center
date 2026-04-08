@@ -217,7 +217,7 @@ export interface ExecutionRun {
   trigger_type: 'webhook' | 'cron' | 'manual';
   trigger_id: string | null;
   status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'provisioning';
-  display_status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'awaiting_login';
+  display_status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'awaiting_login' | 'provisioning';
   error_message: string | null;
   started_at: string;
   completed_at: string | null;
