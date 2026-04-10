@@ -25,6 +25,7 @@ import {
   Check,
   Layers,
   X,
+  Timer,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { RecordedStep } from '@/lib/api/scripts';
@@ -60,6 +61,7 @@ const ACTION_ICONS: Record<ActionType, React.ReactNode> = {
   extract:    <Scissors className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
   switch_tab: <Layers className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
   close_tab:  <X className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
+  wait_for:   <Timer className="h-3.5 w-3.5 text-indigo-400 shrink-0" />,
 };
 
 function StepDescription({ step }: { step: RecordedStep }) {
@@ -168,6 +170,16 @@ function StepDescription({ step }: { step: RecordedStep }) {
         <span className="flex items-center gap-1.5 text-sm">
           {ACTION_ICONS.close_tab}
           <span className="text-muted-foreground">Close tab</span>
+        </span>
+      );
+    case 'wait_for':
+      return (
+        <span className="flex items-center gap-1.5 text-sm flex-wrap">
+          {ACTION_ICONS.wait_for}
+          <span className="text-muted-foreground">Wait for</span>
+          <span className="font-mono text-xs text-indigo-400">
+            {step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? ''}
+          </span>
         </span>
       );
     default:
@@ -419,6 +431,7 @@ const ACTION_LABELS: Record<ActionType, string> = {
   extract:    'Extract',
   switch_tab: 'Switch Tab',
   close_tab:  'Close Tab',
+  wait_for:   'Wait For',
 };
 
 function AddStepForm({ onAdd, onCancel }: { onAdd: (step: RecordedStep) => void; onCancel: () => void }) {

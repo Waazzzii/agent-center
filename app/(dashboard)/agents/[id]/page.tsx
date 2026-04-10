@@ -14,6 +14,7 @@ import {
 } from '@/lib/api/agents';
 import { getConnectors } from '@/lib/api/connectors';
 import { getSkills, type Skill } from '@/lib/api/skills';
+import { listScripts, type BrowserScript } from '@/lib/api/scripts';
 import {
   getAgentAccessGroups,
   getAssignedAccessGroups,
@@ -39,7 +40,7 @@ import { toast } from 'sonner';
 import {
   ArrowLeft, Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
   Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Search, Monitor,
-  LogIn, ShieldCheck, ExternalLink, GitBranch, Settings, Users,
+  LogIn, ShieldCheck, ExternalLink, GitBranch, Settings, Users, CircleDot,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -261,13 +262,14 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [pendingHitlCount, setPendingHitlCount] = useState(0);
   const [connectors, setConnectors] = useState<OrganizationConnector[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
+  const [browserScripts, setBrowserScripts] = useState<BrowserScript[]>([]);
   const [webhookKey, setWebhookKey] = useState<AgentWebhookKey | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Action dialog
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [editingAction, setEditingAction] = useState<AgentAction | null>(null);
-  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '' });
+  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', scriptParams: {} as Record<string, string> });
   const [savingAction, setSavingAction] = useState(false);
 
   // Trigger dialog
@@ -308,7 +310,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      let [agentData, actionsData, connData, hitlData, skillsData, assignedGroupsData, allGroupsData] = await Promise.all([
+      let [agentData, actionsData, connData, hitlData, skillsData, assignedGroupsData, allGroupsData, scriptsData] = await Promise.all([
         getAgent(selectedOrgId, agentId),
         getActions(selectedOrgId, agentId),
         getConnectors(selectedOrgId),
@@ -316,6 +318,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         getSkills(selectedOrgId),
         getAssignedAccessGroups(selectedOrgId, agentId),
         getAgentAccessGroups(selectedOrgId),
+        listScripts(selectedOrgId),
       ]);
       if ((agentData.triggers ?? []).length === 0) {
         await createTrigger(selectedOrgId, agentId, { trigger_type: 'manual' });
@@ -334,6 +337,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       if (webhookTrigger) loadWebhookKey(webhookTrigger.id);
       setConnectors(connData.connectors);
       setSkills(skillsData.items ?? []);
+      setBrowserScripts(scriptsData.scripts ?? []);
       setAssignedGroups(assignedGroupsData);
       setAllGroups(allGroupsData);
       setPendingHitlCount(hitlData.items.filter((h) => h.agent_id === agentId && h.status === 'awaiting_approval').length);
@@ -385,9 +389,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   // ── Actions ──
 
-  const openNewAction = (type: 'agent' | 'approval' | 'login') => {
+  const openNewAction = (type: 'agent' | 'approval' | 'login' | 'browser_script') => {
     setEditingAction(null);
-    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '' });
+    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', scriptParams: {} });
     setActionDialogOpen(true);
   };
 
@@ -412,6 +416,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       approval_instructions: action.approval_instructions ?? '',
       loginUrl,
       loginVerify,
+      scriptId: action.script_id ?? '',
+      scriptParams: (action.script_params as Record<string, string>) ?? {},
     });
     setActionDialogOpen(true);
   };
@@ -439,6 +445,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           action_type: 'login',
           prompt: JSON.stringify({ url: actionForm.loginUrl.trim(), verify: actionForm.loginVerify.trim() }),
           model: actionForm.model,
+        };
+      } else if (actionForm.action_type === 'browser_script') {
+        payload = {
+          name: actionForm.name.trim(),
+          action_type: 'browser_script',
+          script_id: actionForm.scriptId,
+          script_params: actionForm.scriptParams,
         };
       } else {
         payload = {
@@ -769,6 +782,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     <DropdownMenuItem onClick={() => openNewAction('login')} disabled={!agentRequiresBrowser}>
                       <LogIn className="mr-2 h-4 w-4" />Login Step
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => openNewAction('browser_script')} disabled={!agentRequiresBrowser}>
+                      <CircleDot className="mr-2 h-4 w-4" />Browser Script
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -806,21 +822,29 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                 ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
                                 : action.action_type === 'login'
                                 ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+                                : action.action_type === 'browser_script'
+                                ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
                                 : 'bg-primary/10 text-primary'
                             )}>
-                              {action.action_type === 'login' ? <LogIn className="h-3.5 w-3.5" /> : idx + 1}
+                              {action.action_type === 'login' ? <LogIn className="h-3.5 w-3.5" />
+                                : action.action_type === 'browser_script' ? <CircleDot className="h-3.5 w-3.5" />
+                                : idx + 1}
                             </div>
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 flex-wrap">
                                 <span className="font-medium text-sm">{action.name}</span>
                                 <Badge
-                                  variant={action.action_type === 'approval' ? 'outline' : action.action_type === 'login' ? 'outline' : 'secondary'}
+                                  variant={action.action_type === 'agent' ? 'secondary' : 'outline'}
                                   className={cn('text-xs',
                                     action.action_type === 'approval' && 'border-orange-400 text-orange-600',
                                     action.action_type === 'login' && 'border-sky-400 text-sky-600 dark:text-sky-400',
+                                    action.action_type === 'browser_script' && 'border-violet-400 text-violet-600 dark:text-violet-400',
                                   )}
                                 >
-                                  {action.action_type === 'approval' ? 'Approval' : action.action_type === 'login' ? 'Login' : 'Agent'}
+                                  {action.action_type === 'approval' ? 'Approval'
+                                    : action.action_type === 'login' ? 'Login'
+                                    : action.action_type === 'browser_script' ? 'Browser Script'
+                                    : 'Agent'}
                                 </Badge>
                                 {action.action_type === 'agent' && action.connector_ids && action.connector_ids.length > 0 && (
                                   <Badge variant="outline" className="text-xs">{action.connector_ids.length} connector{action.connector_ids.length !== 1 ? 's' : ''}</Badge>
@@ -834,6 +858,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                   ? (() => { try { const p = JSON.parse(action.prompt ?? '{}'); return p.url || '—'; } catch { return '—'; } })()
                                   : action.action_type === 'agent'
                                   ? (action.prompt ?? '—')
+                                  : action.action_type === 'browser_script'
+                                  ? (browserScripts.find((s) => s.id === action.script_id)?.name ?? action.script_id ?? '—')
                                   : (action.approval_instructions ?? '—')}
                               </p>
                             </div>
@@ -1081,7 +1107,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           <DialogHeader>
             <DialogTitle>
               {editingAction ? 'Edit' : 'Add'}{' '}
-              {actionForm.action_type === 'approval' ? 'Approval' : actionForm.action_type === 'login' ? 'Login Step' : 'Agent Step'}
+              {actionForm.action_type === 'approval' ? 'Approval'
+                : actionForm.action_type === 'login' ? 'Login Step'
+                : actionForm.action_type === 'browser_script' ? 'Browser Script'
+                : 'Agent Step'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
@@ -1162,6 +1191,58 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <Textarea placeholder="Describe what the approver needs to review and decide…" value={actionForm.approval_instructions} onChange={(e) => setActionForm(f => ({ ...f, approval_instructions: e.target.value }))} rows={4} className="text-sm" />
               </div>
             )}
+
+            {actionForm.action_type === 'browser_script' && (
+              <>
+                <div className="rounded-md bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 px-3 py-2 text-xs text-violet-700 dark:text-violet-400">
+                  The agent will run this browser script in its existing browser session and feed extracted values into the next action.
+                </div>
+                <div className="space-y-1">
+                  <Label>Script <span className="text-destructive">*</span></Label>
+                  <Select value={actionForm.scriptId} onValueChange={(v) => {
+                    const script = browserScripts.find((s) => s.id === v);
+                    const params: Record<string, string> = {};
+                    for (const p of (script?.parameters ?? [])) params[p] = '';
+                    setActionForm(f => ({ ...f, scriptId: v, scriptParams: params }));
+                  }}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a browser script…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {browserScripts.length === 0 ? (
+                        <SelectItem value="_none" disabled>No scripts available</SelectItem>
+                      ) : (
+                        browserScripts.map((s) => (
+                          <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                {actionForm.scriptId && (() => {
+                  const script = browserScripts.find((s) => s.id === actionForm.scriptId);
+                  const params = script?.parameters ?? [];
+                  if (params.length === 0) return null;
+                  return (
+                    <div className="space-y-2">
+                      <Label>Parameter Mappings</Label>
+                      <p className="text-xs text-muted-foreground">Map script parameters to values from the previous step output. Use <code className="bg-muted px-1 rounded">{'{{field_name}}'}</code> to reference extracted fields.</p>
+                      {params.map((param) => (
+                        <div key={param} className="flex items-center gap-2">
+                          <span className="text-xs font-mono bg-muted px-2 py-1 rounded w-32 shrink-0 truncate">{param}</span>
+                          <Input
+                            placeholder={`{{${param}}}`}
+                            value={actionForm.scriptParams[param] ?? ''}
+                            onChange={(e) => setActionForm(f => ({ ...f, scriptParams: { ...f.scriptParams, [param]: e.target.value } }))}
+                            className="text-xs font-mono"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setActionDialogOpen(false)}>Cancel</Button>
@@ -1171,7 +1252,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 savingAction ||
                 !actionForm.name.trim() ||
                 (actionForm.action_type === 'agent' && !actionForm.prompt.trim()) ||
-                (actionForm.action_type === 'login' && (!actionForm.loginUrl.trim() || !actionForm.loginVerify.trim()))
+                (actionForm.action_type === 'login' && (!actionForm.loginUrl.trim() || !actionForm.loginVerify.trim())) ||
+                (actionForm.action_type === 'browser_script' && !actionForm.scriptId)
               }
             >
               {savingAction ? 'Saving…' : editingAction ? 'Update' : 'Add Action'}

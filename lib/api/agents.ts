@@ -15,7 +15,7 @@ export interface AgentAction {
   id: string;
   agent_id: string;
   name: string;
-  action_type: 'agent' | 'approval' | 'login';
+  action_type: 'agent' | 'approval' | 'login' | 'browser_script';
   prompt?: string | null;
   connector_ids?: string[] | null;
   model: string;
@@ -25,6 +25,9 @@ export interface AgentAction {
   prior_action_id?: string | null;
   next_action_id?: string | null;
   order_index: number;
+  /** browser_script actions only */
+  script_id?: string | null;
+  script_params?: Record<string, string> | null;
   created_at: string;
   updated_at: string;
 }
@@ -228,7 +231,7 @@ export interface ExecutionRun {
 export interface ExecutionAction {
   id: string;
   action_name: string | null;
-  action_type: 'agent' | 'approval' | 'login';
+  action_type: 'agent' | 'approval' | 'login' | 'browser_script';
   status: string;
   started_at: string;
   output: string | null;

@@ -1,7 +1,34 @@
 import agentClient from './agent-client';
 
+export interface SelectorCandidate {
+  /** CSS selector, XPath expression, or plain text depending on `type` */
+  sel: string;
+  /** How this candidate was derived */
+  type: 'id' | 'data-testid' | 'data-test-id' | 'data-cy' | 'data-qa' | 'data-id' | 'data-e2e'
+      | 'name' | 'aria-label' | 'placeholder' | 'input-compound' | 'href'
+      | 'text' | 'css-path' | 'xpath' | string;
+}
+
+export interface ElementSnapshot {
+  tag: string;
+  id: string | null;
+  name: string | null;
+  type: string | null;
+  classes: string[];
+  placeholder: string | null;
+  ariaLabel: string | null;
+  ariaRole: string | null;
+  href: string | null;
+  innerText: string;
+  outerHTML: string | null;
+  parentHTML: string | null;
+  bounds: { x: number; y: number; w: number; h: number } | null;
+  /** Ranked selector candidates — highest confidence first */
+  candidates: SelectorCandidate[];
+}
+
 export interface RecordedStep {
-  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab';
+  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for';
   url?: string;
   selector?: string;
   value?: string;
@@ -9,13 +36,38 @@ export interface RecordedStep {
   key?: string;
   field_name?: string;
   tab_index?: number;
+  /** For wait_for steps: optional timeout override in ms */
+  timeout?: number;
+  /** Rich element snapshot captured at recording time; used for robust replay */
+  elementSnapshot?: ElementSnapshot;
+  /** Set to true when the selector was improved by AI post-processing */
+  selectorRefinedByAI?: boolean;
+  /** Original selector before AI refinement */
+  selectorOriginal?: string;
+  /**
+   * AI selector refinement state:
+   *   'queued'   — waiting in the serial AI queue
+   *   'refining' — AI is actively processing this step right now
+   *   true       — legacy / hybrid recording: pending AI (exact phase unknown)
+   */
+  _processing?: 'queued' | 'refining' | true;
+  /**
+   * What this step waits for before executing.
+   * New format: { selector, description } — one best selector + human label.
+   * Legacy format: { id, name, tag, classes, placeholder } — kept for old scripts.
+   */
   waitFor?: {
+    selector?: string | null;
+    description?: string | null;
+    // legacy fields
     id?: string | null;
     name?: string | null;
     tag?: string;
     classes?: string[];
     placeholder?: string | null;
   };
+  /** Human-readable label for what this step waits for. Computed server-side via annotateStep(). */
+  _waitLabel?: string | null;
 }
 
 export interface BrowserSession {
@@ -43,13 +95,15 @@ export interface BrowserScript {
 export async function startRecording(
   orgId: string,
   startUrl?: string,
-  sessionId?: string
+  sessionId?: string,
+  browserClientId?: string,
 ): Promise<{ recordingId: string; viewerUrl: string }> {
   const res = await agentClient.post<{ recordingId: string; viewerUrl: string }>(
     `/api/admin/${orgId}/record/start`,
     {
       ...(startUrl ? { start_url: startUrl } : {}),
       ...(sessionId ? { session_id: sessionId } : {}),
+      ...(browserClientId ? { browser_client_id: browserClientId } : {}),
     }
   );
   return res.data;
@@ -194,16 +248,25 @@ export interface StepRun {
   extracted: Record<string, string>;
   lastScreenshot: string | null;
   status: 'waiting' | 'running' | 'done' | 'error';
+  /** Live steps captured during active recording (polled in real-time). */
+  recordedSteps?: RecordedStep[];
+  recordingActive?: boolean;
 }
 
 export async function startStepRun(
   orgId: string,
   scriptId: string,
-  params: Record<string, string> = {}
+  params: Record<string, string> = {},
+  sessionId?: string,
+  browserClientId?: string | null,
 ): Promise<{ runId: string; currentIndex: number; totalSteps: number; step: RecordedStep | null; viewerUrl: string }> {
   const res = await agentClient.post(
     `/api/admin/${orgId}/scripts/${scriptId}/step-run`,
-    { params }
+    {
+      params,
+      ...(sessionId ? { session_id: sessionId } : {}),
+      ...(browserClientId ? { browser_client_id: browserClientId } : {}),
+    }
   );
   return res.data;
 }
@@ -244,6 +307,53 @@ export async function updateStepRunStep(
   return res.data;
 }
 
+export async function jumpStepRunToIndex(
+  orgId: string,
+  runId: string,
+  targetIndex: number
+): Promise<{ currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string> }> {
+  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/jump`, { targetIndex });
+  return res.data;
+}
+
 export async function abortStepRun(orgId: string, runId: string): Promise<void> {
   await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}`);
+}
+
+export async function startStepRunRecording(orgId: string, runId: string): Promise<StepRun & { recordingActive: boolean }> {
+  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/record-start`);
+  return res.data;
+}
+
+export async function stopStepRunRecording(
+  orgId: string,
+  runId: string
+): Promise<StepRun & { recordingActive: boolean; insertedCount: number }> {
+  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/record-stop`);
+  return res.data;
+}
+
+/**
+ * Inject the wait-for element picker overlay onto the live browser page.
+ * Blocks (up to ~30s) until the user clicks an element or presses Esc.
+ * Pass an AbortSignal to cancel from the UI side.
+ */
+export async function captureStepRunWaitFor(
+  orgId: string,
+  runId: string,
+  signal?: AbortSignal
+): Promise<{ selector: string; description: string | null }> {
+  const res = await agentClient.post(
+    `/api/admin/${orgId}/step-runs/${runId}/capture-wait-for`,
+    {},
+    { signal, timeout: 35_000 }
+  );
+  return res.data;
+}
+
+/**
+ * Cancel an in-progress wait-for capture (e.g. user dismissed the dialog).
+ */
+export async function cancelStepRunWaitForCapture(orgId: string, runId: string): Promise<void> {
+  await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}/capture-wait-for`).catch(() => {});
 }
