@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import {
   CheckCircle2, ChevronRight, ChevronsRight, Play, AlertCircle, Loader2,
-  CircleDot, MousePointerClick, X, Save, RotateCcw, Trash2,
+  CircleDot, MousePointerClick, X, Save, RotateCcw, Trash2, Plus,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import {
@@ -127,6 +127,7 @@ export function RunScriptModal({
   // ── Hybrid record+replay (within test mode) ───────────────────
   const [isRecording, setIsRecording]           = useState(false);
   const [liveRecordedSteps, setLiveRecordedSteps] = useState<RecordedStep[]>([]);
+  const [newStepIndices, setNewStepIndices]     = useState<Set<number>>(new Set());
   const recordingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepListRef      = useRef<HTMLDivElement>(null);
 
@@ -193,6 +194,7 @@ export function RunScriptModal({
     setAutoMode(false);
     setIsRecording(false);
     setLiveRecordedSteps([]);
+    setNewStepIndices(new Set());
     setIsCapturingWaitFor(false);
     setHasChanges(false);
     setHasSavedSession(false);
@@ -372,10 +374,14 @@ export function RunScriptModal({
         done: false,
       } : s);
       setEditedStep(res.step ? JSON.stringify(res.step, null, 2) : '');
-      if ((res as any).insertedCount === 0) {
+      if (res.insertedCount === 0) {
         toast.info('No steps were captured');
       } else {
         setHasSavedSession(false);
+        setHasChanges(true);
+        if (res.insertedStart != null) {
+          setNewStepIndices(new Set(Array.from({ length: res.insertedCount }, (_, k) => res.insertedStart! + k)));
+        }
       }
     } catch (err: any) {
       toast.error(err?.response?.data?.message || err?.message || 'Failed to stop recording');
@@ -401,6 +407,9 @@ export function RunScriptModal({
     setError(null);
     try {
       const res = await startStepRun(orgId, script.id, params, sessionId, browserClientId);
+      // Fetch the full run state to get the authoritative steps from the backend,
+      // ensuring we display the latest saved version rather than the prop's potentially stale copy.
+      const runState = await getStepRun(orgId, res.runId);
       setRunId(res.runId);
       setViewerUrl(res.viewerUrl);
       setActiveBrowserSession({ runId: res.runId, orgId, scriptId: script.id, mode: 'test' });
@@ -408,7 +417,7 @@ export function RunScriptModal({
         currentIndex: res.currentIndex,
         totalSteps:   res.totalSteps,
         step:         res.step,
-        steps:        script.steps ?? [],
+        steps:        runState.steps ?? script.steps ?? [],
         screenshot:   null,
         extracted:    {},
         done:         false,
@@ -583,6 +592,7 @@ export function RunScriptModal({
           const res = await stopStepRunRecording(orgId, runId);
           setIsRecording(false);
           setLiveRecordedSteps([]);
+          setNewStepIndices(new Set());
           steps = res.steps ?? steps;
           setStepRunState(s => s ? {
             ...s, totalSteps: res.totalSteps, steps,
@@ -616,12 +626,6 @@ export function RunScriptModal({
         toast.error(err?.response?.data?.message || err?.message || 'Failed to save');
       }
     }
-  };
-
-  const handleExitConfirmSave = async () => {
-    setShowExitWarning(false);
-    await handleSave();
-    await performExit();
   };
 
   // ── Orphan session handlers ───────────────────────────────────
@@ -682,12 +686,16 @@ export function RunScriptModal({
         setLiveRecordedSteps([]);
         setStepRunState((s) => s ? { ...s, totalSteps: res.totalSteps, steps: res.steps ?? s.steps } : s);
         if (res.insertedCount > 0) {
-          toast.success(`${res.insertedCount} step${res.insertedCount !== 1 ? 's' : ''} inserted`);
           setHasSavedSession(false);
+          setHasChanges(true);
+          if (res.insertedStart != null) {
+            setNewStepIndices(new Set(Array.from({ length: res.insertedCount }, (_, k) => res.insertedStart! + k)));
+          }
         } else {
           toast.info('No new steps captured');
         }
       } else {
+        setNewStepIndices(new Set());
         await startStepRunRecording(orgId, runId);
         setIsRecording(true);
       }
@@ -1042,13 +1050,36 @@ export function RunScriptModal({
                   </div>
                 )}
 
+                {/* Recording indicator at top — when currentIndex === 0 (no steps executed yet) */}
+                {isRecording && !showLiveDirectly && stepRunState && stepRunState.currentIndex === 0 && (
+                  <>
+                    <div className="px-3 py-1 flex items-center gap-2 bg-red-500/5 border-b border-red-500/15">
+                      <span className="relative flex h-1.5 w-1.5 shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500" />
+                      </span>
+                      <span className="text-xs text-red-400">Recording — steps insert here</span>
+                    </div>
+                    {liveRecordedSteps.map((r, ri) => (
+                      <div key={`rec-${ri}`} className="px-3 py-1.5 flex items-center gap-2 text-muted-foreground bg-red-500/5">
+                        <Plus className="h-3 w-3 shrink-0 text-green-500" />
+                        <span className="truncate flex-1">{stepLabel(r)}</span>
+                      </div>
+                    ))}
+                  </>
+                )}
+
                 {/* Unified step list — same display logic for both record and test modes */}
                 {stepsToShow.map((s, i) => {
                   // Current/completed highlighting only applies when NOT actively recording
                   const isCurrent   = !isRecording && stepRunState ? (i === stepRunState.currentIndex && !stepRunState.done) : false;
                   const isCompleted = !isRecording && stepRunState ? i < stepRunState.currentIndex : false;
-                  // Show live-captured inserts after the step at currentIndex (only when base steps exist)
-                  const showLiveInsert = isRecording && !showLiveDirectly && stepRunState && i === stepRunState.currentIndex;
+                  // Show recording position + live steps BEFORE the current step (after last executed).
+                  // currentIndex > 0: show after the last executed step (i === currentIndex - 1).
+                  // currentIndex === 0: handled by the header element above the map.
+                  const showLiveInsert = isRecording && !showLiveDirectly && stepRunState &&
+                    stepRunState.currentIndex > 0 && i === stepRunState.currentIndex - 1;
+                  const isNew       = newStepIndices.has(i);
                   const isJumping   = jumpingTo === i;
                   const isHovered   = hoveredStep === i && !isExecuting && !isRecording;
                   return (
@@ -1057,6 +1088,7 @@ export function RunScriptModal({
                         className={cn(
                           'px-3 py-1.5 flex items-center gap-2 group relative',
                           isCurrent  ? 'bg-primary/10 font-medium' : 'text-muted-foreground',
+                          isNew && !isCurrent && 'bg-green-500/5',
                           isHovered && !isCurrent && 'bg-muted/40',
                         )}
                         onMouseEnter={() => setHoveredStep(i)}
@@ -1090,29 +1122,31 @@ export function RunScriptModal({
                               <Trash2 className="h-3.5 w-3.5" />
                             </button>
                           </div>
+                        ) : isNew ? (
+                          <Plus className="h-3 w-3 ml-auto shrink-0 text-green-500" />
                         ) : null}
                       </div>
-                      {/* Live-captured steps inserted at currentIndex — neutral styling, no red */}
-                      {showLiveInsert && liveRecordedSteps.map((r, ri) => (
-                        <div key={`rec-${ri}`} className="px-3 py-1.5 flex items-center gap-2 text-muted-foreground bg-muted/30">
-                          <span className="w-5 shrink-0 text-right tabular-nums">↳</span>
-                          <span className="truncate flex-1">{stepLabel(r)}</span>
-                        </div>
-                      ))}
+                      {/* Recording insertion point — shown before the current (next-to-run) step */}
+                      {showLiveInsert && (
+                        <>
+                          <div className="px-3 py-1 flex items-center gap-2 bg-red-500/5 border-y border-red-500/15">
+                            <span className="relative flex h-1.5 w-1.5 shrink-0">
+                              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
+                              <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500" />
+                            </span>
+                            <span className="text-xs text-red-400">Recording — steps insert here</span>
+                          </div>
+                          {liveRecordedSteps.map((r, ri) => (
+                            <div key={`rec-${ri}`} className="px-3 py-1.5 flex items-center gap-2 text-muted-foreground bg-red-500/5">
+                              <Plus className="h-3 w-3 shrink-0 text-green-500" />
+                              <span className="truncate flex-1">{stepLabel(r)}</span>
+                            </div>
+                          ))}
+                        </>
+                      )}
                     </div>
                   );
                 })}
-
-                {/* Recording footer — shown while recording with base steps present */}
-                {isRecording && baseSteps.length > 0 && (
-                  <div className="px-3 py-2 flex items-center gap-2 text-muted-foreground border-t">
-                    <span className="relative flex h-2 w-2 shrink-0">
-                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
-                      <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
-                    </span>
-                    <span className="text-xs">Recording…</span>
-                  </div>
-                )}
 
                 {/* Test mode starting placeholder */}
                 {!isRecordMode && !stepRunState && starting && (
@@ -1203,10 +1237,8 @@ export function RunScriptModal({
             <DialogTitle>Exit session?</DialogTitle>
             <DialogDescription>
               {(isRecording && liveRecordedSteps.length > 0)
-                ? 'You have an active recording in progress. Save your steps before exiting, or discard them.'
-                : needsExitWarning
-                  ? 'You have unsaved changes. Save before exiting or your edits will be discarded.'
-                  : 'Are you sure you want to exit? The browser instance will be closed.'}
+                ? 'You have an active recording in progress. Your unsaved steps will be discarded.'
+                : 'You have unsaved changes. Use the Save button to keep them before exiting.'}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1214,16 +1246,11 @@ export function RunScriptModal({
               pendingNavRef.current = null;
               setShowExitWarning(false);
             }}>
-              Keep session
+              Continue
             </Button>
             <Button variant="destructive" size="sm" onClick={() => { setShowExitWarning(false); performExit(); }}>
               Discard & exit
             </Button>
-            {needsExitWarning && (
-              <Button size="sm" onClick={handleExitConfirmSave}>
-                Save & exit
-              </Button>
-            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>

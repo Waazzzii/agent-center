@@ -160,7 +160,8 @@ export function ScriptsList({ orgId, onEdit, refreshKey }: ScriptsListProps) {
         script={runModalScript}
         orgId={orgId}
         open={!!runModalScript}
-        onClose={() => setRunModalScript(null)}
+        onClose={() => { setRunModalScript(null); load(); }}
+        onSaved={() => load()}
       />
 
       <Dialog open={!!scriptToDelete} onOpenChange={(o) => !o && setScriptToDelete(null)}>

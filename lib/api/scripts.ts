@@ -329,7 +329,7 @@ export async function startStepRunRecording(orgId: string, runId: string): Promi
 export async function stopStepRunRecording(
   orgId: string,
   runId: string
-): Promise<StepRun & { recordingActive: boolean; insertedCount: number }> {
+): Promise<StepRun & { recordingActive: boolean; insertedCount: number; insertedStart: number | null }> {
   const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/record-stop`);
   return res.data;
 }
