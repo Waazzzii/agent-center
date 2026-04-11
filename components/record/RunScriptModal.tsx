@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
@@ -14,9 +14,10 @@ import {
 } from '@/components/ui/dialog';
 import {
   CheckCircle2, ChevronRight, ChevronsRight, Play, AlertCircle, Loader2,
-  CircleDot, MousePointerClick, X, Save, RotateCcw, Trash2, Plus,
+  CircleDot, MousePointerClick, X, Save, RotateCcw, Trash2, Plus, Server,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
+import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
 import {
   getActiveBrowserSession,
   setActiveBrowserSession,
@@ -26,7 +27,6 @@ import {
 import {
   createScript,
   updateScript,
-  deleteScript,
   startStepRun,
   getStepRun,
   executeStepRunStep,
@@ -135,6 +135,10 @@ export function RunScriptModal({
   const [isCapturingWaitFor, setIsCapturingWaitFor] = useState(false);
   const captureAbortRef = useRef<AbortController | null>(null);
 
+  // ── VM provisioning (async slot allocation) ───────────────────
+  const [provisioningRunId, setProvisioningRunId] = useState<string | null>(null);
+  const provisioningModeRef = useRef<'test' | 'record'>('test');
+
   // ── Orphan session recovery ────────────────────────────────────
   const [orphanSession, setOrphanSession] = useState<ActiveBrowserSession | null>(null);
   const [checkingOrphan, setCheckingOrphan] = useState(false);
@@ -179,6 +183,7 @@ export function RunScriptModal({
   const reset = () => {
     if (captureAbortRef.current) { captureAbortRef.current.abort(); captureAbortRef.current = null; }
     if (recordingPollRef.current) { clearInterval(recordingPollRef.current); recordingPollRef.current = null; }
+    setProvisioningRunId(null);
     setParams({});
     setViewerUrl(null);
     setError(null);
@@ -268,8 +273,12 @@ export function RunScriptModal({
   // ── Navigation guard — active while a session is live ─────────
   // Uses capture-phase click interception (more reliable than pushState patching
   // in Next.js App Router) plus beforeunload for browser close/refresh.
+  // Active during session startup, provisioning, and live sessions — prevents the
+  // user from navigating away (which would orphan the backend session / VM slot).
+  const hasActiveSession = !!(runId || provisioningRunId || starting);
+
   useEffect(() => {
-    if (!runId) return;
+    if (!hasActiveSession) return;
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
@@ -302,7 +311,7 @@ export function RunScriptModal({
       document.removeEventListener('click', handleLinkClick, true);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [runId]);
+  }, [hasActiveSession]);
 
   // ── Helpers ───────────────────────────────────────────────────
   const extractParams = (steps: RecordedStep[]) => Array.from(new Set(
@@ -315,25 +324,82 @@ export function RunScriptModal({
     })
   ));
 
+  // ── Provisioning poll (shared hook) ────────────────────────────
+  // Drives the provisioning UI. Set provisioningRunId to start polling;
+  // the hook calls onReady/onError when the VM finishes booting.
+  const handleProvisioningReady = useCallback(async (run: { status: string; runId?: string; currentIndex?: number; totalSteps?: number; step?: RecordedStep | null; steps?: RecordedStep[] }) => {
+    if (!orgId) return;
+    const id = provisioningRunId!;
+    setProvisioningRunId(null);
+
+    setRunId(id);
+    setViewerUrl(`/live/run/${id}`);
+
+    if (provisioningModeRef.current === 'record') {
+      await startStepRunRecording(orgId, id);
+      setIsRecording(true);
+      setStepRunState({
+        currentIndex: 0, totalSteps: 0, step: null, steps: [],
+        screenshot: null, extracted: {}, done: false, status: 'waiting',
+      });
+    } else {
+      const runState = await getStepRun(orgId, id);
+      setStepRunState({
+        currentIndex: run.currentIndex ?? 0,
+        totalSteps:   run.totalSteps ?? 0,
+        step:         run.step ?? null,
+        steps:        runState.steps ?? [],
+        screenshot:   null,
+        extracted:    {},
+        done:         false,
+        status:       'waiting',
+      });
+      setEditedStep(run.step ? JSON.stringify(run.step, null, 2) : '');
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgId, provisioningRunId]);
+
+  const handleProvisioningError = useCallback((err: any) => {
+    setProvisioningRunId(null);
+    clearActiveBrowserSession();
+    const msg = err?.response?.data?.error || err?.message || 'Browser session failed to start';
+    toast.error(msg);
+    onClose();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose]);
+
+  const { isProvisioning, elapsedMs: provisioningElapsedMs } = useProvisioningPoll({
+    runId: provisioningRunId,
+    pollFn: (id) => getStepRun(orgId!, id),
+    isProvisioningStatus: (s) => s === 'provisioning',
+    onReady: handleProvisioningReady,
+    onError: handleProvisioningError,
+  });
+
   // ── Record mode: start ────────────────────────────────────────
-  // Creates a blank script then reuses startStepRun (same agent slot as test).
+  // Uses _draft as the script ID so no script is persisted until the user saves.
   const handleStartRecordSession = async () => {
     if (!orgId) return;
     setStarting(true);
-    let createdScriptId: string | null = null;
     try {
       const autoName = new Date().toLocaleString('en-US', {
         month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true,
       });
-      const tempScript = await createScript(orgId, { name: autoName, steps: [], parameters: [] });
-      createdScriptId = tempScript.id;
-      setTempScriptId(tempScript.id);
       setScriptName(autoName);
 
-      const res = await startStepRun(orgId, tempScript.id, {}, undefined, browserClientId);
+      const res = await startStepRun(orgId, '_draft', {}, undefined, browserClientId);
+
+      // 202: no VM slot was immediately available — provisioning in background
+      if ('status' in res && res.status === 'provisioning') {
+        setActiveBrowserSession({ runId: res.runId, orgId, scriptId: null, mode: 'record' });
+        provisioningModeRef.current = 'record';
+        setProvisioningRunId(res.runId);
+        return;
+      }
+
       setRunId(res.runId);
       setViewerUrl(res.viewerUrl);
-      setActiveBrowserSession({ runId: res.runId, orgId, scriptId: tempScript.id, mode: 'record' });
+      setActiveBrowserSession({ runId: res.runId, orgId, scriptId: null, mode: 'record' });
       setStepRunState({
         currentIndex: 0, totalSteps: 0, step: null, steps: [],
         screenshot: null, extracted: {}, done: false, status: 'waiting',
@@ -343,10 +409,6 @@ export function RunScriptModal({
       await startStepRunRecording(orgId, res.runId);
       setIsRecording(true);
     } catch (err: any) {
-      // Clean up the temp script if slot allocation failed (e.g. 503 browser capacity)
-      if (createdScriptId) {
-        deleteScript(orgId, createdScriptId).catch(() => {});
-      }
       const msg = err?.response?.data?.error || err?.message || 'Failed to start recording';
       toast.error(msg);
       onClose();
@@ -407,6 +469,15 @@ export function RunScriptModal({
     setError(null);
     try {
       const res = await startStepRun(orgId, script.id, params, sessionId, browserClientId);
+
+      // 202: no VM slot was immediately available — provisioning in background
+      if ('status' in res && res.status === 'provisioning') {
+        setActiveBrowserSession({ runId: res.runId, orgId, scriptId: script.id, mode: 'test' });
+        provisioningModeRef.current = 'test';
+        setProvisioningRunId(res.runId);
+        return;
+      }
+
       // Fetch the full run state to get the authoritative steps from the backend,
       // ensuring we display the latest saved version rather than the prop's potentially stale copy.
       const runState = await getStepRun(orgId, res.runId);
@@ -524,12 +595,12 @@ export function RunScriptModal({
   };
 
   const performExit = async () => {
+    // Stop provisioning poll — let the backend continue booting; the session will
+    // become an orphan that the user can resume or discard next time they open the modal.
+    setProvisioningRunId(null);
     if (isRecording && runId && orgId) await stopStepRunRecording(orgId, runId).catch(() => {});
     if (runId && orgId) await abortStepRun(orgId, runId).catch(() => {});
-    if (mode === 'record' && orgId && tempScriptId && !hasSavedSession) {
-      // Delete the blank placeholder only if it was never saved
-      await deleteScript(orgId, tempScriptId).catch(() => {});
-    }
+    // No temp script to clean up — script is only created on explicit Save.
     clearActiveBrowserSession();
 
     const pendingNav = pendingNavRef.current;
@@ -583,7 +654,6 @@ export function RunScriptModal({
     if (!orgId) return;
 
     if (mode === 'record') {
-      if (!tempScriptId) return;
       let steps = stepRunState?.steps ?? [];
 
       // Stop active recording first so the captured steps are included.
@@ -603,11 +673,17 @@ export function RunScriptModal({
       }
 
       try {
-        await updateScript(orgId, tempScriptId, {
-          name: scriptName.trim() || 'Untitled Script',
-          steps,
-          parameters: extractParams(steps),
-        });
+        const name = scriptName.trim() || 'Untitled Script';
+        const params = extractParams(steps);
+
+        if (tempScriptId) {
+          // Already saved once — update in place
+          await updateScript(orgId, tempScriptId, { name, steps, parameters: params });
+        } else {
+          // First save — create the script now
+          const created = await createScript(orgId, { name, steps, parameters: params });
+          setTempScriptId(created.id);
+        }
         toast.success('Script saved!');
         setHasSavedSession(true);
         onSaved?.();
@@ -634,6 +710,16 @@ export function RunScriptModal({
     setResumingOrphan(true);
     try {
       const run = await getStepRun(orgId, orphanSession.runId);
+
+      // Orphan is still provisioning — re-attach the poll and show the banner
+      if (run.status === 'provisioning') {
+        setOrphanSession(null);
+        setResumingOrphan(false);
+        provisioningModeRef.current = orphanSession.mode ?? 'test';
+        setProvisioningRunId(orphanSession.runId);
+        return;
+      }
+
       setRunId(orphanSession.runId);
       setViewerUrl(`/live/run/${orphanSession.runId}`);
       setScriptName(run?.steps?.length ? `Resumed session` : scriptName || '');
@@ -759,7 +845,7 @@ export function RunScriptModal({
 
   const isExecuting = stepRunState?.status === 'running' || starting;
   const isRecordMode = mode === 'record';
-  const needsParams = !isRecordMode && !!script && script.parameters.length > 0 && !runId;
+  const needsParams = !isRecordMode && !!script && script.parameters.length > 0 && !runId && !isProvisioning;
   const hasSteps = (stepRunState?.totalSteps ?? 0) > 0 || (stepRunState?.steps?.length ?? 0) > 0;
 
   // ── Derived: does exit need a warning? ────────────────────────
@@ -792,6 +878,11 @@ export function RunScriptModal({
           {/* Status dot */}
           {starting ? (
             <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground shrink-0" />
+          ) : isProvisioning ? (
+            <span className="relative flex h-2 w-2 shrink-0">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-500 opacity-75" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+            </span>
           ) : stepRunState?.done ? (
             <CheckCircle2 className="h-3.5 w-3.5 text-green-500 shrink-0" />
           ) : stepRunState?.status === 'error' ? (
@@ -919,8 +1010,8 @@ export function RunScriptModal({
             </Button>
           )}
 
-          {/* Exit — always (X icon) */}
-          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleExit} disabled={starting} title="Exit">
+          {/* Exit — always (X icon); enabled even during provisioning so user can leave */}
+          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleExit} disabled={starting && !isProvisioning} title="Exit">
             <X className="h-4 w-4" />
           </Button>
         </div>
@@ -931,7 +1022,26 @@ export function RunScriptModal({
 
         {/* VNC (or orphan recovery prompt) */}
         <div className="flex-1 min-w-0 overflow-hidden">
-          {(checkingOrphan || orphanSession) ? (
+          {isProvisioning ? (
+            <div className="w-full h-full flex items-center justify-center">
+              <div className="flex flex-col items-center gap-4 text-center max-w-md px-6">
+                <div className="h-14 w-14 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                  <Server className="h-7 w-7 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div className="space-y-1.5">
+                  <p className="text-sm font-semibold">Waiting for a browser VM</p>
+                  <p className="text-xs text-muted-foreground leading-relaxed">
+                    All browser slots are currently in use. A new VM is being provisioned — this typically takes 1–2 minutes.
+                    The browser will open automatically once it&apos;s ready.
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-2.5">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
+                  <span>You can close this window and come back — your session will be waiting for you.</span>
+                </div>
+              </div>
+            </div>
+          ) : (checkingOrphan || orphanSession) ? (
             <div className="w-full h-full flex items-center justify-center">
               {checkingOrphan ? (
                 <div className="flex flex-col items-center gap-3 text-muted-foreground">
@@ -978,6 +1088,11 @@ export function RunScriptModal({
               scrolling="no"
               title="Browser"
             />
+          ) : isProvisioning ? (
+            <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
+              <Loader2 className="h-8 w-8 animate-spin opacity-50" />
+              <p className="text-sm">Starting browser instance{provisioningElapsedMs > 30_000 ? ' — this may take a minute' : ''}…</p>
+            </div>
           ) : (
             <div className="w-full h-full flex items-center justify-center text-muted-foreground">
               <Loader2 className="h-8 w-8 animate-spin" />

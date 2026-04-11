@@ -236,10 +236,25 @@ export interface StepRun {
   steps: RecordedStep[];
   extracted: Record<string, string>;
   lastScreenshot: string | null;
-  status: 'waiting' | 'running' | 'done' | 'error';
+  status: 'waiting' | 'running' | 'done' | 'error' | 'provisioning';
   /** Live steps captured during active recording (polled in real-time). */
   recordedSteps?: RecordedStep[];
   recordingActive?: boolean;
+}
+
+/** Returned (HTTP 202) when a browser VM needs to be provisioned first. */
+export interface StepRunProvisioning {
+  runId: string;
+  status: 'provisioning';
+}
+
+export interface StepRunReady {
+  status?: never;
+  runId: string;
+  currentIndex: number;
+  totalSteps: number;
+  step: RecordedStep | null;
+  viewerUrl: string;
 }
 
 export async function startStepRun(
@@ -248,7 +263,7 @@ export async function startStepRun(
   params: Record<string, string> = {},
   sessionId?: string,
   browserClientId?: string | null,
-): Promise<{ runId: string; currentIndex: number; totalSteps: number; step: RecordedStep | null; viewerUrl: string }> {
+): Promise<StepRunProvisioning | StepRunReady> {
   const res = await agentClient.post(
     `/api/admin/${orgId}/scripts/${scriptId}/step-run`,
     {

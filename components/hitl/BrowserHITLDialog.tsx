@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   getBrowserRunStatus,
   getNoVNCInfo,
@@ -9,6 +9,7 @@ import {
   type BrowserRunStatus,
   type NoVNCInfo,
 } from '@/lib/api/agents';
+import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
 import {
   Dialog,
   DialogContent,
@@ -69,6 +70,32 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
   const [pollError, setPollError] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  // Whether the initial fetch found a provisioning/pending status.
+  // Drives the shared provisioning poll hook for fast 3s polling.
+  const [provisioningRunId, setProvisioningRunId] = useState<string | null>(null);
+
+  // ── Provisioning poll (shared hook) — fast 3s poll while VM boots ──
+  const handleProvisioningReady = useCallback((data: BrowserRunStatus) => {
+    setProvisioningRunId(null);
+    setRunStatus(data);
+    // Start the normal 10s status poll now that provisioning is done
+    startStatusPoll();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleProvisioningError = useCallback(() => {
+    setProvisioningRunId(null);
+    setPollError(true);
+  }, []);
+
+  const { isProvisioning, elapsedMs: provisioningElapsedMs } = useProvisioningPoll<BrowserRunStatus>({
+    runId: provisioningRunId,
+    pollFn: (id) => getBrowserRunStatus(id),
+    isProvisioningStatus: (s) => s === 'provisioning' || s === 'pending',
+    onReady: handleProvisioningReady,
+    onError: handleProvisioningError,
+  });
+
   // ── Load browser view once the run has an active browser instance ──
   // Don't attempt VNC while provisioning/pending — there's no instance yet.
 
@@ -86,7 +113,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, runId, runStatus?.status]);
 
-  // ── Polling ──────────────────────────────────────────────────
+  // ── Status polling (10s) — runs after provisioning is complete ──
 
   const fetchStatus = async () => {
     try {
@@ -104,11 +131,32 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
     }
   };
 
+  const startStatusPoll = () => {
+    if (intervalRef.current) clearInterval(intervalRef.current);
+    intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
+  };
+
+  // On dialog open: do an initial fetch to determine if we need the fast provisioning poll
   useEffect(() => {
     if (!open) return;
 
-    fetchStatus();
-    intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
+    (async () => {
+      try {
+        const data = await getBrowserRunStatus(runId);
+        setRunStatus(data);
+        setPollError(false);
+
+        if (data.status === 'provisioning' || data.status === 'pending') {
+          // Hand off to the shared provisioning poll hook (3s)
+          setProvisioningRunId(runId);
+        } else {
+          // Already past provisioning — use the normal 10s poll
+          startStatusPoll();
+        }
+      } catch {
+        setPollError(true);
+      }
+    })();
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
@@ -122,6 +170,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
       setNovnc(null);
       setRunStatus(null);
       setPollError(false);
+      setProvisioningRunId(null);
     }
   }, [open]);
 
@@ -282,10 +331,10 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
               </>
             ) : (
               <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
-                {(runStatus?.status === 'provisioning' || runStatus?.status === 'pending') ? (
+                {isProvisioning || runStatus?.status === 'provisioning' || runStatus?.status === 'pending' ? (
                   <>
                     <Loader2 className="h-8 w-8 animate-spin opacity-50" />
-                    <p className="text-sm">Starting browser instance…</p>
+                    <p className="text-sm">Starting browser instance{provisioningElapsedMs > 30_000 ? ' — this may take a minute' : ''}…</p>
                   </>
                 ) : (
                   <>
