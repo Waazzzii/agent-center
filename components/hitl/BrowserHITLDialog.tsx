@@ -153,11 +153,14 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
     try {
       await resumeBrowserRun(runId);
       toast.success('Agent resuming — browser session saved');
-      // Resume polling to track progress
-      if (!intervalRef.current) {
-        intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
-      }
-      fetchStatus();
+      // Immediately flip to running so the button/banner disappear and the
+      // interaction overlay is restored — don't wait for the next poll cycle.
+      setRunStatus((prev) => prev ? { ...prev, status: 'running' } : prev);
+      // Resume polling to track actual progress, but delay the first poll so
+      // the backend has time to transition state — otherwise it returns the
+      // stale auth_required status and the button flickers back.
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
     } catch (err: any) {
       toast.error(err?.response?.data?.error ?? 'Failed to resume agent');
     } finally {
@@ -265,7 +268,8 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
               <>
                 <iframe
                   src={iframeUrl}
-                  className="w-full h-full border-0"
+                  className="w-full h-full border-0 block"
+                  scrolling="no"
                   title="Agent browser view"
                   allow="clipboard-read; clipboard-write"
                 />

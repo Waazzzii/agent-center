@@ -14,16 +14,22 @@
  *     whether the token is already fresh and reschedules if so. It does NOT
  *     attempt a blind refresh — the reactive 401 layer is the final backstop.
  *
+ * Expired-token recovery:
+ *   - If the access token is already expired when the scheduler starts or when
+ *     the tab regains focus, it attempts a refresh using the refresh token
+ *     (valid for 30 days) before redirecting to login. This covers the
+ *     common "laptop sleep / closed tab" case gracefully.
+ *
  * ─── Test values — restore before going live ─────────────────────────────────
- * REFRESH_BEFORE_EXPIRY_MS  10_000  →  60_000  (1 min)
- * REFRESH_TIMEOUT_MS         3_000  →  10_000  (10 sec)
- * LOCK_WAIT_MS               2_000  →   5_000  (5 sec)
+ * REFRESH_BEFORE_EXPIRY_MS  10_000  →  300_000  (5 min)
+ * REFRESH_TIMEOUT_MS         3_000  →   10_000  (10 sec)
+ * LOCK_WAIT_MS               2_000  →    5_000  (5 sec)
  * ─────────────────────────────────────────────────────────────────────────────
  */
 
-export const REFRESH_BEFORE_EXPIRY_MS = 60_000 // fire this many ms before expiry
-const REFRESH_TIMEOUT_MS               = 10_000 // max time for the refresh network call
-const LOCK_WAIT_MS                     = 5_000  // max time to wait for the lock
+export const REFRESH_BEFORE_EXPIRY_MS = 5 * 60_000 // fire this many ms before expiry (5 min)
+const REFRESH_TIMEOUT_MS               = 10_000     // max time for the refresh network call
+const LOCK_WAIT_MS                     = 5_000      // max time to wait for the lock
 
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -128,15 +134,35 @@ export function scheduleTokenRefresh(exp: number, opts: TokenRefreshOptions): vo
 // ─── Lifecycle ────────────────────────────────────────────────────────────────
 
 /**
+ * Attempt a silent refresh. Returns the new expiry on success, redirects on failure.
+ * Used as a recovery path when the access token is found to be already expired.
+ */
+async function tryRecoverSession(opts: TokenRefreshOptions): Promise<number | null> {
+  try {
+    const newExp = await opts.refresh(AbortSignal.timeout(REFRESH_TIMEOUT_MS))
+    if (newExp !== null) return newExp
+  } catch { /* fall through */ }
+  clearAndRedirect(opts.loginPath, opts)
+  return null
+}
+
+/**
  * Start the scheduler. Returns a cleanup function suitable for useEffect.
  * No-op (returns empty cleanup) when the user is not logged in.
+ *
+ * If the access token is already expired on mount, a silent refresh is
+ * attempted first. The refresh token is valid for 30 days, so this handles
+ * the common "laptop sleep / closed tab overnight" case without a login page.
  */
 export function start(opts: TokenRefreshOptions): () => void {
   const exp = opts.readExp()
   if (!exp) return () => {}
 
   if (exp * 1000 < Date.now()) {
-    clearAndRedirect(opts.loginPath, opts)
+    // Token expired — try the refresh token before forcing a re-login.
+    tryRecoverSession(opts).then((newExp) => {
+      if (newExp !== null) scheduleTokenRefresh(newExp, opts)
+    })
     return () => {}
   }
 
@@ -147,7 +173,10 @@ export function start(opts: TokenRefreshOptions): () => void {
     if (document.visibilityState !== "visible") return
     const freshExp = opts.readExp()
     if (!freshExp || freshExp * 1000 < Date.now()) {
-      clearAndRedirect(opts.loginPath, opts)
+      // Token expired while the tab was hidden — recover silently.
+      tryRecoverSession(opts).then((newExp) => {
+        if (newExp !== null) scheduleTokenRefresh(newExp, opts)
+      })
       return
     }
     scheduleTokenRefresh(freshExp, opts)

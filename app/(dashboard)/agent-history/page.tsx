@@ -14,9 +14,16 @@ import {
 } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
-import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Card, CardContent, CardHeader } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
@@ -38,9 +45,38 @@ import {
   Monitor,
   Zap,
   ArrowUpRight,
+  CalendarIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
+
+// ─── Constants ────────────────────────────────────────────────
+
+const STATUS_LABELS: Record<string, string> = {
+  executing:         'Executing',
+  awaiting_approval: 'Awaiting Approval',
+  awaiting_login:    'Awaiting Login',
+  provisioning:      'Starting',
+  queued:            'Queued',
+  completed:         'Completed',
+  failed:            'Failed',
+  aborted:           'Aborted',
+};
+
+const TRIGGER_LABELS: Record<string, string> = {
+  webhook: 'Webhook',
+  cron:    'Cron',
+  manual:  'Manual',
+};
+
+const STATUS_GROUPS: Record<string, string[]> = {
+  active:    ['executing', 'awaiting_approval', 'provisioning'],
+  queued:    ['queued'],
+  completed: ['completed', 'failed', 'aborted'],
+};
+
+const FILTERABLE_STATUSES = ['provisioning', 'executing', 'queued', 'awaiting_approval', 'completed', 'failed', 'aborted'] as const;
+const FILTERABLE_TRIGGERS  = ['webhook', 'cron', 'manual'] as const;
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -57,6 +93,10 @@ function formatDate(iso: string): string {
     month: 'short', day: 'numeric', year: 'numeric',
     hour: '2-digit', minute: '2-digit',
   });
+}
+
+function formatShortDate(dateStr: string): string {
+  return new Date(dateStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 function ExecutingDots() {
@@ -103,6 +143,11 @@ function StatusBadge({ status }: { status: string }) {
   if (status === 'provisioning') return (
     <Badge variant="outline" className="gap-1.5 border-orange-400 text-orange-600 dark:text-orange-400">
       <Loader2 className="h-3 w-3 animate-spin" />Starting
+    </Badge>
+  );
+  if (status === 'queued') return (
+    <Badge variant="outline" className="gap-1.5 border-amber-400 text-amber-600 dark:text-amber-400">
+      <Clock className="h-3 w-3" />Queued
     </Badge>
   );
   return <Badge variant="secondary">{status}</Badge>;
@@ -244,7 +289,6 @@ function RunsTable({
                 </div>
               </div>
             </div>
-
           </div>
         );
       })}
@@ -255,6 +299,11 @@ function RunsTable({
 // ─── Main Component ───────────────────────────────────────────
 
 const PAGE_SIZE = 15;
+
+function isGroupActive(group: 'active' | 'queued' | 'completed', statuses: string[]): boolean {
+  const gs = STATUS_GROUPS[group];
+  return statuses.length === gs.length && gs.every(s => statuses.includes(s));
+}
 
 export default function AgentExecutionsPage() {
   const { selectedOrgId } = useAdminViewStore();
@@ -271,37 +320,53 @@ export default function AgentExecutionsPage() {
   const [browserHITL, setBrowserHITL] = useState<{ runId: string; agentId: string; agentName: string } | null>(null);
   const [abortingRunId, setAbortingRunId] = useState<string | null>(null);
 
-  // Pill-based filters
-  type FilterKey = 'agent' | 'status' | 'trigger' | 'from' | 'to';
-  interface ActiveFilter { key: FilterKey; value: string; label: string }
+  // Summary card counts (unaffected by table filters)
+  const [summaryActive, setSummaryActive]       = useState(0);
+  const [summaryQueued, setSummaryQueued]       = useState(0);
+  const [summaryCompleted, setSummaryCompleted] = useState(0);
 
-  const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([]);
-  const [pendingType, setPendingType] = useState<FilterKey | null>(null);
-  const [pendingValue, setPendingValue] = useState('');
-  const [valueSelectOpen, setValueSelectOpen] = useState(false);
+  // Multi-select filter state
+  const [statusFilters, setStatusFilters]   = useState<string[]>([]);
+  const [triggerFilter, setTriggerFilter]   = useState<string>('');
+  const [agentFilter, setAgentFilter]       = useState<string>('');
+  const [fromFilter, setFromFilter]         = useState<string>('');
+  const [toFilter, setToFilter]             = useState<string>('');
+
+  // Inline date input state
+  const [pendingDate, setPendingDate]       = useState<'from' | 'to' | null>(null);
+  const [dateInputValue, setDateInputValue] = useState('');
+
   const initialAgentId = useRef(searchParams.get('agent_id'));
 
-  const hasFilters = activeFilters.length > 0;
+  const hasFilters = statusFilters.length > 0 || !!triggerFilter || !!agentFilter || !!fromFilter || !!toFilter;
 
-  // Split runs into active (live) and history (terminal) for display
-  const activeRuns = runs.filter(r => r.status === 'executing' || r.status === 'awaiting_approval' || r.status === 'provisioning');
-  const historyRuns = runs.filter(r => r.status !== 'executing' && r.status !== 'awaiting_approval' && r.status !== 'provisioning');
+  // ─── Load functions ─────────────────────────────────────────
 
-  const loadHistory = useCallback(async (pg: number = page, filters: ActiveFilter[] = activeFilters) => {
+  const loadHistory = useCallback(async (
+    pg: number,
+    opts?: {
+      statuses?: string[];
+      trigger?: string;
+      agentId?: string;
+      from?: string;
+      to?: string;
+    }
+  ) => {
     if (!selectedOrgId) return;
+    const statuses = opts?.statuses  !== undefined ? opts.statuses  : statusFilters;
+    const trigger  = opts?.trigger   !== undefined ? opts.trigger   : triggerFilter;
+    const agentId  = opts?.agentId   !== undefined ? opts.agentId   : agentFilter;
+    const from     = opts?.from      !== undefined ? opts.from      : fromFilter;
+    const to       = opts?.to        !== undefined ? opts.to        : toFilter;
+
     try {
       setLoading(true);
       const params: Record<string, any> = { page: pg, limit: PAGE_SIZE };
-      const agentF   = filters.find(f => f.key === 'agent');
-      const statusF  = filters.find(f => f.key === 'status');
-      const triggerF = filters.find(f => f.key === 'trigger');
-      const fromF    = filters.find(f => f.key === 'from');
-      const toF      = filters.find(f => f.key === 'to');
-      if (agentF)   params.agent_id     = agentF.value;
-      if (statusF)  params.status       = statusF.value;
-      if (triggerF) params.trigger_type = triggerF.value;
-      if (fromF)    params.from         = new Date(fromF.value).toISOString();
-      if (toF)      { const d = new Date(toF.value); d.setHours(23, 59, 59, 999); params.to = d.toISOString(); }
+      if (statuses.length > 0) params.status       = statuses;
+      if (trigger)              params.trigger_type = trigger;
+      if (agentId)              params.agent_id     = agentId;
+      if (from)                 params.from         = new Date(from + 'T00:00:00').toISOString();
+      if (to) { const d = new Date(to + 'T00:00:00'); d.setHours(23, 59, 59, 999); params.to = d.toISOString(); }
       const data = await getExecutionHistory(selectedOrgId, params);
       setRuns(data.items ?? []);
       setTotal(data.total);
@@ -311,81 +376,107 @@ export default function AgentExecutionsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedOrgId, page]); // filters passed explicitly to avoid stale closure
+  }, [selectedOrgId, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter]);
 
-  // Load agents for filter dropdown
-  useEffect(() => {
+  const loadSummary = useCallback(async () => {
     if (!selectedOrgId) return;
-    getAgents(selectedOrgId).then((d) => setAgents(d.agents)).catch(() => {});
+    const [execRes, approvalRes, provisionRes, queuedRes, completedRes] = await Promise.allSettled([
+      getExecutionHistory(selectedOrgId, { status: 'executing',         limit: 1 }),
+      getExecutionHistory(selectedOrgId, { status: 'awaiting_approval', limit: 1 }),
+      getExecutionHistory(selectedOrgId, { status: 'provisioning',      limit: 1 }),
+      getExecutionHistory(selectedOrgId, { status: 'queued',            limit: 1 }),
+      getExecutionHistory(selectedOrgId, { status: 'completed',         limit: 1 }),
+    ]);
+    const active =
+      (execRes.status      === 'fulfilled' ? execRes.value.total      : 0) +
+      (approvalRes.status  === 'fulfilled' ? approvalRes.value.total  : 0) +
+      (provisionRes.status === 'fulfilled' ? provisionRes.value.total : 0);
+    setSummaryActive(active);
+    if (queuedRes.status    === 'fulfilled') setSummaryQueued(queuedRes.value.total);
+    if (completedRes.status === 'fulfilled') setSummaryCompleted(completedRes.value.total);
   }, [selectedOrgId]);
 
-  // Load history when org changes — reset to page 1
-  useEffect(() => {
-    if (!selectedOrgId) return;
-    setPage(1);
-    loadHistory(1);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOrgId]);
+  // ─── Filter helpers ──────────────────────────────────────────
 
-  // Seed agent filter from URL param once agents list is loaded, then reload with filter applied
-  useEffect(() => {
-    if (!initialAgentId.current || agents.length === 0) return;
-    const id = initialAgentId.current;
-    initialAgentId.current = null;
-    const found = agents.find(a => a.id === id);
-    if (!found) return;
-    const seeded: ActiveFilter[] = [{ key: 'agent', value: id, label: `Agent: ${found.name}` }];
-    setActiveFilters(seeded);
+  const toggleStatus = (status: string, checked: boolean) => {
+    const next = checked ? [...statusFilters, status] : statusFilters.filter(s => s !== status);
+    setStatusFilters(next);
     setPage(1);
-    loadHistory(1, seeded);
-  }, [agents, loadHistory]);
-
-  const cancelPending = () => { setPendingType(null); setPendingValue(''); setValueSelectOpen(false); };
-
-  const confirmFilter = (type: FilterKey, value: string) => {
-    const statusLabels: Record<string, string> = {
-      executing: 'Executing', awaiting_approval: 'Awaiting Approval',
-      completed: 'Completed', failed: 'Failed',
-    };
-    const triggerLabels: Record<string, string> = { webhook: 'Webhook', cron: 'Cron', manual: 'Manual' };
-    let label = '';
-    if (type === 'status')  label = `Status: ${statusLabels[value] ?? value}`;
-    if (type === 'trigger') label = `Trigger: ${triggerLabels[value] ?? value}`;
-    if (type === 'agent')   label = `Agent: ${agents.find(a => a.id === value)?.name ?? value}`;
-    if (type === 'from' || type === 'to') {
-      const fromVal = type === 'from' ? value : activeFilters.find(f => f.key === 'from')?.value;
-      const toVal   = type === 'to'   ? value : activeFilters.find(f => f.key === 'to')?.value;
-      if (fromVal && toVal && fromVal > toVal) {
-        toast.error('From date cannot be after To date');
-        return;
-      }
-      const formatted = new Date(value + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-      label = type === 'from' ? `From: ${formatted}` : `To: ${formatted}`;
-    }
-    const newFilters = [...activeFilters.filter(f => f.key !== type), { key: type, value, label }];
-    setActiveFilters(newFilters);
-    cancelPending();
-    setPage(1);
-    loadHistory(1, newFilters);
+    loadHistory(1, { statuses: next, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: toFilter });
   };
 
-  const removeFilter = (key: FilterKey) => {
-    const newFilters = activeFilters.filter(f => f.key !== key);
-    setActiveFilters(newFilters);
+  const applyGroupFilter = (group: 'active' | 'queued' | 'completed') => {
+    const statuses = STATUS_GROUPS[group];
+    setStatusFilters(statuses);
     setPage(1);
-    loadHistory(1, newFilters);
+    loadHistory(1, { statuses, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: toFilter });
+  };
+
+  const applyDate = (type: 'from' | 'to', value: string) => {
+    if (!value) return;
+    if (type === 'from' && toFilter && value > toFilter) { toast.error('From date cannot be after To date'); return; }
+    if (type === 'to' && fromFilter && value < fromFilter) { toast.error('To date cannot be before From date'); return; }
+    if (type === 'from') {
+      setFromFilter(value);
+      loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: value, to: toFilter });
+    } else {
+      setToFilter(value);
+      loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: value });
+    }
+    setPage(1);
+    setPendingDate(null);
+    setDateInputValue('');
   };
 
   const clearFilters = () => {
-    setActiveFilters([]);
+    setStatusFilters([]);
+    setTriggerFilter('');
+    setAgentFilter('');
+    setFromFilter('');
+    setToFilter('');
     setPage(1);
-    loadHistory(1, []);
+    loadHistory(1, { statuses: [], trigger: '', agentId: '', from: '', to: '' });
   };
 
   const goToPage = (pg: number) => {
     setPage(pg);
     loadHistory(pg);
   };
+
+  const handleRefresh = () => {
+    loadHistory(page);
+    loadSummary();
+  };
+
+  // ─── Effects ─────────────────────────────────────────────────
+
+  useEffect(() => {
+    if (!selectedOrgId) return;
+    getAgents(selectedOrgId).then((d) => setAgents(d.agents)).catch(() => {});
+  }, [selectedOrgId]);
+
+  useEffect(() => {
+    if (!selectedOrgId) return;
+    setPage(1);
+    loadHistory(1);
+    loadSummary();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedOrgId]);
+
+  // Seed agent filter from URL param once agents list is loaded
+  useEffect(() => {
+    if (!initialAgentId.current || agents.length === 0) return;
+    const id = initialAgentId.current;
+    initialAgentId.current = null;
+    const found = agents.find(a => a.id === id);
+    if (!found) return;
+    setAgentFilter(id);
+    setPage(1);
+    loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: id, from: fromFilter, to: toFilter });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [agents]);
+
+  // ─── Abort ───────────────────────────────────────────────────
 
   const handleAbort = async (run: ExecutionRun) => {
     const confirmed = await confirm({
@@ -401,6 +492,7 @@ export default function AgentExecutionsPage() {
       await abortBrowserRun(run.id);
       toast.success('Agent run aborted');
       loadHistory(page);
+      loadSummary();
     } catch (err: any) {
       toast.error(err?.response?.data?.error ?? 'Failed to abort run');
     } finally {
@@ -430,7 +522,7 @@ export default function AgentExecutionsPage() {
           <h1 className="text-3xl font-bold">Agent Executions</h1>
           <p className="text-muted-foreground">Live and historical runs for all agents</p>
         </div>
-        <Button variant="outline" onClick={() => loadHistory(page)} disabled={loading || !selectedOrgId}>
+        <Button variant="outline" onClick={handleRefresh} disabled={loading || !selectedOrgId}>
           <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} />
           Refresh
         </Button>
@@ -444,243 +536,395 @@ export default function AgentExecutionsPage() {
         </Card>
       ) : (
         <>
-          {/* Filters */}
-          <div className="flex flex-wrap items-center gap-2">
-            {/* Step 1: pick a category */}
-            {!pendingType && (
-              <Select value="" onValueChange={(v) => { setPendingType(v as FilterKey); setPendingValue(''); setValueSelectOpen(true); }}>
-                <SelectTrigger className="h-8 w-auto gap-1.5 border-dashed text-xs text-muted-foreground px-3">
-                  <Filter className="h-3 w-3" />
-                  <SelectValue placeholder="Add filter" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="status">Status</SelectItem>
-                  <SelectItem value="trigger">Trigger</SelectItem>
-                  {agents.length > 0 && <SelectItem value="agent">Agent</SelectItem>}
-                  <SelectItem value="from">From date</SelectItem>
-                  <SelectItem value="to">To date</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-
-            {/* Step 2: pick a value — auto-opens the dropdown */}
-            {pendingType === 'status' && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Status:</span>
-                <Select value="" open={valueSelectOpen} onOpenChange={(o) => { setValueSelectOpen(o); if (!o) cancelPending(); }} onValueChange={(v) => confirmFilter('status', v)}>
-                  <SelectTrigger className="h-8 text-xs w-[190px]">
-                    <SelectValue placeholder="Select status…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      <SelectLabel>Active</SelectLabel>
-                      <SelectItem value="provisioning">Starting</SelectItem>
-                      <SelectItem value="executing">Executing</SelectItem>
-                      <SelectItem value="awaiting_approval">Awaiting Approval</SelectItem>
-                    </SelectGroup>
-                    <SelectGroup>
-                      <SelectLabel>History</SelectLabel>
-                      <SelectItem value="completed">Completed</SelectItem>
-                      <SelectItem value="failed">Failed</SelectItem>
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {pendingType === 'trigger' && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Trigger:</span>
-                <Select value="" open={valueSelectOpen} onOpenChange={(o) => { setValueSelectOpen(o); if (!o) cancelPending(); }} onValueChange={(v) => confirmFilter('trigger', v)}>
-                  <SelectTrigger className="h-8 text-xs w-[150px]">
-                    <SelectValue placeholder="Select trigger…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="webhook">Webhook</SelectItem>
-                    <SelectItem value="cron">Cron</SelectItem>
-                    <SelectItem value="manual">Manual</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {pendingType === 'agent' && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">Agent:</span>
-                <Select value="" open={valueSelectOpen} onOpenChange={(o) => { setValueSelectOpen(o); if (!o) cancelPending(); }} onValueChange={(v) => confirmFilter('agent', v)}>
-                  <SelectTrigger className="h-8 text-xs w-[180px]">
-                    <SelectValue placeholder="Select agent…" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {agents.map((a) => (
-                      <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            {(pendingType === 'from' || pendingType === 'to') && (
-              <div className="flex items-center gap-1.5">
-                <span className="text-xs font-medium text-muted-foreground">{pendingType === 'from' ? 'From:' : 'To:'}</span>
-                <Input
-                  type="date"
-                  value={pendingValue}
-                  onChange={(e) => setPendingValue(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && pendingValue) confirmFilter(pendingType, pendingValue); if (e.key === 'Escape') cancelPending(); }}
-                  min={pendingType === 'to' ? (activeFilters.find(f => f.key === 'from')?.value ?? undefined) : undefined}
-                  max={pendingType === 'from' ? (activeFilters.find(f => f.key === 'to')?.value ?? undefined) : undefined}
-                  className="h-8 text-xs w-[136px]"
-                  autoFocus
-                />
-                <Button size="sm" className="h-8 px-3 text-xs" onClick={() => confirmFilter(pendingType, pendingValue)} disabled={!pendingValue}>Add</Button>
-                <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={cancelPending}>Cancel</Button>
-              </div>
-            )}
-
-            {/* Active filter pills */}
-            {activeFilters.map(f => (
-              <span key={f.key} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                {f.label}
-                <button onClick={() => removeFilter(f.key)} className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors">
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
-            ))}
-
-            {/* Clear all */}
-            {hasFilters && !pendingType && (
-              <Button variant="ghost" size="sm" className="h-8 px-2 text-xs text-muted-foreground" onClick={clearFilters}>Clear all</Button>
-            )}
-          </div>
-
-          {loading ? (
-            <div className="flex h-40 items-center justify-center">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          ) : runs.length === 0 ? (
-            <Card>
-              <CardContent className="py-16 text-center text-muted-foreground">
-                <History className="mx-auto h-10 w-10 mb-3 opacity-20" />
-                <p className="text-sm">No runs found{hasFilters ? ' matching the current filters' : ''}.</p>
+          {/* Summary Cards */}
+          <div className="grid grid-cols-3 gap-4">
+            <Card
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('active', statusFilters) && 'ring-2 ring-blue-400/60 bg-blue-50/40 dark:bg-blue-950/20')}
+              onClick={() => applyGroupFilter('active')}
+            >
+              <CardContent className="py-3 px-4">
+                <div className="flex items-center gap-2.5">
+                  <Zap className="h-4 w-4 text-blue-500 shrink-0" />
+                  <span className="text-sm font-medium">Active Runs</span>
+                  <Badge variant="outline" className="ml-auto gap-1.5 border-blue-300 text-blue-600 dark:text-blue-400 text-xs">
+                    {summaryActive > 0 ? <><ExecutingDots />{summaryActive}</> : summaryActive}
+                  </Badge>
+                </div>
               </CardContent>
             </Card>
-          ) : (
-            <div className="space-y-4">
-              {/* ── Active Runs ── */}
-              {activeRuns.length > 0 && (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center gap-2">
-                      <Zap className="h-4 w-4 text-blue-500" />
-                      <CardTitle className="text-base">Active Runs</CardTitle>
-                      <Badge variant="outline" className="gap-1.5 border-blue-300 text-blue-600 dark:text-blue-400 text-xs">
-                        <ExecutingDots />{activeRuns.length}
-                      </Badge>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    {tableHeader}
-                    <RunsTable
-                      runs={activeRuns}
-                      onOpenBrowser={(run) => setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name })}
-                      onAbort={handleAbort}
-                      abortingRunId={abortingRunId}
-                    />
-                  </CardContent>
-                </Card>
-              )}
+            <Card
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('queued', statusFilters) && 'ring-2 ring-amber-400/60 bg-amber-50/40 dark:bg-amber-950/20')}
+              onClick={() => applyGroupFilter('queued')}
+            >
+              <CardContent className="py-3 px-4">
+                <div className="flex items-center gap-2.5">
+                  <Clock className="h-4 w-4 text-amber-500 shrink-0" />
+                  <span className="text-sm font-medium">Queued</span>
+                  <Badge variant="outline" className="ml-auto border-amber-300 text-amber-600 dark:text-amber-400 text-xs">
+                    {summaryQueued}
+                  </Badge>
+                </div>
+              </CardContent>
+            </Card>
+            <Card
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('completed', statusFilters) && 'ring-2 ring-green-400/60 bg-green-50/40 dark:bg-green-950/20')}
+              onClick={() => applyGroupFilter('completed')}
+            >
+              <CardContent className="py-3 px-4">
+                <div className="flex items-center gap-2.5">
+                  <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                  <span className="text-sm font-medium">Completed</span>
+                  <Badge variant="outline" className="ml-auto border-green-300 text-green-600 dark:text-green-400 text-xs">
+                    {summaryCompleted.toLocaleString()}
+                  </Badge>
+                </div>
+              </CardContent>
+            </Card>
+          </div>
 
-              {/* ── Run History ── */}
-              {historyRuns.length > 0 && (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <CardTitle className="text-base">Run History</CardTitle>
-                        <CardDescription>
-                          {total.toLocaleString()} run{total !== 1 ? 's' : ''} found
-                        </CardDescription>
-                      </div>
-                      {totalPages > 1 && (
-                        <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                          Page {page} of {totalPages}
-                        </div>
+          {/* Runs Table Card */}
+          <Card>
+            <CardHeader className="pb-3 border-b">
+              {/* Filter dropdowns row */}
+              <div className="flex flex-wrap items-center gap-2">
+
+                {/* Status multi-select */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={cn('h-8 gap-1.5 text-xs border-dashed', statusFilters.length > 0 && 'border-solid border-primary/40 text-foreground')}
+                    >
+                      <Filter className="h-3 w-3" />
+                      Status
+                      {statusFilters.length > 0 && (
+                        <Badge variant="secondary" className="ml-0.5 h-4 min-w-4 px-1 text-xs">{statusFilters.length}</Badge>
                       )}
-                    </div>
-                  </CardHeader>
-                  <CardContent className="p-0">
-                    {tableHeader}
-                    <RunsTable
-                      runs={historyRuns}
-                      onOpenBrowser={(run) => setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name })}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start" className="w-52">
+                    <DropdownMenuLabel className="text-xs text-muted-foreground pb-1">Active</DropdownMenuLabel>
+                    {(['provisioning', 'executing', 'queued', 'awaiting_approval'] as const).map(s => (
+                      <DropdownMenuCheckboxItem
+                        key={s}
+                        checked={statusFilters.includes(s)}
+                        onCheckedChange={(c) => toggleStatus(s, c)}
+                        onSelect={(e) => e.preventDefault()}
+                      >
+                        {STATUS_LABELS[s]}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                    <DropdownMenuSeparator />
+                    <DropdownMenuLabel className="text-xs text-muted-foreground pb-1">History</DropdownMenuLabel>
+                    {(['completed', 'failed', 'aborted'] as const).map(s => (
+                      <DropdownMenuCheckboxItem
+                        key={s}
+                        checked={statusFilters.includes(s)}
+                        onCheckedChange={(c) => toggleStatus(s, c)}
+                        onSelect={(e) => e.preventDefault()}
+                      >
+                        {STATUS_LABELS[s]}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* Trigger dropdown */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className={cn('h-8 gap-1.5 text-xs border-dashed', triggerFilter && 'border-solid border-primary/40 text-foreground')}
+                    >
+                      <Webhook className="h-3 w-3" />
+                      Trigger
+                      {triggerFilter && (
+                        <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-xs">1</Badge>
+                      )}
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="start">
+                    {FILTERABLE_TRIGGERS.map(t => (
+                      <DropdownMenuCheckboxItem
+                        key={t}
+                        checked={triggerFilter === t}
+                        onCheckedChange={(c) => {
+                          const next = c ? t : '';
+                          setTriggerFilter(next);
+                          setPage(1);
+                          loadHistory(1, { statuses: statusFilters, trigger: next, agentId: agentFilter, from: fromFilter, to: toFilter });
+                        }}
+                        onSelect={(e) => e.preventDefault()}
+                      >
+                        {TRIGGER_LABELS[t]}
+                      </DropdownMenuCheckboxItem>
+                    ))}
+                  </DropdownMenuContent>
+                </DropdownMenu>
+
+                {/* Agent dropdown */}
+                {agents.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn('h-8 gap-1.5 text-xs border-dashed', agentFilter && 'border-solid border-primary/40 text-foreground')}
+                      >
+                        <Monitor className="h-3 w-3" />
+                        Agent
+                        {agentFilter && (
+                          <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-xs">1</Badge>
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56 max-h-60 overflow-y-auto">
+                      {agents.map(a => (
+                        <DropdownMenuCheckboxItem
+                          key={a.id}
+                          checked={agentFilter === a.id}
+                          onCheckedChange={(c) => {
+                            const next = c ? a.id : '';
+                            setAgentFilter(next);
+                            setPage(1);
+                            loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: next, from: fromFilter, to: toFilter });
+                          }}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          {a.name}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+
+                {/* From date */}
+                {pendingDate === 'from' ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">From:</span>
+                    <Input
+                      type="date"
+                      value={dateInputValue}
+                      onChange={(e) => setDateInputValue(e.target.value)}
+                      max={toFilter || undefined}
+                      className="h-8 text-xs w-[136px]"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && dateInputValue) applyDate('from', dateInputValue);
+                        if (e.key === 'Escape') { setPendingDate(null); setDateInputValue(''); }
+                      }}
                     />
+                    <Button size="sm" className="h-8 px-3 text-xs" onClick={() => applyDate('from', dateInputValue)} disabled={!dateInputValue}>Add</Button>
+                    <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => { setPendingDate(null); setDateInputValue(''); }}>Cancel</Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={cn('h-8 gap-1.5 text-xs border-dashed', fromFilter && 'border-solid border-primary/40 text-foreground')}
+                    onClick={() => { setPendingDate('from'); setDateInputValue(fromFilter); }}
+                  >
+                    <CalendarIcon className="h-3 w-3" />
+                    From{fromFilter && `: ${formatShortDate(fromFilter)}`}
+                  </Button>
+                )}
 
-                    {/* Pagination */}
-                    {totalPages > 1 && (
-                      <div className="flex items-center justify-between border-t px-4 py-3">
-                        <span className="text-xs text-muted-foreground">
-                          Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
-                        </span>
-                        <div className="flex items-center gap-1">
-                          <Button
-                            variant="outline" size="sm"
-                            disabled={page <= 1}
-                            onClick={() => goToPage(page - 1)}
-                          >
-                            <ChevronLeft className="h-4 w-4" />
-                          </Button>
-                          {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                            let pg: number;
-                            if (totalPages <= 7) {
-                              pg = i + 1;
-                            } else if (page <= 4) {
-                              pg = i + 1;
-                              if (i === 6) pg = totalPages;
-                              if (i === 5) pg = -1;
-                            } else if (page >= totalPages - 3) {
-                              pg = i === 0 ? 1 : i === 1 ? -1 : totalPages - (6 - i);
-                            } else {
-                              const map = [1, -1, page - 1, page, page + 1, -2, totalPages];
-                              pg = map[i]!;
-                            }
-                            if (pg < 0) return (
-                              <span key={`ellipsis-${i}`} className="px-1 text-muted-foreground text-sm">…</span>
-                            );
-                            return (
-                              <Button
-                                key={pg}
-                                variant={pg === page ? 'default' : 'outline'}
-                                size="sm"
-                                className="w-8 h-8 p-0 text-xs"
-                                onClick={() => goToPage(pg)}
-                              >
-                                {pg}
-                              </Button>
-                            );
-                          })}
-                          <Button
-                            variant="outline" size="sm"
-                            disabled={page >= totalPages}
-                            onClick={() => goToPage(page + 1)}
-                          >
-                            <ChevronRight className="h-4 w-4" />
-                          </Button>
-                        </div>
+                {/* To date */}
+                {pendingDate === 'to' ? (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-xs font-medium text-muted-foreground">To:</span>
+                    <Input
+                      type="date"
+                      value={dateInputValue}
+                      onChange={(e) => setDateInputValue(e.target.value)}
+                      min={fromFilter || undefined}
+                      className="h-8 text-xs w-[136px]"
+                      autoFocus
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' && dateInputValue) applyDate('to', dateInputValue);
+                        if (e.key === 'Escape') { setPendingDate(null); setDateInputValue(''); }
+                      }}
+                    />
+                    <Button size="sm" className="h-8 px-3 text-xs" onClick={() => applyDate('to', dateInputValue)} disabled={!dateInputValue}>Add</Button>
+                    <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => { setPendingDate(null); setDateInputValue(''); }}>Cancel</Button>
+                  </div>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className={cn('h-8 gap-1.5 text-xs border-dashed', toFilter && 'border-solid border-primary/40 text-foreground')}
+                    onClick={() => { setPendingDate('to'); setDateInputValue(toFilter); }}
+                  >
+                    <CalendarIcon className="h-3 w-3" />
+                    To{toFilter && `: ${formatShortDate(toFilter)}`}
+                  </Button>
+                )}
+
+                {/* Clear all */}
+                {hasFilters && pendingDate === null && (
+                  <Button variant="ghost" size="sm" className="h-8 px-2 text-xs text-muted-foreground" onClick={clearFilters}>
+                    Clear all
+                  </Button>
+                )}
+              </div>
+
+              {/* Active filter pills */}
+              {hasFilters && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-2">
+                  {statusFilters.map(s => (
+                    <span key={`s-${s}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                      {STATUS_LABELS[s] ?? s}
+                      <button
+                        onClick={() => toggleStatus(s, false)}
+                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  ))}
+                  {triggerFilter && (
+                    <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                      {TRIGGER_LABELS[triggerFilter] ?? triggerFilter}
+                      <button
+                        onClick={() => {
+                          setTriggerFilter('');
+                          setPage(1);
+                          loadHistory(1, { statuses: statusFilters, trigger: '', agentId: agentFilter, from: fromFilter, to: toFilter });
+                        }}
+                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  )}
+                  {agentFilter && (
+                    <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                      {agents.find(a => a.id === agentFilter)?.name ?? agentFilter}
+                      <button
+                        onClick={() => {
+                          setAgentFilter('');
+                          setPage(1);
+                          loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: '', from: fromFilter, to: toFilter });
+                        }}
+                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  )}
+                  {fromFilter && (
+                    <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                      From: {formatShortDate(fromFilter)}
+                      <button
+                        onClick={() => {
+                          setFromFilter('');
+                          setPage(1);
+                          loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: '', to: toFilter });
+                        }}
+                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  )}
+                  {toFilter && (
+                    <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                      To: {formatShortDate(toFilter)}
+                      <button
+                        onClick={() => {
+                          setToFilter('');
+                          setPage(1);
+                          loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: '' });
+                        }}
+                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  )}
+                </div>
+              )}
+            </CardHeader>
+
+            <CardContent className="p-0">
+              {loading ? (
+                <div className="flex h-40 items-center justify-center">
+                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                </div>
+              ) : runs.length === 0 ? (
+                <div className="py-16 text-center text-muted-foreground">
+                  <History className="mx-auto h-10 w-10 mb-3 opacity-20" />
+                  <p className="text-sm">No runs found{hasFilters ? ' matching the current filters' : ''}.</p>
+                </div>
+              ) : (
+                <>
+                  {tableHeader}
+                  <RunsTable
+                    runs={runs}
+                    onOpenBrowser={(run) => setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name })}
+                    onAbort={handleAbort}
+                    abortingRunId={abortingRunId}
+                  />
+
+                  {/* Pagination */}
+                  {totalPages > 1 && (
+                    <div className="flex items-center justify-between border-t px-4 py-3">
+                      <span className="text-xs text-muted-foreground">
+                        Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
+                      </span>
+                      <div className="flex items-center gap-1">
+                        <Button
+                          variant="outline" size="sm"
+                          disabled={page <= 1}
+                          onClick={() => goToPage(page - 1)}
+                        >
+                          <ChevronLeft className="h-4 w-4" />
+                        </Button>
+                        {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
+                          let pg: number;
+                          if (totalPages <= 7) {
+                            pg = i + 1;
+                          } else if (page <= 4) {
+                            pg = i + 1;
+                            if (i === 6) pg = totalPages;
+                            if (i === 5) pg = -1;
+                          } else if (page >= totalPages - 3) {
+                            pg = i === 0 ? 1 : i === 1 ? -1 : totalPages - (6 - i);
+                          } else {
+                            const map = [1, -1, page - 1, page, page + 1, -2, totalPages];
+                            pg = map[i]!;
+                          }
+                          if (pg < 0) return (
+                            <span key={`ellipsis-${i}`} className="px-1 text-muted-foreground text-sm">…</span>
+                          );
+                          return (
+                            <Button
+                              key={pg}
+                              variant={pg === page ? 'default' : 'outline'}
+                              size="sm"
+                              className="w-8 h-8 p-0 text-xs"
+                              onClick={() => goToPage(pg)}
+                            >
+                              {pg}
+                            </Button>
+                          );
+                        })}
+                        <Button
+                          variant="outline" size="sm"
+                          disabled={page >= totalPages}
+                          onClick={() => goToPage(page + 1)}
+                        >
+                          <ChevronRight className="h-4 w-4" />
+                        </Button>
                       </div>
-                    )}
-                  </CardContent>
-                </Card>
+                    </div>
+                  )}
+                </>
               )}
-
-              {/* Edge case: all results are active, no history on this page */}
-              {historyRuns.length === 0 && activeRuns.length > 0 && totalPages > 1 && (
-                <p className="text-xs text-center text-muted-foreground pb-2">
-                  All results on this page are active runs. Navigate pages to see history.
-                </p>
-              )}
-            </div>
-          )}
+            </CardContent>
+          </Card>
         </>
       )}
 
@@ -688,13 +932,12 @@ export default function AgentExecutionsPage() {
       {browserHITL && (
         <BrowserHITLDialog
           open={!!browserHITL}
-          onOpenChange={(o) => { if (!o) { setBrowserHITL(null); loadHistory(); } }}
+          onOpenChange={(o) => { if (!o) { setBrowserHITL(null); loadHistory(page); } }}
           runId={browserHITL.runId}
           agentId={browserHITL.agentId}
           agentName={browserHITL.agentName}
         />
       )}
-
     </div>
   );
 }

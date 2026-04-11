@@ -74,7 +74,7 @@ export default async function RootLayout({
             <TokenRefreshProvider />
             {children}
             <Toaster
-              position="top-right"
+              position="bottom-right"
               richColors
               expand={true}
               visibleToasts={5}

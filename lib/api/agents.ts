@@ -7,6 +7,8 @@ export interface Agent {
   description?: string | null;
   is_active: boolean;
   requires_browser: boolean;
+  /** ID of the persisted browser session (cookies/storage) for this agent. Null until a browser run completes. */
+  browser_session_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -219,8 +221,8 @@ export interface ExecutionRun {
   agent_requires_browser: boolean;
   trigger_type: 'webhook' | 'cron' | 'manual';
   trigger_id: string | null;
-  status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'provisioning';
-  display_status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'awaiting_login' | 'provisioning';
+  status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'provisioning' | 'queued';
+  display_status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'awaiting_login' | 'provisioning' | 'queued';
   error_message: string | null;
   started_at: string;
   completed_at: string | null;
@@ -252,7 +254,7 @@ export async function getExecutionHistory(
     from?: string;
     to?: string;
     agent_id?: string;
-    status?: string;
+    status?: string | string[];
     trigger_type?: string;
     page?: number;
     limit?: number;
@@ -260,7 +262,11 @@ export async function getExecutionHistory(
 ): Promise<ExecutionHistoryResponse> {
   const res = await agentClient.get<ExecutionHistoryResponse>(
     `/api/admin/${orgId}/execution-history`,
-    { params }
+    {
+      params,
+      // Serialize arrays as repeated params: status=executing&status=awaiting_approval
+      paramsSerializer: { indexes: null },
+    }
   );
   return res.data;
 }
@@ -289,6 +295,14 @@ export async function resumeBrowserRun(runId: string): Promise<void> {
  */
 export async function abortBrowserRun(runId: string): Promise<void> {
   await agentClient.post(`/agent/run/${runId}/abort`);
+}
+
+/**
+ * Clear the saved browser session for an agent (logs the agent out).
+ * Deletes the stored cookies/storage and sets agent.browser_session_id = null.
+ */
+export async function clearAgentBrowserSession(orgId: string, agentId: string): Promise<void> {
+  await agentClient.delete(`/api/admin/${orgId}/agents/${agentId}/browser-session`);
 }
 
 /**

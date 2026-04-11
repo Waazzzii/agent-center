@@ -20,15 +20,15 @@ export interface ElementSnapshot {
   ariaRole: string | null;
   href: string | null;
   innerText: string;
-  outerHTML: string | null;
-  parentHTML: string | null;
   bounds: { x: number; y: number; w: number; h: number } | null;
   /** Ranked selector candidates — highest confidence first */
   candidates: SelectorCandidate[];
 }
 
 export interface RecordedStep {
-  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for';
+  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for' | 'wait_for_tab';
+  /** For wait_for_tab steps: which tab event to wait for. */
+  tab_action?: 'open';
   url?: string;
   selector?: string;
   value?: string;
@@ -40,17 +40,6 @@ export interface RecordedStep {
   timeout?: number;
   /** Rich element snapshot captured at recording time; used for robust replay */
   elementSnapshot?: ElementSnapshot;
-  /** Set to true when the selector was improved by AI post-processing */
-  selectorRefinedByAI?: boolean;
-  /** Original selector before AI refinement */
-  selectorOriginal?: string;
-  /**
-   * AI selector refinement state:
-   *   'queued'   — waiting in the serial AI queue
-   *   'refining' — AI is actively processing this step right now
-   *   true       — legacy / hybrid recording: pending AI (exact phase unknown)
-   */
-  _processing?: 'queued' | 'refining' | true;
   /**
    * What this step waits for before executing.
    * New format: { selector, description } — one best selector + human label.
@@ -307,6 +296,17 @@ export async function updateStepRunStep(
   return res.data;
 }
 
+export async function deleteStepRunStep(
+  orgId: string,
+  runId: string,
+  stepIndex: number,
+): Promise<StepRun> {
+  const res = await agentClient.delete<StepRun>(
+    `/api/admin/${orgId}/step-runs/${runId}/steps/${stepIndex}`
+  );
+  return res.data;
+}
+
 export async function jumpStepRunToIndex(
   orgId: string,
   runId: string,
@@ -319,6 +319,7 @@ export async function jumpStepRunToIndex(
 export async function abortStepRun(orgId: string, runId: string): Promise<void> {
   await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}`);
 }
+
 
 export async function startStepRunRecording(orgId: string, runId: string): Promise<StepRun & { recordingActive: boolean }> {
   const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/record-start`);

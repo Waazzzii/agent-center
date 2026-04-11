@@ -14,9 +14,15 @@ import {
 } from '@/components/ui/dialog';
 import {
   CheckCircle2, ChevronRight, ChevronsRight, Play, AlertCircle, Loader2,
-  CircleDot, MousePointerClick, X, Save,
+  CircleDot, MousePointerClick, X, Save, RotateCcw, Trash2,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
+import {
+  getActiveBrowserSession,
+  setActiveBrowserSession,
+  clearActiveBrowserSession,
+  type ActiveBrowserSession,
+} from '@/lib/hooks/use-active-browser-session';
 import {
   createScript,
   updateScript,
@@ -29,6 +35,7 @@ import {
   startStepRunRecording,
   stopStepRunRecording,
   updateStepRunStep,
+  deleteStepRunStep,
   captureStepRunWaitFor,
   cancelStepRunWaitForCapture,
   type BrowserScript,
@@ -65,7 +72,8 @@ function stepLabel(step: RecordedStep): string {
     case 'extract':    return `Extract → ${step.field_name ?? ''}`;
     case 'switch_tab': return `Switch to tab ${step.tab_index ?? ''}`;
     case 'close_tab':  return 'Close tab';
-    case 'wait_for':   return `Wait for: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? ''}`;
+    case 'wait_for':     return `Wait for: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? ''}`;
+    case 'wait_for_tab': return `Wait for new tab${step.selector ? `: ${step.waitFor?.description ?? step.selector}` : ''}`;
     default:           return step.action;
   }
 }
@@ -126,11 +134,23 @@ export function RunScriptModal({
   const [isCapturingWaitFor, setIsCapturingWaitFor] = useState(false);
   const captureAbortRef = useRef<AbortController | null>(null);
 
+  // ── Orphan session recovery ────────────────────────────────────
+  const [orphanSession, setOrphanSession] = useState<ActiveBrowserSession | null>(null);
+  const [checkingOrphan, setCheckingOrphan] = useState(false);
+  const [resumingOrphan, setResumingOrphan] = useState(false);
+
+  // ── Unsaved changes tracking ──────────────────────────────────
+  const [hasChanges, setHasChanges] = useState(false);
+  // Whether the current recording session has been saved at least once (record mode).
+  const [hasSavedSession, setHasSavedSession] = useState(false);
+
   // ── Exit warning (active session: nav interception or manual exit) ───────────
   const [showExitWarning, setShowExitWarning] = useState(false);
   // href of the internal link that was blocked by the nav guard.
   // After the session tears down cleanly, we router.push() it.
-  const pendingNavRef = useRef<string | null>(null);
+  const pendingNavRef    = useRef<string | null>(null);
+  // Always-current: does exiting require a warning? Read by the capture-phase click guard.
+  const needsExitWarnRef = useRef(false);
 
   // ── Current step editor resize ────────────────────────────────
   const [stepEditorHeight, setStepEditorHeight] = useState(200);
@@ -174,18 +194,46 @@ export function RunScriptModal({
     setIsRecording(false);
     setLiveRecordedSteps([]);
     setIsCapturingWaitFor(false);
+    setHasChanges(false);
+    setHasSavedSession(false);
     setShowExitWarning(false);
+    setOrphanSession(null);
+    setCheckingOrphan(false);
+    setResumingOrphan(false);
   };
 
-  // ── Auto-start when overlay opens ────────────────────────────
+  // ── Auto-start when overlay opens (with orphan check) ────────
   useEffect(() => {
     if (!open || !orgId) return;
-    if (mode === 'record') {
-      handleStartRecordSession();
+
+    // Check for an orphaned session before starting a new one
+    const existing = getActiveBrowserSession();
+    if (existing && existing.orgId === orgId) {
+      setCheckingOrphan(true);
+      getStepRun(orgId, existing.runId)
+        .then((run) => {
+          // Session is still alive on the backend — let the user decide
+          setOrphanSession(existing);
+          setCheckingOrphan(false);
+        })
+        .catch(() => {
+          // 404 or error — session is dead, clear and proceed normally
+          clearActiveBrowserSession();
+          setCheckingOrphan(false);
+          startFresh();
+        });
     } else {
-      setScriptName(script?.name ?? '');
-      if (script && script.parameters.length === 0) {
-        handleStartStepRun();
+      startFresh();
+    }
+
+    function startFresh() {
+      if (mode === 'record') {
+        handleStartRecordSession();
+      } else {
+        setScriptName(script?.name ?? '');
+        if (script && script.parameters.length === 0) {
+          handleStartStepRun();
+        }
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -202,7 +250,7 @@ export function RunScriptModal({
         const state = await getStepRun(orgId, runId);
         if (state?.recordedSteps) setLiveRecordedSteps(state.recordedSteps);
       } catch { /* ignore poll errors */ }
-    }, 800);
+    }, 2000);
     return () => {
       if (recordingPollRef.current) { clearInterval(recordingPollRef.current); recordingPollRef.current = null; }
     };
@@ -237,7 +285,11 @@ export function RunScriptModal({
       e.stopPropagation();
       if (!pendingNavRef.current) {
         pendingNavRef.current = href;
-        setShowExitWarning(true);
+        if (needsExitWarnRef.current) {
+          setShowExitWarning(true);
+        } else {
+          performExit();
+        }
       }
     };
 
@@ -279,6 +331,7 @@ export function RunScriptModal({
       const res = await startStepRun(orgId, tempScript.id, {}, undefined, browserClientId);
       setRunId(res.runId);
       setViewerUrl(res.viewerUrl);
+      setActiveBrowserSession({ runId: res.runId, orgId, scriptId: tempScript.id, mode: 'record' });
       setStepRunState({
         currentIndex: 0, totalSteps: 0, step: null, steps: [],
         screenshot: null, extracted: {}, done: false, status: 'waiting',
@@ -308,17 +361,22 @@ export function RunScriptModal({
       const res = await stopStepRunRecording(orgId, runId);
       setIsRecording(false);
       setLiveRecordedSteps([]);
-      // Update the step run state with the newly recorded steps so the user can replay immediately
+      // Update the step run state with the newly recorded steps so the user can replay immediately.
+      // Never mark as done here — user decides to keep working, replay, or exit.
       setStepRunState(s => s ? {
         ...s,
         totalSteps: res.totalSteps,
         steps: res.steps ?? s.steps,
         step: res.step ?? null,
         status: 'waiting',
-        done: res.totalSteps === 0,
+        done: false,
       } : s);
       setEditedStep(res.step ? JSON.stringify(res.step, null, 2) : '');
-      if ((res as any).insertedCount === 0) toast.info('No steps were captured');
+      if ((res as any).insertedCount === 0) {
+        toast.info('No steps were captured');
+      } else {
+        setHasSavedSession(false);
+      }
     } catch (err: any) {
       toast.error(err?.response?.data?.message || err?.message || 'Failed to stop recording');
     } finally {
@@ -345,6 +403,7 @@ export function RunScriptModal({
       const res = await startStepRun(orgId, script.id, params, sessionId, browserClientId);
       setRunId(res.runId);
       setViewerUrl(res.viewerUrl);
+      setActiveBrowserSession({ runId: res.runId, orgId, scriptId: script.id, mode: 'test' });
       setStepRunState({
         currentIndex: res.currentIndex,
         totalSteps:   res.totalSteps,
@@ -458,110 +517,160 @@ export function RunScriptModal({
   const performExit = async () => {
     if (isRecording && runId && orgId) await stopStepRunRecording(orgId, runId).catch(() => {});
     if (runId && orgId) await abortStepRun(orgId, runId).catch(() => {});
-    if (mode === 'record' && orgId && tempScriptId) {
-      // Delete the blank placeholder if nothing was recorded / not saved
+    if (mode === 'record' && orgId && tempScriptId && !hasSavedSession) {
+      // Delete the blank placeholder only if it was never saved
       await deleteScript(orgId, tempScriptId).catch(() => {});
     }
+    clearActiveBrowserSession();
 
     const pendingNav = pendingNavRef.current;
     pendingNavRef.current = null;
 
     reset();
     onClose();
-    if (mode !== 'record' && script) onOpenScript?.(script);
+    // Always return to the scripts list — do not auto-open the edit view
 
     // Resume the navigation that was blocked by the guard
     if (pendingNav) router.push(pendingNav);
   };
 
   const handleExit = () => {
-    // Always warn when there is an active session (any mode)
-    if (runId) {
+    if (!runId) { performExit(); return; }
+    // Only warn if there's something that would be lost on exit
+    const warn =
+      (isRecording && liveRecordedSteps.length > 0) ||
+      (mode === 'record' && !hasSavedSession && (stepRunState?.steps?.length ?? 0) > 0) ||
+      (mode !== 'record' && hasChanges);
+    if (warn) {
       setShowExitWarning(true);
-      return;
+    } else {
+      performExit();
     }
-    performExit();
+  };
+
+  // ── Unified save (stays in the session window) ───────────────
+  const handleDeleteStep = async (stepIndex: number) => {
+    if (!runId || !orgId) return;
+    try {
+      const updatedState = await deleteStepRunStep(orgId, runId, stepIndex);
+      setStepRunState((s) => s ? {
+        ...s,
+        steps:        updatedState.steps ?? s.steps,
+        step:         updatedState.step ?? null,
+        currentIndex: updatedState.currentIndex,
+        totalSteps:   updatedState.totalSteps,
+        status:       'waiting',
+        done:         false,
+      } : s);
+      setEditedStep(updatedState.step ? JSON.stringify(updatedState.step, null, 2) : '');
+      setStepEditError('');
+      setHasChanges(true);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to delete step');
+    }
+  };
+
+  const handleSave = async () => {
+    if (!orgId) return;
+
+    if (mode === 'record') {
+      if (!tempScriptId) return;
+      let steps = stepRunState?.steps ?? [];
+
+      // Stop active recording first so the captured steps are included.
+      if (isRecording && runId) {
+        try {
+          const res = await stopStepRunRecording(orgId, runId);
+          setIsRecording(false);
+          setLiveRecordedSteps([]);
+          steps = res.steps ?? steps;
+          setStepRunState(s => s ? {
+            ...s, totalSteps: res.totalSteps, steps,
+            step: res.step ?? null, status: 'waiting', done: res.totalSteps === 0,
+          } : s);
+          setEditedStep(res.step ? JSON.stringify(res.step, null, 2) : '');
+        } catch { /* proceed with whatever steps we have */ }
+      }
+
+      try {
+        await updateScript(orgId, tempScriptId, {
+          name: scriptName.trim() || 'Untitled Script',
+          steps,
+          parameters: extractParams(steps),
+        });
+        toast.success('Script saved!');
+        setHasSavedSession(true);
+        onSaved?.();
+      } catch (err: any) {
+        toast.error(err?.response?.data?.message || err?.message || 'Failed to save');
+      }
+    } else {
+      // Test mode — save edits to the original script.
+      if (!script) return;
+      const steps = stepRunState?.steps ?? [];
+      try {
+        await updateScript(orgId, script.id, { steps, parameters: extractParams(steps) });
+        setHasChanges(false);
+        toast.success('Changes saved!');
+      } catch (err: any) {
+        toast.error(err?.response?.data?.message || err?.message || 'Failed to save');
+      }
+    }
   };
 
   const handleExitConfirmSave = async () => {
     setShowExitWarning(false);
-    if (!orgId || !tempScriptId) return;
-
-    let steps = stepRunState?.steps ?? [];
-
-    // If still recording, stop first to capture final steps
-    if (isRecording && runId) {
-      try {
-        const res = await stopStepRunRecording(orgId, runId);
-        setIsRecording(false);
-        setLiveRecordedSteps([]);
-        steps = res.steps ?? steps;
-        setStepRunState(s => s ? {
-          ...s, totalSteps: res.totalSteps, steps,
-          step: res.step ?? null, status: 'waiting', done: res.totalSteps === 0,
-        } : s);
-      } catch { /* proceed with whatever steps we have */ }
-    }
-
-    try {
-      await updateScript(orgId, tempScriptId, {
-        name: scriptName.trim() || 'Untitled Script',
-        steps,
-        parameters: extractParams(steps),
-      });
-      toast.success('Script saved!');
-      onSaved?.();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || err?.message || 'Failed to save');
-      return;
-    }
-
-    // Abort the browser session now that we've saved
-    if (runId && orgId) await abortStepRun(orgId, runId).catch(() => {});
-
-    const pendingNav = pendingNavRef.current;
-    pendingNavRef.current = null;
-
-    reset();
-    onClose();
-    if (pendingNav) router.push(pendingNav);
+    await handleSave();
+    await performExit();
   };
 
-  const handleSaveAndClose = async () => {
-    if (!orgId || !tempScriptId) return;
-
-    let steps = stepRunState?.steps ?? [];
-
-    if (isRecording && runId) {
-      try {
-        const res = await stopStepRunRecording(orgId, runId);
-        setIsRecording(false);
-        setLiveRecordedSteps([]);
-        steps = res.steps ?? steps;
-        setStepRunState(s => s ? {
-          ...s, totalSteps: res.totalSteps, steps,
-          step: res.step ?? null, status: 'waiting', done: res.totalSteps === 0,
-        } : s);
-      } catch { /* proceed with whatever steps we have */ }
-    }
-
+  // ── Orphan session handlers ───────────────────────────────────
+  const handleResumeOrphan = async () => {
+    if (!orphanSession || !orgId) return;
+    setResumingOrphan(true);
     try {
-      await updateScript(orgId, tempScriptId, {
-        name: scriptName.trim() || 'Untitled Script',
-        steps,
-        parameters: extractParams(steps),
+      const run = await getStepRun(orgId, orphanSession.runId);
+      setRunId(orphanSession.runId);
+      setViewerUrl(`/live/run/${orphanSession.runId}`);
+      setScriptName(run?.steps?.length ? `Resumed session` : scriptName || '');
+      setStepRunState({
+        currentIndex: run.currentIndex ?? 0,
+        totalSteps:   run.totalSteps ?? 0,
+        step:         run.step ?? null,
+        steps:        run.steps ?? [],
+        screenshot:   run.lastScreenshot ?? null,
+        extracted:    run.extracted ?? {},
+        done:         run.status === 'done',
+        status:       (run.status as 'waiting' | 'running' | 'error') ?? 'waiting',
       });
-      toast.success('Script saved!');
-      onSaved?.();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.message || err?.message || 'Failed to save');
-      return;
+      if (run.recordingActive) setIsRecording(true);
+      setOrphanSession(null);
+    } catch {
+      toast.error('Session is no longer available — starting fresh');
+      clearActiveBrowserSession();
+      setOrphanSession(null);
+      if (mode === 'record') handleStartRecordSession();
+      else if (script && script.parameters.length === 0) handleStartStepRun();
+    } finally {
+      setResumingOrphan(false);
     }
+  };
 
-    // Abort the browser session now that we've saved
-    if (runId && orgId) await abortStepRun(orgId, runId).catch(() => {});
-    reset();
-    onClose();
+  const handleDiscardOrphan = async () => {
+    if (!orphanSession || !orgId) return;
+    setResumingOrphan(true);
+    try {
+      await abortStepRun(orgId, orphanSession.runId);
+    } catch { /* already dead — fine */ }
+    clearActiveBrowserSession();
+    setOrphanSession(null);
+    setResumingOrphan(false);
+    // Now start fresh
+    if (mode === 'record') handleStartRecordSession();
+    else {
+      setScriptName(script?.name ?? '');
+      if (script && script.parameters.length === 0) handleStartStepRun();
+    }
   };
 
   const handleToggleRecording = async () => {
@@ -574,6 +683,7 @@ export function RunScriptModal({
         setStepRunState((s) => s ? { ...s, totalSteps: res.totalSteps, steps: res.steps ?? s.steps } : s);
         if (res.insertedCount > 0) {
           toast.success(`${res.insertedCount} step${res.insertedCount !== 1 ? 's' : ''} inserted`);
+          setHasSavedSession(false);
         } else {
           toast.info('No new steps captured');
         }
@@ -606,13 +716,33 @@ export function RunScriptModal({
       setStepRunState((s) => s ? { ...s, steps: updatedState.steps ?? s.steps, step: updatedState.step ?? s.step } : s);
       setEditedStep(updatedState.step ? JSON.stringify(updatedState.step, null, 2) : editedStep);
       setStepEditError('');
-      toast.success(`Wait for set: ${result.description ?? result.selector}`);
+      setHasChanges(true);
     } catch (err: any) {
       if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.name === 'CanceledError') return;
       toast.error(err?.response?.data?.error || err?.message || 'Wait-for capture failed');
     } finally {
       captureAbortRef.current = null;
       setIsCapturingWaitFor(false);
+    }
+  };
+
+  const handleApplyStepEdit = async () => {
+    if (!runId || !orgId) return;
+    let parsed: RecordedStep;
+    try {
+      parsed = JSON.parse(editedStep);
+    } catch {
+      setStepEditError('Invalid JSON');
+      return;
+    }
+    try {
+      const updatedState = await updateStepRunStep(orgId, runId, parsed);
+      setStepRunState((s) => s ? { ...s, steps: updatedState.steps ?? s.steps, step: updatedState.step ?? s.step } : s);
+      setEditedStep(updatedState.step ? JSON.stringify(updatedState.step, null, 2) : editedStep);
+      setStepEditError('');
+      setHasChanges(true);
+    } catch (err: any) {
+      setStepEditError(err?.response?.data?.error || err?.message || 'Failed to apply');
     }
   };
 
@@ -624,8 +754,17 @@ export function RunScriptModal({
   const needsParams = !isRecordMode && !!script && script.parameters.length > 0 && !runId;
   const hasSteps = (stepRunState?.totalSteps ?? 0) > 0 || (stepRunState?.steps?.length ?? 0) > 0;
 
+  // ── Derived: does exit need a warning? ────────────────────────
+  const needsExitWarning =
+    (isRecording && liveRecordedSteps.length > 0) ||
+    (isRecordMode && !hasSavedSession && (stepRunState?.steps?.length ?? 0) > 0) ||
+    (!isRecordMode && hasChanges);
+  // Keep in sync with a ref so the capture-phase nav guard (inside useEffect) always
+  // sees the latest value without a stale closure.
+  needsExitWarnRef.current = needsExitWarning;
+
   // ── Unified step list source ───────────────────────────────────
-  // base = already-committed steps (finalized); live = captured-but-not-yet-refined
+  // base = already-committed steps (finalized); live = captured during active recording
   const baseSteps = stepRunState?.steps ?? (isRecordMode ? [] : script?.steps ?? []);
   // When recording with no base steps yet (first recording session), show live steps directly
   const showLiveDirectly = isRecording && baseSteps.length === 0;
@@ -688,8 +827,8 @@ export function RunScriptModal({
         {/* Right: actions — identical for both record and test */}
         <div className="flex items-center gap-1.5 shrink-0">
 
-          {/* Record toggle — always visible when run is active */}
-          {runId && !stepRunState?.done && (
+          {/* Record toggle — visible whenever a run is active */}
+          {runId && (
             <Button
               variant={isRecording ? 'destructive' : 'ghost'}
               size="sm"
@@ -702,15 +841,16 @@ export function RunScriptModal({
             </Button>
           )}
 
-          {/* Wait-for picker — always visible when run is active */}
-          {runId && !stepRunState?.done && (
+          {/* Wait-for picker — step mode only, only on wait_for steps, not while actively recording */}
+          {runId && !stepRunState?.done && !autoMode && !isRecording &&
+           stepRunState?.step?.action === 'wait_for' && (
             <Button
               variant={isCapturingWaitFor ? 'secondary' : 'ghost'}
               size="sm"
               className="h-7 w-7 p-0"
               onClick={handleCaptureWaitFor}
               disabled={(isExecuting || isRecording) && !isCapturingWaitFor}
-              title={isCapturingWaitFor ? 'Cancel wait-for pick' : 'Click an element to set wait-for'}
+              title={isCapturingWaitFor ? 'Cancel — click an element or press Esc' : 'Click an element to set the wait-for target for this step'}
             >
               {isCapturingWaitFor
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -719,8 +859,8 @@ export function RunScriptModal({
             </Button>
           )}
 
-          {/* Step/Auto + run — always visible when run is active */}
-          {runId && !stepRunState?.done && (
+          {/* Step/Auto + run — visible whenever a run is active */}
+          {runId && (
             <>
               <div className="w-px h-5 bg-border mx-0.5" />
               <div className="flex rounded-md border overflow-hidden shrink-0">
@@ -740,38 +880,32 @@ export function RunScriptModal({
                 >Auto</button>
               </div>
               <Button
-                onClick={autoMode ? handleRunAll : handleExecuteStep}
-                disabled={isExecuting || isCapturingWaitFor || isRecording || !hasSteps}
+                onClick={stepRunState?.done ? () => handleJumpToStep(0) : (autoMode ? handleRunAll : handleExecuteStep)}
+                disabled={isExecuting || isCapturingWaitFor || isRecording || (!stepRunState?.done && !hasSteps)}
                 size="sm"
               >
                 {isExecuting
                   ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  : autoMode
-                    ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
-                    : <Play className="mr-1.5 h-3 w-3 fill-current" />
+                  : stepRunState?.done
+                    ? <RotateCcw className="mr-1.5 h-3 w-3" />
+                    : autoMode
+                      ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
+                      : <Play className="mr-1.5 h-3 w-3 fill-current" />
                 }
-                {autoMode ? 'Run All' : 'Next'}
+                {stepRunState?.done ? 'Restart' : autoMode ? 'Run All' : 'Next'}
               </Button>
             </>
           )}
 
-          {/* Done — test mode when finished */}
-          {!isRecordMode && stepRunState?.done && (
-            <Button size="sm" variant="outline" onClick={handleExit}>
-              <CheckCircle2 className="mr-1.5 h-3.5 w-3.5 text-green-500" />
-              Done
-            </Button>
-          )}
-
-          {/* Save icon — record mode whenever there are steps to save */}
-          {isRecordMode && hasSteps && (
+          {/* Save — record: whenever there are steps; test: when edits are pending */}
+          {((isRecordMode && hasSteps) || (!isRecordMode && hasChanges && runId)) && (
             <Button
               variant="ghost"
               size="sm"
-              className="h-7 w-7 p-0"
-              onClick={handleSaveAndClose}
+              className={cn('h-7 w-7 p-0', !isRecordMode && 'text-primary')}
+              onClick={handleSave}
               disabled={isExecuting}
-              title="Save script"
+              title={isRecordMode ? 'Save script' : 'Save changes to script'}
             >
               <Save className="h-3.5 w-3.5" />
             </Button>
@@ -787,12 +921,52 @@ export function RunScriptModal({
       {/* ── Main area: VNC + right panel ────────────────────── */}
       <div className="flex-1 min-h-0 flex">
 
-        {/* VNC */}
+        {/* VNC (or orphan recovery prompt) */}
         <div className="flex-1 min-w-0 overflow-hidden">
-          {viewerUrl ? (
+          {(checkingOrphan || orphanSession) ? (
+            <div className="w-full h-full flex items-center justify-center">
+              {checkingOrphan ? (
+                <div className="flex flex-col items-center gap-3 text-muted-foreground">
+                  <Loader2 className="h-8 w-8 animate-spin" />
+                  <p className="text-sm">Checking for existing session…</p>
+                </div>
+              ) : orphanSession ? (
+                <div className="flex flex-col items-center gap-4 text-center max-w-sm px-4">
+                  <div className="h-12 w-12 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                    <AlertCircle className="h-6 w-6 text-amber-600 dark:text-amber-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium mb-1">Active browser session found</p>
+                    <p className="text-xs text-muted-foreground">
+                      A previous session is still running. You can resume where you left off or close it and start fresh.
+                    </p>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleDiscardOrphan}
+                      disabled={resumingOrphan}
+                    >
+                      {resumingOrphan ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                      Close & start fresh
+                    </Button>
+                    <Button
+                      size="sm"
+                      onClick={handleResumeOrphan}
+                      disabled={resumingOrphan}
+                    >
+                      {resumingOrphan ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+                      Resume session
+                    </Button>
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : viewerUrl ? (
             <iframe
               src={`${agentApiUrl}${viewerUrl}`}
-              className="w-full h-full"
+              className="w-full h-full border-0 block"
               scrolling="no"
               title="Browser"
             />
@@ -876,54 +1050,53 @@ export function RunScriptModal({
                   // Show live-captured inserts after the step at currentIndex (only when base steps exist)
                   const showLiveInsert = isRecording && !showLiveDirectly && stepRunState && i === stepRunState.currentIndex;
                   const isJumping   = jumpingTo === i;
-                  const isHovered   = hoveredStep === i && !isExecuting && !isRecording && !stepRunState?.done;
+                  const isHovered   = hoveredStep === i && !isExecuting && !isRecording;
                   return (
                     <div key={i}>
                       <div
                         className={cn(
                           'px-3 py-1.5 flex items-center gap-2 group relative',
                           isCurrent  ? 'bg-primary/10 font-medium' : 'text-muted-foreground',
-                          isHovered && !isCurrent && 'bg-muted/40 cursor-pointer',
+                          isHovered && !isCurrent && 'bg-muted/40',
                         )}
-                        onMouseEnter={() => !isCurrent && setHoveredStep(i)}
+                        onMouseEnter={() => setHoveredStep(i)}
                         onMouseLeave={() => setHoveredStep(null)}
                       >
                         <span className={cn('w-5 shrink-0 text-right tabular-nums', isCompleted && !isHovered && 'line-through')}>
                           {i + 1}.
                         </span>
-                        <span className={cn('truncate flex-1', s._processing === 'refining' && 'opacity-70')}>
+                        <span className="truncate flex-1">
                           {stepLabel(s)}
-                          {s._waitLabel && s.action !== 'wait_for' && (
-                            <span className="block text-indigo-400/70 font-normal truncate">⏳ {s._waitLabel}</span>
-                          )}
                         </span>
-                        {s._processing === 'refining' ? (
-                          <span className="flex items-center gap-0.5 shrink-0 text-purple-400 ml-auto">
-                            <Loader2 className="h-2.5 w-2.5 animate-spin" /><span>AI</span>
-                          </span>
-                        ) : isCurrent && !isHovered ? (
+                        {isCurrent && !isHovered ? (
                           <ChevronRight className="h-3 w-3 ml-auto shrink-0 text-primary" />
                         ) : isHovered ? (
-                          <button
-                            className="ml-auto shrink-0 flex items-center gap-1 text-xs text-primary hover:underline"
-                            onClick={() => handleJumpToStep(i)}
-                            disabled={isJumping}
-                          >
-                            {isJumping ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronRight className="h-3 w-3" />}
-                            Run from here
-                          </button>
+                          <div className="ml-auto shrink-0 flex items-center gap-2">
+                            {!isCurrent && !stepRunState?.done && (
+                              <button
+                                className="flex items-center gap-1 text-xs text-primary hover:underline"
+                                onClick={() => handleJumpToStep(i)}
+                                disabled={isJumping}
+                              >
+                                {isJumping ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronRight className="h-3 w-3" />}
+                                Run from here
+                              </button>
+                            )}
+                            <button
+                              className="text-muted-foreground hover:text-destructive transition-colors"
+                              onClick={(e) => { e.stopPropagation(); handleDeleteStep(i); }}
+                              title="Delete step"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
                         ) : null}
                       </div>
                       {/* Live-captured steps inserted at currentIndex — neutral styling, no red */}
                       {showLiveInsert && liveRecordedSteps.map((r, ri) => (
                         <div key={`rec-${ri}`} className="px-3 py-1.5 flex items-center gap-2 text-muted-foreground bg-muted/30">
                           <span className="w-5 shrink-0 text-right tabular-nums">↳</span>
-                          <span className="truncate flex-1">
-                            {stepLabel(r)}
-                            {r._waitLabel && r.action !== 'wait_for' && (
-                              <span className="block text-indigo-400/70 font-normal truncate">⏳ {r._waitLabel}</span>
-                            )}
-                          </span>
+                          <span className="truncate flex-1">{stepLabel(r)}</span>
                         </div>
                       ))}
                     </div>
@@ -960,7 +1133,16 @@ export function RunScriptModal({
                   />
                   <div className="px-3 pt-2 pb-1 flex items-center justify-between shrink-0">
                     <p className="text-xs font-medium text-muted-foreground">Current step</p>
-                    {stepEditError && <p className="text-xs text-destructive">{stepEditError}</p>}
+                    <div className="flex items-center gap-2">
+                      {stepEditError && <p className="text-xs text-destructive">{stepEditError}</p>}
+                      <button
+                        className="text-xs text-primary hover:underline disabled:opacity-40 disabled:no-underline"
+                        onClick={handleApplyStepEdit}
+                        disabled={isExecuting || isRecording}
+                      >
+                        Apply
+                      </button>
+                    </div>
                   </div>
                   <div className="px-3 pb-3">
                     <Textarea
@@ -968,6 +1150,12 @@ export function RunScriptModal({
                       style={{ height: stepEditorHeight }}
                       value={editedStep}
                       onChange={(e) => { setEditedStep(e.target.value); setStepEditError(''); }}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                          e.preventDefault();
+                          handleApplyStepEdit();
+                        }
+                      }}
                       spellCheck={false}
                     />
                   </div>
@@ -1014,11 +1202,11 @@ export function RunScriptModal({
           <DialogHeader>
             <DialogTitle>Exit session?</DialogTitle>
             <DialogDescription>
-              {isRecordMode && (liveRecordedSteps.length > 0 || (stepRunState?.steps?.length ?? 0) > 0)
-                ? (liveRecordedSteps.length > 0
-                    ? 'You have an active recording in progress. Save your steps before exiting, or discard them.'
-                    : "You have recorded steps that haven't been saved yet. Save the script before exiting, or discard your work.")
-                : 'Are you sure you want to exit the session? The browser instance will be closed and any unsaved changes will be lost.'}
+              {(isRecording && liveRecordedSteps.length > 0)
+                ? 'You have an active recording in progress. Save your steps before exiting, or discard them.'
+                : needsExitWarning
+                  ? 'You have unsaved changes. Save before exiting or your edits will be discarded.'
+                  : 'Are you sure you want to exit? The browser instance will be closed.'}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1029,11 +1217,11 @@ export function RunScriptModal({
               Keep session
             </Button>
             <Button variant="destructive" size="sm" onClick={() => { setShowExitWarning(false); performExit(); }}>
-              Exit session
+              Discard & exit
             </Button>
-            {isRecordMode && (liveRecordedSteps.length > 0 || (stepRunState?.steps?.length ?? 0) > 0) && (
+            {needsExitWarning && (
               <Button size="sm" onClick={handleExitConfirmSave}>
-                Save Script
+                Save & exit
               </Button>
             )}
           </DialogFooter>
