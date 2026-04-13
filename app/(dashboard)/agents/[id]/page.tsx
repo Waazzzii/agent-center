@@ -9,8 +9,8 @@ import {
   getActions, createAction, updateAction, deleteAction, reorderActions,
   createTrigger, deleteTrigger,
   generateWebhookKey, getWebhookKey,
-  getApprovals,
-  type AgentDetail, type AgentAction, type AgentTrigger, type AgentWebhookKey,
+  getApprovals, getValidSubAgents,
+  type Agent, type AgentDetail, type AgentAction, type AgentTrigger, type AgentWebhookKey,
 } from '@/lib/api/agents';
 import { getConnectors } from '@/lib/api/connectors';
 import { getSkills, type Skill } from '@/lib/api/skills';
@@ -269,7 +269,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // Action dialog
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [editingAction, setEditingAction] = useState<AgentAction | null>(null);
-  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', scriptParams: {} as Record<string, string> });
+  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', scriptParams: {} as Record<string, string>, targetAgentId: '', inputField: '', maxConcurrent: 3 });
+  const [validSubAgents, setValidSubAgents] = useState<Agent[]>([]);
   const [savingAction, setSavingAction] = useState(false);
 
   // Trigger dialog
@@ -389,9 +390,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   // ── Actions ──
 
-  const openNewAction = (type: 'agent' | 'approval' | 'login' | 'browser_script') => {
+  const openNewAction = (type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent') => {
     setEditingAction(null);
-    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', scriptParams: {} });
+    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', scriptParams: {}, targetAgentId: '', inputField: '', maxConcurrent: 3 });
+    // Load valid sub-agents when opening a sub_agent form
+    if (type === 'sub_agent' && selectedOrgId) {
+      getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
+    }
     setActionDialogOpen(true);
   };
 
@@ -418,7 +423,14 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       loginVerify,
       scriptId: action.script_id ?? '',
       scriptParams: (action.script_params as Record<string, string>) ?? {},
+      targetAgentId: action.target_agent_id ?? '',
+      inputField: action.input_field ?? '',
+      maxConcurrent: action.max_concurrent ?? 3,
     });
+    // Load valid sub-agents when editing a sub_agent action
+    if (action.action_type === 'sub_agent' && selectedOrgId) {
+      getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
+    }
     setActionDialogOpen(true);
   };
 
@@ -452,6 +464,14 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           action_type: 'browser_script',
           script_id: actionForm.scriptId,
           script_params: actionForm.scriptParams,
+        };
+      } else if (actionForm.action_type === 'sub_agent') {
+        payload = {
+          name: actionForm.name.trim(),
+          action_type: 'sub_agent',
+          target_agent_id: actionForm.targetAgentId,
+          input_field: actionForm.inputField.trim() || null,
+          max_concurrent: actionForm.maxConcurrent,
         };
       } else {
         payload = {
@@ -785,6 +805,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     <DropdownMenuItem onClick={() => openNewAction('browser_script')} disabled={!agentRequiresBrowser}>
                       <CircleDot className="mr-2 h-4 w-4" />Browser Script
                     </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => openNewAction('sub_agent')}>
+                      <GitBranch className="mr-2 h-4 w-4" />Sub Agent
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -824,10 +847,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                 ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
                                 : action.action_type === 'browser_script'
                                 ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
+                                : action.action_type === 'sub_agent'
+                                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
                                 : 'bg-primary/10 text-primary'
                             )}>
                               {action.action_type === 'login' ? <LogIn className="h-3.5 w-3.5" />
                                 : action.action_type === 'browser_script' ? <CircleDot className="h-3.5 w-3.5" />
+                                : action.action_type === 'sub_agent' ? <GitBranch className="h-3.5 w-3.5" />
                                 : idx + 1}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -839,11 +865,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                     action.action_type === 'approval' && 'border-orange-400 text-orange-600',
                                     action.action_type === 'login' && 'border-sky-400 text-sky-600 dark:text-sky-400',
                                     action.action_type === 'browser_script' && 'border-violet-400 text-violet-600 dark:text-violet-400',
+                                    action.action_type === 'sub_agent' && 'border-indigo-400 text-indigo-600 dark:text-indigo-400',
                                   )}
                                 >
                                   {action.action_type === 'approval' ? 'Approval'
                                     : action.action_type === 'login' ? 'Login'
                                     : action.action_type === 'browser_script' ? 'Browser Script'
+                                    : action.action_type === 'sub_agent' ? 'Sub Agent'
                                     : 'Agent'}
                                 </Badge>
                                 {action.action_type === 'agent' && action.connector_ids && action.connector_ids.length > 0 && (
@@ -860,6 +888,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                   ? (action.prompt ?? '—')
                                   : action.action_type === 'browser_script'
                                   ? (browserScripts.find((s) => s.id === action.script_id)?.name ?? action.script_id ?? '—')
+                                  : action.action_type === 'sub_agent'
+                                  ? `→ ${action.target_agent_name ?? 'Unknown agent'}${action.input_field ? ` (field: ${action.input_field})` : ''} ×${action.max_concurrent ?? 3} concurrent`
                                   : (action.approval_instructions ?? '—')}
                               </p>
                             </div>
@@ -1110,6 +1140,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               {actionForm.action_type === 'approval' ? 'Approval'
                 : actionForm.action_type === 'login' ? 'Login Step'
                 : actionForm.action_type === 'browser_script' ? 'Browser Script'
+                : actionForm.action_type === 'sub_agent' ? 'Sub Agent'
                 : 'Agent Step'}
             </DialogTitle>
           </DialogHeader>
@@ -1243,6 +1274,60 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 })()}
               </>
             )}
+
+            {actionForm.action_type === 'sub_agent' && (
+              <>
+                <div className="rounded-md bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-400">
+                  The previous step must output a JSON array. This action will run the selected agent once for each item in the array.
+                </div>
+                <div className="space-y-1">
+                  <Label>Target Agent <span className="text-destructive">*</span></Label>
+                  <Select value={actionForm.targetAgentId} onValueChange={(v) => setActionForm(f => ({ ...f, targetAgentId: v }))}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an agent to run as sub-agent…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {validSubAgents.length === 0 ? (
+                        <SelectItem value="_none" disabled>No other agents available</SelectItem>
+                      ) : (
+                        validSubAgents.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                        ))
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Input Field</Label>
+                  <Input
+                    placeholder="e.g. reservation_id, url (leave empty to pass entire item)"
+                    value={actionForm.inputField}
+                    onChange={(e) => setActionForm(f => ({ ...f, inputField: e.target.value }))}
+                    className="text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    The JSON field from each array item to pass as the sub-agent's input. Leave empty to pass the entire item.
+                  </p>
+                </div>
+                <div className="space-y-1">
+                  <Label className="flex items-center gap-1.5">
+                    Max Concurrent
+                    <span className="text-xs font-normal text-muted-foreground" title="Higher concurrency uses more browser slots. Balance with other agents that may need capacity.">(i)</span>
+                  </Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={actionForm.maxConcurrent}
+                    onChange={(e) => setActionForm(f => ({ ...f, maxConcurrent: Math.max(1, Math.min(10, parseInt(e.target.value) || 1)) }))}
+                    className="w-24"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    How many sub-agents to run in parallel. Higher values use more capacity — balance with other agents that may need browser slots.
+                  </p>
+                </div>
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setActionDialogOpen(false)}>Cancel</Button>
@@ -1253,7 +1338,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 !actionForm.name.trim() ||
                 (actionForm.action_type === 'agent' && !actionForm.prompt.trim()) ||
                 (actionForm.action_type === 'login' && (!actionForm.loginUrl.trim() || !actionForm.loginVerify.trim())) ||
-                (actionForm.action_type === 'browser_script' && !actionForm.scriptId)
+                (actionForm.action_type === 'browser_script' && !actionForm.scriptId) ||
+                (actionForm.action_type === 'sub_agent' && !actionForm.targetAgentId)
               }
             >
               {savingAction ? 'Saving…' : editingAction ? 'Update' : 'Add Action'}

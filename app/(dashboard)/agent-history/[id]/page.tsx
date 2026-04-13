@@ -28,8 +28,10 @@ import {
   Terminal,
   Zap,
   Copy,
+  GitBranch,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { getExecutionChildren, type ExecutionChild } from '@/lib/api/agents';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,17 +63,31 @@ interface ExecutionSummary {
   started_at: string;
   completed_at: string | null;
   error_message: string | null;
+  parent_execution_id?: string | null;
+  depth?: number;
+  item_index?: number | null;
+  has_children?: boolean;
 }
 
 interface ActionRow {
   id: string;
   action_name: string | null;
-  action_type: 'agent' | 'approval' | 'login';
+  action_type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent';
   status: string;
   started_at: string;
   output: string | null;
   error_message: string | null;
   approval_instructions: string | null;
+}
+
+interface ChildExecution {
+  id: string;
+  agent_name: string;
+  item_index: number | null;
+  status: string;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
 }
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -87,15 +103,19 @@ const STEP_TYPES: Array<{ value: StepType | 'all'; label: string }> = [
 ];
 
 const ACTION_TYPE_LABEL: Record<string, string> = {
-  agent:    'Agent',
-  approval: 'Approval',
-  login:    'Login',
+  agent:          'Agent',
+  approval:       'Approval',
+  login:          'Login',
+  browser_script: 'Browser Script',
+  sub_agent:      'Sub Agent',
 };
 
 const ACTION_TYPE_CLS: Record<string, string> = {
-  agent:    'border-blue-200 text-blue-600 dark:text-blue-400',
-  approval: 'border-amber-200 text-amber-600 dark:text-amber-400',
-  login:    'border-sky-200 text-sky-600 dark:text-sky-400',
+  agent:          'border-blue-200 text-blue-600 dark:text-blue-400',
+  approval:       'border-amber-200 text-amber-600 dark:text-amber-400',
+  login:          'border-sky-200 text-sky-600 dark:text-sky-400',
+  browser_script: 'border-violet-200 text-violet-600 dark:text-violet-400',
+  sub_agent:      'border-indigo-200 text-indigo-600 dark:text-indigo-400',
 };
 
 const STEPS_PER_PAGE = 5;
@@ -413,6 +433,10 @@ export default function ExecutionStepsPage() {
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
 
+  // Sub-agent child runs (loaded when a sub_agent action is selected)
+  const [childRuns, setChildRuns] = useState<ChildExecution[]>([]);
+  const [loadingChildren, setLoadingChildren] = useState(false);
+
   // ── Fetchers ───────────────────────────────────────────────────────────────
 
   const fetchSummary = useCallback(async () => {
@@ -458,6 +482,20 @@ export default function ExecutionStepsPage() {
   useEffect(() => { fetchSteps(); }, [fetchSteps]);
   useEffect(() => { setPage(1); setSearch(''); }, [selectedActionId, selectedType]);
 
+  // Fetch child runs when a sub_agent action is selected
+  useEffect(() => {
+    const selectedAction = actions.find((a) => a.id === selectedActionId);
+    if (selectedAction?.action_type !== 'sub_agent' || !selectedOrgId) {
+      setChildRuns([]);
+      return;
+    }
+    setLoadingChildren(true);
+    getExecutionChildren(selectedOrgId, id)
+      .then(setChildRuns)
+      .catch(() => setChildRuns([]))
+      .finally(() => setLoadingChildren(false));
+  }, [selectedActionId, actions, selectedOrgId, id]);
+
   const selectAction = useCallback((actionId: string) => {
     setSelectedActionId(actionId);
     const url = new URL(window.location.href);
@@ -476,10 +514,20 @@ export default function ExecutionStepsPage() {
   return (
     <div className="flex flex-col gap-5 p-6 max-w-5xl mx-auto">
 
-      {/* Back */}
-      <Button variant="ghost" size="sm" asChild className="gap-1.5 -ml-2 w-fit text-muted-foreground">
-        <Link href="/agent-history"><ArrowLeft className="h-4 w-4" />Back to history</Link>
-      </Button>
+      {/* Back + Parent breadcrumb */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Button variant="ghost" size="sm" asChild className="gap-1.5 -ml-2 w-fit text-muted-foreground">
+          <Link href="/agent-history"><ArrowLeft className="h-4 w-4" />Back to history</Link>
+        </Button>
+        {summary?.parent_execution_id && (
+          <Button variant="ghost" size="sm" asChild className="gap-1.5 w-fit text-indigo-600 dark:text-indigo-400">
+            <Link href={`/agent-history/${summary.parent_execution_id}`}>
+              <GitBranch className="h-3.5 w-3.5" />
+              View parent run{summary.item_index != null ? ` (item #${summary.item_index})` : ''}
+            </Link>
+          </Button>
+        )}
+      </div>
 
       {/* Execution header */}
       {loadingSummary ? (
@@ -497,6 +545,13 @@ export default function ExecutionStepsPage() {
             <Clock className="h-3.5 w-3.5 shrink-0" />
             <span>Started {formatDate(summary.started_at)}</span>
             {summary.completed_at && <><span className="opacity-40">&bull;</span><span>Completed {formatDate(summary.completed_at)}</span></>}
+            {summary.has_children && (
+              <Button variant="outline" size="sm" asChild className="ml-2 h-6 text-xs gap-1.5 text-indigo-600 border-indigo-300 dark:text-indigo-400">
+                <Link href={`/agent-history/${id}/tree`}>
+                  <GitBranch className="h-3 w-3" />View Execution Tree
+                </Link>
+              </Button>
+            )}
           </div>
           {summary.error_message && (
             <p className="text-sm text-red-600 dark:text-red-400 font-mono bg-red-50 dark:bg-red-950/30 rounded px-3 py-2 mt-1">
@@ -591,6 +646,66 @@ export default function ExecutionStepsPage() {
                 </Button>
               </div>
             </div>
+          )}
+
+          {/* Sub-agent child runs (shown when a sub_agent action is selected) */}
+          {actions.find((a) => a.id === selectedActionId)?.action_type === 'sub_agent' && (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm font-medium flex items-center gap-2">
+                  <GitBranch className="h-4 w-4 text-indigo-500" />
+                  Sub-Agent Runs
+                  {!loadingChildren && childRuns.length > 0 && (
+                    <span className="text-muted-foreground font-normal">
+                      ({childRuns.filter((r) => r.status === 'completed').length}/{childRuns.length} completed)
+                    </span>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="px-4 pt-0">
+                {loadingChildren ? (
+                  <div className="flex items-center gap-2 py-6 justify-center text-muted-foreground text-sm">
+                    <Loader2 className="h-4 w-4 animate-spin" />Loading sub-agent runs…
+                  </div>
+                ) : childRuns.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic py-4 text-center">No sub-agent runs yet.</p>
+                ) : (
+                  <div className="divide-y">
+                    {childRuns.map((child) => (
+                      <Link
+                        key={child.id}
+                        href={`/agent-history/${child.id}`}
+                        className="flex items-center gap-3 py-2.5 px-1 hover:bg-muted/50 rounded transition-colors"
+                      >
+                        <span className="text-xs font-mono text-muted-foreground w-8 shrink-0 text-center">
+                          #{child.item_index ?? '—'}
+                        </span>
+                        <span className="text-sm font-medium flex-1 min-w-0 truncate">{child.agent_name}</span>
+                        <Badge
+                          variant="outline"
+                          className={cn('text-xs shrink-0',
+                            child.status === 'completed' && 'border-green-400 text-green-600',
+                            child.status === 'failed' && 'border-red-400 text-red-600',
+                            child.status === 'executing' && 'border-blue-400 text-blue-600',
+                            child.status === 'aborted' && 'border-red-400 text-red-600',
+                          )}
+                        >
+                          {child.status}
+                        </Badge>
+                        {child.duration_ms != null && (
+                          <span className="text-xs text-muted-foreground shrink-0">
+                            {child.duration_ms < 60000
+                              ? `${Math.round(child.duration_ms / 1000)}s`
+                              : `${Math.round(child.duration_ms / 60000)}m`}
+                          </span>
+                        )}
+                        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/40 shrink-0" />
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
           )}
         </>
       )}

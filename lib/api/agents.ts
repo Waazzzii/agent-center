@@ -17,7 +17,7 @@ export interface AgentAction {
   id: string;
   agent_id: string;
   name: string;
-  action_type: 'agent' | 'approval' | 'login' | 'browser_script';
+  action_type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent';
   prompt?: string | null;
   connector_ids?: string[] | null;
   model: string;
@@ -30,6 +30,11 @@ export interface AgentAction {
   /** browser_script actions only */
   script_id?: string | null;
   script_params?: Record<string, string> | null;
+  /** sub_agent actions only */
+  target_agent_id?: string | null;
+  target_agent_name?: string | null;
+  input_field?: string | null;
+  max_concurrent?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -219,7 +224,7 @@ export interface ExecutionRun {
   organization_id: string;
   agent_name: string;
   agent_requires_browser: boolean;
-  trigger_type: 'webhook' | 'cron' | 'manual';
+  trigger_type: 'webhook' | 'cron' | 'manual' | 'sub_agent';
   trigger_id: string | null;
   status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'provisioning' | 'queued';
   display_status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'awaiting_login' | 'provisioning' | 'queued';
@@ -228,16 +233,50 @@ export interface ExecutionRun {
   completed_at: string | null;
   metadata: Record<string, unknown>;
   action_logs: ExecutionAction[];
+  /** Sub-agent tree tracking */
+  parent_execution_id: string | null;
+  depth: number;
+  item_index: number | null;
+  has_children?: boolean;
 }
 
 export interface ExecutionAction {
   id: string;
   action_name: string | null;
-  action_type: 'agent' | 'approval' | 'login' | 'browser_script';
+  action_type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent';
   status: string;
   started_at: string;
   output: string | null;
   error_message: string | null;
+}
+
+/** Node in the execution tree (parent + all descendants) */
+export interface ExecutionTreeNode {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  parent_execution_id: string | null;
+  parent_action_log_id: string | null;
+  depth: number;
+  item_index: number | null;
+  status: string;
+  error_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
+}
+
+/** Direct child execution (sub-agent run) */
+export interface ExecutionChild {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  item_index: number | null;
+  status: string;
+  error_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+  duration_ms: number | null;
 }
 
 export interface ExecutionHistoryResponse {
@@ -312,5 +351,25 @@ export async function clearAgentBrowserSession(orgId: string, agentId: string): 
  */
 export async function getNoVNCInfo(runId: string): Promise<NoVNCInfo> {
   const res = await agentClient.get<NoVNCInfo>(`/novnc/run/${runId}`);
+  return res.data;
+}
+
+// ─── Sub-Agent & Execution Tree ─────────────────────────────
+
+/** List agents that can be used as sub-agents (excludes the current agent). */
+export async function getValidSubAgents(orgId: string, agentId: string): Promise<Agent[]> {
+  const res = await agentClient.get<Agent[]>(`/api/admin/${orgId}/agents/${agentId}/valid-sub-agents`);
+  return res.data;
+}
+
+/** Get the full execution tree (root + all descendants) for visualization. */
+export async function getExecutionTree(orgId: string, executionId: string): Promise<ExecutionTreeNode[]> {
+  const res = await agentClient.get<ExecutionTreeNode[]>(`/api/admin/${orgId}/executions/${executionId}/tree`);
+  return res.data;
+}
+
+/** Get direct child executions (sub-agent runs) for a parent execution. */
+export async function getExecutionChildren(orgId: string, executionId: string): Promise<ExecutionChild[]> {
+  const res = await agentClient.get<ExecutionChild[]>(`/api/admin/${orgId}/executions/${executionId}/children`);
   return res.data;
 }
