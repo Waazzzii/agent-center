@@ -77,6 +77,7 @@ const STATUS_GROUPS: Record<string, string[]> = {
 
 const FILTERABLE_STATUSES = ['provisioning', 'executing', 'queued', 'awaiting_approval', 'completed', 'failed', 'aborted'] as const;
 const FILTERABLE_TRIGGERS  = ['webhook', 'cron', 'manual'] as const;
+const ABORTABLE_STATUSES   = ['executing', 'awaiting_approval', 'provisioning', 'queued'] as const;
 
 // ─── Helpers ─────────────────────────────────────────────────
 
@@ -271,7 +272,7 @@ function RunsTable({
                       <Monitor className="h-3.5 w-3.5" />
                     </Button>
                   )}
-                  {onAbort && (run.status === 'executing' || run.status === 'awaiting_approval' || run.status === 'provisioning' || run.status === 'queued') && (
+                  {onAbort && (ABORTABLE_STATUSES as readonly string[]).includes(run.status) && (
                     <Button
                       variant="ghost"
                       size="icon"
@@ -480,23 +481,15 @@ export default function AgentExecutionsPage() {
 
   const handleAbort = async (run: ExecutionRun) => {
     const isQueued = run.status === 'queued';
-    const confirmed = await confirm(
-      isQueued
-        ? {
-            title: 'Remove from Queue',
-            description: `"${run.agent_name}" is waiting to run. Remove it from the queue?`,
-            confirmText: 'Remove from Queue',
-            cancelText: 'Keep Queued',
-            variant: 'destructive',
-          }
-        : {
-            title: 'Abort Run',
-            description: `This will stop "${run.agent_name}" and close the browser session. Any unsaved progress will be lost. Are you sure?`,
-            confirmText: 'Abort Run',
-            cancelText: 'Keep Running',
-            variant: 'destructive',
-          }
-    );
+    const confirmed = await confirm({
+      title:       isQueued ? 'Remove from Queue' : 'Abort Run',
+      description: isQueued
+        ? `"${run.agent_name}" is waiting to run. Remove it from the queue?`
+        : `This will stop "${run.agent_name}" and close the browser session. Any unsaved progress will be lost.`,
+      confirmText: isQueued ? 'Remove from Queue' : 'Abort Run',
+      cancelText:  isQueued ? 'Keep Queued'       : 'Keep Running',
+      variant:     'destructive',
+    });
     if (!confirmed) return;
     setAbortingRunId(run.id);
     try {
