@@ -271,12 +271,12 @@ function RunsTable({
                       <Monitor className="h-3.5 w-3.5" />
                     </Button>
                   )}
-                  {onAbort && (run.status === 'executing' || run.status === 'awaiting_approval' || run.status === 'provisioning') && (
+                  {onAbort && (run.status === 'executing' || run.status === 'awaiting_approval' || run.status === 'provisioning' || run.status === 'queued') && (
                     <Button
                       variant="ghost"
                       size="icon"
                       className="h-7 w-7 text-destructive/70 hover:text-destructive hover:bg-destructive/10"
-                      title="Abort run"
+                      title={run.status === 'queued' ? 'Remove from queue' : 'Abort run'}
                       disabled={abortingRunId === run.id}
                       onClick={(e) => { e.stopPropagation(); onAbort(run); }}
                     >
@@ -479,22 +479,33 @@ export default function AgentExecutionsPage() {
   // ─── Abort ───────────────────────────────────────────────────
 
   const handleAbort = async (run: ExecutionRun) => {
-    const confirmed = await confirm({
-      title: 'Abort Run',
-      description: `This will stop "${run.agent_name}" and close the browser session. Any unsaved progress will be lost. Are you sure?`,
-      confirmText: 'Abort Run',
-      cancelText: 'Keep Running',
-      variant: 'destructive',
-    });
+    const isQueued = run.status === 'queued';
+    const confirmed = await confirm(
+      isQueued
+        ? {
+            title: 'Remove from Queue',
+            description: `"${run.agent_name}" is waiting to run. Remove it from the queue?`,
+            confirmText: 'Remove from Queue',
+            cancelText: 'Keep Queued',
+            variant: 'destructive',
+          }
+        : {
+            title: 'Abort Run',
+            description: `This will stop "${run.agent_name}" and close the browser session. Any unsaved progress will be lost. Are you sure?`,
+            confirmText: 'Abort Run',
+            cancelText: 'Keep Running',
+            variant: 'destructive',
+          }
+    );
     if (!confirmed) return;
     setAbortingRunId(run.id);
     try {
       await abortBrowserRun(run.id);
-      toast.success('Agent run aborted');
+      toast.success(isQueued ? 'Removed from queue' : 'Agent run aborted');
       loadHistory(page);
       loadSummary();
     } catch (err: any) {
-      toast.error(err?.response?.data?.error ?? 'Failed to abort run');
+      toast.error(err?.response?.data?.error ?? (isQueued ? 'Failed to remove from queue' : 'Failed to abort run'));
     } finally {
       setAbortingRunId(null);
     }

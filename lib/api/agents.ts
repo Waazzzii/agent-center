@@ -29,7 +29,6 @@ export interface AgentAction {
   order_index: number;
   /** browser_script actions only */
   script_id?: string | null;
-  script_params?: Record<string, string> | null;
   /** sub_agent actions only */
   target_agent_id?: string | null;
   target_agent_name?: string | null;

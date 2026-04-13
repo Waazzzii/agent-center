@@ -314,15 +314,40 @@ export function RunScriptModal({
   }, [hasActiveSession]);
 
   // ── Helpers ───────────────────────────────────────────────────
-  const extractParams = (steps: RecordedStep[]) => Array.from(new Set(
-    steps.flatMap((s) => {
-      const sources = [s.value ?? '', s.field_name ?? '', s.url ?? ''];
-      return sources.flatMap((src) => {
-        const matches = src.match(/\{\{(\w+)\}\}/g);
-        return matches ? matches.map((m) => m.replace(/\{\{|\}\}/g, '')) : [];
-      });
-    })
-  ));
+
+  /**
+   * Analyzes all steps to build a map of variables used in the script.
+   * A variable is either:
+   *   - Consumed: referenced via {{name}} in value/url/field_name
+   *   - Produced: set by an extract step (the field_name is the variable)
+   */
+  type VariableInfo = {
+    sources: number[];   // step indices that produce this variable (extract steps)
+    consumers: number[]; // step indices that reference {{name}}
+  };
+  const analyzeVariables = (steps: RecordedStep[]): Map<string, VariableInfo> => {
+    const vars = new Map<string, VariableInfo>();
+    const ensure = (name: string) => {
+      if (!vars.has(name)) vars.set(name, { sources: [], consumers: [] });
+      return vars.get(name)!;
+    };
+    steps.forEach((s, i) => {
+      // Consumers: anywhere {{name}} appears in value/url/field_name
+      for (const src of [s.value ?? '', s.field_name ?? '', s.url ?? '']) {
+        for (const m of (src.match(/\{\{(\w+)\}\}/g) ?? [])) {
+          ensure(m.slice(2, -2)).consumers.push(i);
+        }
+      }
+      // Sources: extract steps set a variable named field_name
+      if (s.action === 'extract' && s.field_name) {
+        ensure(s.field_name).sources.push(i);
+      }
+    });
+    return vars;
+  };
+
+  /** Legacy string[] shape used by the save flow — keyed by the analyzer. */
+  const extractParams = (steps: RecordedStep[]) => Array.from(analyzeVariables(steps).keys());
 
   // ── Provisioning poll (shared hook) ────────────────────────────
   // Drives the provisioning UI. Set provisioningRunId to start polling;
@@ -1319,6 +1344,43 @@ export function RunScriptModal({
                   </p>
                 </div>
               )}
+
+              {/* Variables Panel — shows all {{variables}} produced/consumed by steps */}
+              {(() => {
+                const vars = analyzeVariables(stepsToShow);
+                if (vars.size === 0) return null;
+                return (
+                  <div className="border-t px-3 py-2 shrink-0 space-y-1.5 max-h-52 overflow-y-auto">
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-medium text-muted-foreground">Variables ({vars.size})</p>
+                      <span className="text-[10px] text-muted-foreground/70">Test values feed the next run</span>
+                    </div>
+                    {Array.from(vars.entries()).map(([name, info]) => (
+                      <div key={name} className="space-y-1 rounded border border-border/50 bg-muted/20 px-2 py-1.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono text-xs text-purple-400 truncate flex-1 min-w-0">{name}</span>
+                          {info.sources.length > 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 whitespace-nowrap">
+                              Set by #{info.sources.map((i) => i + 1).join(', #')}
+                            </span>
+                          )}
+                          {info.consumers.length > 0 && (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 whitespace-nowrap">
+                              Read by #{info.consumers.map((i) => i + 1).join(', #')}
+                            </span>
+                          )}
+                        </div>
+                        <Input
+                          placeholder={`Test value for {{${name}}}`}
+                          value={params[name] ?? ''}
+                          onChange={(e) => setParams((p) => ({ ...p, [name]: e.target.value }))}
+                          className="h-7 text-xs"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                );
+              })()}
 
               {/* Extracted values */}
               {stepRunState && Object.keys(stepRunState.extracted).length > 0 && (

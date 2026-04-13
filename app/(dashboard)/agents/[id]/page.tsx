@@ -248,6 +248,40 @@ const GROUP_BADGE_COLORS = [
   'bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-950/30 dark:border-rose-800 dark:text-rose-400',
 ];
 
+// ─── Variable Chips ───────────────────────────────────────────
+
+/**
+ * Small chip row showing {{variables}} available from prior actions.
+ * Clicking a chip inserts `{{name}}` into the target input at its cursor
+ * position (or appends if it's a textarea that's not focused).
+ */
+function VariableChips({
+  vars,
+  onInsert,
+  className,
+}: {
+  vars: string[];
+  onInsert: (token: string) => void;
+  className?: string;
+}) {
+  if (vars.length === 0) return null;
+  return (
+    <div className={cn('flex items-center gap-1 flex-wrap mt-1', className)}>
+      <span className="text-[10px] text-muted-foreground/70">Available:</span>
+      {vars.map((v) => (
+        <button
+          key={v}
+          type="button"
+          onClick={() => onInsert(`{{${v}}}`)}
+          className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-border bg-muted/30 hover:bg-muted hover:border-foreground/30 transition-colors"
+        >
+          {`{{${v}}}`}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────
 
 export default function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
@@ -269,7 +303,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // Action dialog
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [editingAction, setEditingAction] = useState<AgentAction | null>(null);
-  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', scriptParams: {} as Record<string, string>, targetAgentId: '', inputField: '', maxConcurrent: 3 });
+  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', targetAgentId: '', inputField: '', maxConcurrent: 3 });
   const [validSubAgents, setValidSubAgents] = useState<Agent[]>([]);
   const [savingAction, setSavingAction] = useState(false);
 
@@ -392,7 +426,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   const openNewAction = (type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent') => {
     setEditingAction(null);
-    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', scriptParams: {}, targetAgentId: '', inputField: '', maxConcurrent: 3 });
+    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', targetAgentId: '', inputField: '', maxConcurrent: 3 });
     // Load valid sub-agents when opening a sub_agent form
     if (type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -422,7 +456,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       loginUrl,
       loginVerify,
       scriptId: action.script_id ?? '',
-      scriptParams: (action.script_params as Record<string, string>) ?? {},
       targetAgentId: action.target_agent_id ?? '',
       inputField: action.input_field ?? '',
       maxConcurrent: action.max_concurrent ?? 3,
@@ -463,7 +496,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           name: actionForm.name.trim(),
           action_type: 'browser_script',
           script_id: actionForm.scriptId,
-          script_params: actionForm.scriptParams,
         };
       } else if (actionForm.action_type === 'sub_agent') {
         payload = {
@@ -601,6 +633,42 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       return nameA.localeCompare(nameB);
     });
   }, [assignedGroups, groupMembers]);
+
+  /** Append a template token to a form field (used by VariableChips). */
+  const insertToken = (field: 'prompt' | 'loginUrl' | 'loginVerify' | 'approval_instructions' | 'inputField', token: string) => {
+    setActionForm((f) => ({ ...f, [field]: `${f[field] ?? ''}${token}` }));
+  };
+
+  /**
+   * Variables available to the currently-edited action.
+   * Walks the ordered actions list up to the edited action's position and
+   * collects variable names from prior browser_script parameters. After an
+   * `agent` action we expose a generic `output` hint since keys depend on
+   * what the LLM returns.
+   */
+  const availableVars = useMemo(() => {
+    if (!editingAction) {
+      // New action — available = everything produced by all existing actions
+      const all: string[] = [];
+      for (const a of actions) {
+        if (a.action_type === 'browser_script' && a.script_id) {
+          const script = browserScripts.find((s) => s.id === a.script_id);
+          if (script?.parameters) all.push(...script.parameters);
+        }
+      }
+      return Array.from(new Set(all));
+    }
+    const idx = actions.findIndex((a) => a.id === editingAction.id);
+    const prior = idx >= 0 ? actions.slice(0, idx) : actions;
+    const names: string[] = [];
+    for (const a of prior) {
+      if (a.action_type === 'browser_script' && a.script_id) {
+        const script = browserScripts.find((s) => s.id === a.script_id);
+        if (script?.parameters) names.push(...script.parameters);
+      }
+    }
+    return Array.from(new Set(names));
+  }, [actions, editingAction, browserScripts]);
 
   const handleDropAction = async (dropIdx: number) => {
     if (dragIndex === null || dragIndex === dropIdx) return;
@@ -1155,6 +1223,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <div className="space-y-1">
                   <Label>Prompt / Instructions <span className="text-destructive">*</span></Label>
                   <Textarea placeholder="Describe what this step should do…" value={actionForm.prompt} onChange={(e) => setActionForm(f => ({ ...f, prompt: e.target.value }))} rows={5} className="text-sm font-mono" />
+                  <VariableChips vars={availableVars} onInsert={(t) => insertToken('prompt', t)} />
                 </div>
                 <div className="space-y-1">
                   <Label>Model</Label>
@@ -1201,6 +1270,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     onChange={(e) => setActionForm(f => ({ ...f, loginUrl: e.target.value }))}
                   />
                   <p className="text-xs text-muted-foreground">The page the agent will navigate to in order to check login status.</p>
+                  <VariableChips vars={availableVars} onInsert={(t) => insertToken('loginUrl', t)} />
                 </div>
                 <div className="space-y-1">
                   <Label>How to confirm you're logged in <span className="text-destructive">*</span></Label>
@@ -1212,6 +1282,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     className="text-sm"
                   />
                   <p className="text-xs text-muted-foreground">Describe what you expect to see on screen when successfully logged in.</p>
+                  <VariableChips vars={availableVars} onInsert={(t) => insertToken('loginVerify', t)} />
                 </div>
               </>
             )}
@@ -1220,22 +1291,19 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               <div className="space-y-1">
                 <Label>Instructions for Approver</Label>
                 <Textarea placeholder="Describe what the approver needs to review and decide…" value={actionForm.approval_instructions} onChange={(e) => setActionForm(f => ({ ...f, approval_instructions: e.target.value }))} rows={4} className="text-sm" />
+                <VariableChips vars={availableVars} onInsert={(t) => insertToken('approval_instructions', t)} />
               </div>
             )}
 
             {actionForm.action_type === 'browser_script' && (
               <>
                 <div className="rounded-md bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 px-3 py-2 text-xs text-violet-700 dark:text-violet-400">
-                  The agent will run this browser script in its existing browser session and feed extracted values into the next action.
+                  The agent will run this browser script in its existing browser session.
+                  Script steps reference <code className="bg-white/40 dark:bg-black/20 px-1 rounded font-mono">{'{{variables}}'}</code> from prior actions by name.
                 </div>
                 <div className="space-y-1">
                   <Label>Script <span className="text-destructive">*</span></Label>
-                  <Select value={actionForm.scriptId} onValueChange={(v) => {
-                    const script = browserScripts.find((s) => s.id === v);
-                    const params: Record<string, string> = {};
-                    for (const p of (script?.parameters ?? [])) params[p] = '';
-                    setActionForm(f => ({ ...f, scriptId: v, scriptParams: params }));
-                  }}>
+                  <Select value={actionForm.scriptId} onValueChange={(v) => setActionForm(f => ({ ...f, scriptId: v }))}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select a browser script…" />
                     </SelectTrigger>
@@ -1254,21 +1322,33 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   const script = browserScripts.find((s) => s.id === actionForm.scriptId);
                   const params = script?.parameters ?? [];
                   if (params.length === 0) return null;
+                  const missing = params.filter((p) => !availableVars.includes(p));
                   return (
-                    <div className="space-y-2">
-                      <Label>Parameter Mappings</Label>
-                      <p className="text-xs text-muted-foreground">Map script parameters to values from the previous step output. Use <code className="bg-muted px-1 rounded">{'{{field_name}}'}</code> to reference extracted fields.</p>
-                      {params.map((param) => (
-                        <div key={param} className="flex items-center gap-2">
-                          <span className="text-xs font-mono bg-muted px-2 py-1 rounded w-32 shrink-0 truncate">{param}</span>
-                          <Input
-                            placeholder={`{{${param}}}`}
-                            value={actionForm.scriptParams[param] ?? ''}
-                            onChange={(e) => setActionForm(f => ({ ...f, scriptParams: { ...f.scriptParams, [param]: e.target.value } }))}
-                            className="text-xs font-mono"
-                          />
-                        </div>
-                      ))}
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">This script references variables:</Label>
+                      <div className="flex items-center gap-1 flex-wrap">
+                        {params.map((p) => {
+                          const available = availableVars.includes(p);
+                          return (
+                            <span
+                              key={p}
+                              className={cn(
+                                'text-[10px] font-mono px-1.5 py-0.5 rounded border',
+                                available
+                                  ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-400'
+                                  : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400'
+                              )}
+                            >
+                              {`{{${p}}}`}
+                            </span>
+                          );
+                        })}
+                      </div>
+                      {missing.length > 0 && (
+                        <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                          Variables in amber are not produced by any prior action. Add a step that sets them, or confirm they're provided at trigger time.
+                        </p>
+                      )}
                     </div>
                   );
                 })()}
@@ -1308,6 +1388,21 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   <p className="text-xs text-muted-foreground">
                     The JSON field from each array item to pass as the sub-agent's input. Leave empty to pass the entire item.
                   </p>
+                  {availableVars.length > 0 && (
+                    <div className="flex items-center gap-1 flex-wrap mt-1">
+                      <span className="text-[10px] text-muted-foreground/70">From prior step:</span>
+                      {availableVars.map((v) => (
+                        <button
+                          key={v}
+                          type="button"
+                          onClick={() => setActionForm(f => ({ ...f, inputField: v }))}
+                          className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-border bg-muted/30 hover:bg-muted hover:border-foreground/30 transition-colors"
+                        >
+                          {v}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="space-y-1">
                   <Label className="flex items-center gap-1.5">

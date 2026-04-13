@@ -20,7 +20,6 @@ export interface ElementSnapshot {
   ariaRole: string | null;
   href: string | null;
   innerText: string;
-  bounds: { x: number; y: number; w: number; h: number } | null;
   /** Ranked selector candidates — highest confidence first */
   candidates: SelectorCandidate[];
 }
@@ -42,18 +41,12 @@ export interface RecordedStep {
   elementSnapshot?: ElementSnapshot;
   /**
    * What this step waits for before executing.
-   * New format: { selector, description } — one best selector + human label.
-   * Legacy format: { id, name, tag, classes, placeholder } — kept for old scripts.
+   * One best selector + a human-readable label.
+   * (Old scripts may still have legacy fields — worker JS handles them gracefully.)
    */
   waitFor?: {
     selector?: string | null;
     description?: string | null;
-    // legacy fields
-    id?: string | null;
-    name?: string | null;
-    tag?: string;
-    classes?: string[];
-    placeholder?: string | null;
   };
   /** Human-readable label for what this step waits for. Computed server-side via annotateStep(). */
   _waitLabel?: string | null;
