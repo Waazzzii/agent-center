@@ -41,6 +41,7 @@ import {
 } from '@/lib/api/scripts';
 import { cn } from '@/lib/utils';
 import { BottomPanel } from './panels';
+import { ProvisioningNotice } from '@/components/hitl/ProvisioningNotice';
 
 const agentApiUrl = process.env.NEXT_PUBLIC_AGENT_API_URL ?? '';
 
@@ -1314,24 +1315,7 @@ export function RunScriptModal({
         {/* VNC (or orphan recovery prompt) */}
         <div className="flex-1 min-w-0 overflow-hidden">
           {isProvisioning ? (
-            <div className="w-full h-full flex items-center justify-center">
-              <div className="flex flex-col items-center gap-4 text-center max-w-md px-6">
-                <div className="h-14 w-14 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-                  <Server className="h-7 w-7 text-amber-600 dark:text-amber-400" />
-                </div>
-                <div className="space-y-1.5">
-                  <p className="text-sm font-semibold">Waiting for a browser VM</p>
-                  <p className="text-xs text-muted-foreground leading-relaxed">
-                    All browser slots are currently in use. A new VM is being provisioned — this typically takes 1–2 minutes.
-                    The browser will open automatically once it&apos;s ready.
-                  </p>
-                </div>
-                <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-2.5">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-                  <span>You can close this window and come back — your session will be waiting for you.</span>
-                </div>
-              </div>
-            </div>
+            <ProvisioningNotice elapsedMs={provisioningElapsedMs} />
           ) : (checkingOrphan || orphanSession) ? (
             <div className="w-full h-full flex items-center justify-center">
               {checkingOrphan ? (

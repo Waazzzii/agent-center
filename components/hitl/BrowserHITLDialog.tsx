@@ -6,6 +6,7 @@ import {
   getNoVNCInfo,
   resumeBrowserRun,
   abortBrowserRun,
+  openBrowserForRun,
   type BrowserRunStatus,
   type NoVNCInfo,
 } from '@/lib/api/agents';
@@ -27,6 +28,7 @@ import {
   WifiOff,
   PauseCircle,
 } from 'lucide-react';
+import { ProvisioningNotice } from './ProvisioningNotice';
 
 interface Props {
   open: boolean;
@@ -34,6 +36,15 @@ interface Props {
   runId: string;
   agentId?: string;
   agentName?: string;
+  /**
+   * 'observe' (default) — user is watching a background task.  They can
+   *   close the dialog freely (session continues), or abort to kill it.
+   *
+   * 'interactive' — user is actively engaged (e.g. manual login).  The
+   *   close button, Esc, and outside-click are disabled.  The only ways
+   *   to exit are Done (success) or Abort (kill).
+   */
+  mode?: 'observe' | 'interactive';
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -60,7 +71,8 @@ function StatusPill({ status }: { status: BrowserRunStatus['status'] }) {
   );
 }
 
-export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Props) {
+export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe' }: Props) {
+  const isInteractive = mode === 'interactive';
   const { confirm } = useConfirmDialog();
   const [runStatus, setRunStatus] = useState<BrowserRunStatus | null>(null);
   const [novnc, setNovnc] = useState<NoVNCInfo | null>(null);
@@ -136,21 +148,26 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
     intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
   };
 
-  // On dialog open: do an initial fetch to determine if we need the fast provisioning poll
+  // On dialog open: lazily allocate a browser slot, then start status polling.
+  // In the per-action browser model, paused runs have no live browser until
+  // the user clicks "Open Browser" — /agent/run/:id/open-browser allocates on demand.
   useEffect(() => {
     if (!open) return;
 
     (async () => {
       try {
+        // Lazy allocation — server provisions a browser seeded with the saved session.
+        await openBrowserForRun(runId).catch(() => {
+          // Harmless if a slot is already allocated (the endpoint is idempotent).
+        });
+
         const data = await getBrowserRunStatus(runId);
         setRunStatus(data);
         setPollError(false);
 
         if (data.status === 'provisioning' || data.status === 'pending') {
-          // Hand off to the shared provisioning poll hook (3s)
           setProvisioningRunId(runId);
         } else {
-          // Already past provisioning — use the normal 10s poll
           startStatusPoll();
         }
       } catch {
@@ -233,8 +250,23 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
   const isTerminal = runStatus?.status === 'completed' || runStatus?.status === 'failed' || runStatus?.status === 'aborted';
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex flex-col p-0 gap-0" style={{ width: '92vw', maxWidth: '1400px', height: '92vh', maxHeight: '92vh' }}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => {
+        // In interactive mode the user must explicitly Abort or Done — don't
+        // let them back out of the flow by pressing Esc / clicking outside.
+        if (!nextOpen && isInteractive) return;
+        onOpenChange(nextOpen);
+      }}
+    >
+      <DialogContent
+        className="flex flex-col p-0 gap-0"
+        style={{ width: '92vw', maxWidth: '1400px', height: '92vh', maxHeight: '92vh' }}
+        showCloseButton={!isInteractive}
+        onEscapeKeyDown={(e) => { if (isInteractive) e.preventDefault(); }}
+        onPointerDownOutside={(e) => { if (isInteractive) e.preventDefault(); }}
+        onInteractOutside={(e) => { if (isInteractive) e.preventDefault(); }}
+      >
         {/* ── Header bar ───────────────────────────────────────── */}
         <div className="flex items-center gap-3 px-4 py-2.5 border-b shrink-0">
           <Monitor className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -271,13 +303,15 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
               >
                 {aborting
                   ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Aborting…</>
-                  : <>Abort Run</>
+                  : <>Abort</>
                 }
               </Button>
             )}
-            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => onOpenChange(false)}>
-              Close
-            </Button>
+            {!isInteractive && (
+              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => onOpenChange(false)}>
+                Close
+              </Button>
+            )}
           </div>
         </div>
 
@@ -307,14 +341,19 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
         )}
 
         {/* ── Browser viewport ───────────────────────────────── */}
-        <div className="flex-1 min-h-0 bg-black overflow-hidden relative">
-            {loadingNovnc ? (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
+        <div className="flex-1 min-h-0 overflow-hidden relative bg-muted/30">
+            {isProvisioning || runStatus?.status === 'provisioning' || runStatus?.status === 'pending' ? (
+              <ProvisioningNotice
+                elapsedMs={provisioningElapsedMs}
+                showPersistenceHint={!isInteractive}
+              />
+            ) : loadingNovnc ? (
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
                 <Loader2 className="h-8 w-8 animate-spin" />
                 <p className="text-sm">Starting browser view…</p>
               </div>
             ) : iframeUrl ? (
-              <>
+              <div className="w-full h-full bg-black relative">
                 <iframe
                   src={iframeUrl}
                   className="w-full h-full border-0 block"
@@ -328,20 +367,11 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName }: Prop
                 {!isAuthRequired && (
                   <div className="absolute inset-0 cursor-not-allowed" />
                 )}
-              </>
+              </div>
             ) : (
-              <div className="flex h-full flex-col items-center justify-center gap-3 text-white/60">
-                {isProvisioning || runStatus?.status === 'provisioning' || runStatus?.status === 'pending' ? (
-                  <>
-                    <Loader2 className="h-8 w-8 animate-spin opacity-50" />
-                    <p className="text-sm">Starting browser instance{provisioningElapsedMs > 30_000 ? ' — this may take a minute' : ''}…</p>
-                  </>
-                ) : (
-                  <>
-                    <Monitor className="h-10 w-10 opacity-30" />
-                    <p className="text-sm">No browser view available for this run</p>
-                  </>
-                )}
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+                <Monitor className="h-10 w-10 opacity-30" />
+                <p className="text-sm">No browser view available for this run</p>
               </div>
             )}
         </div>

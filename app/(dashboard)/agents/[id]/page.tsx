@@ -15,6 +15,16 @@ import {
 import { getConnectors } from '@/lib/api/connectors';
 import { getSkills, type Skill } from '@/lib/api/skills';
 import { listScripts, type BrowserScript } from '@/lib/api/scripts';
+import { listAiSteps, type AiStep } from '@/lib/api/ai-steps';
+import { AiStepDialog } from '@/components/actions/AiStepDialog';
+import { listLogins, type Login } from '@/lib/api/logins';
+import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
+import { AiStepPreview } from '@/components/actions/AiStepPreview';
+import { LoginPreview } from '@/components/actions/LoginPreview';
+import { BrowserScriptPreview } from '@/components/actions/BrowserScriptPreview';
+import { SubAgentPreview } from '@/components/actions/SubAgentPreview';
+import { ApprovalPreview } from '@/components/actions/ApprovalPreview';
+import { InfoBlock } from '@/components/actions/InfoBlock';
 import {
   getAgentAccessGroups,
   getAssignedAccessGroups,
@@ -302,7 +312,20 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // Action dialog
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [editingAction, setEditingAction] = useState<AgentAction | null>(null);
-  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', targetAgentId: '',  maxConcurrent: 3, batchSize: 1 });
+  const [actionForm, setActionForm] = useState({
+    name: '',
+    action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent',
+    approval_instructions: '',
+    aiStepId: '',
+    loginId: '',
+    scriptId: '',
+    targetAgentId: '',
+    maxConcurrent: 3,
+    batchSize: 1,
+  });
+  const [aiSteps, setAiSteps] = useState<AiStep[]>([]);
+  const [viewingAiStep, setViewingAiStep] = useState<AiStep | null>(null);
+  const [logins, setLogins] = useState<Login[]>([]);
   const [validSubAgents, setValidSubAgents] = useState<Agent[]>([]);
   const [savingAction, setSavingAction] = useState(false);
   const [actionTypeModalOpen, setActionTypeModalOpen] = useState(false);
@@ -345,7 +368,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      let [agentData, actionsData, connData, hitlData, skillsData, assignedGroupsData, allGroupsData, scriptsData] = await Promise.all([
+      let [agentData, actionsData, connData, hitlData, skillsData, assignedGroupsData, allGroupsData, scriptsData, aiStepsData, loginsData] = await Promise.all([
         getAgent(selectedOrgId, agentId),
         getActions(selectedOrgId, agentId),
         getConnectors(selectedOrgId),
@@ -354,6 +377,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         getAssignedAccessGroups(selectedOrgId, agentId),
         getAgentAccessGroups(selectedOrgId),
         listScripts(selectedOrgId),
+        listAiSteps(selectedOrgId).catch(() => [] as AiStep[]),
+        listLogins(selectedOrgId).catch(() => [] as Login[]),
       ]);
       if ((agentData.triggers ?? []).length === 0) {
         await createTrigger(selectedOrgId, agentId, { trigger_type: 'manual' });
@@ -373,6 +398,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setConnectors(connData.connectors);
       setSkills(skillsData.items ?? []);
       setBrowserScripts(scriptsData.scripts ?? []);
+      setAiSteps(aiStepsData);
+      setLogins(loginsData);
       setAssignedGroups(assignedGroupsData);
       setAllGroups(allGroupsData);
       setPendingHitlCount(hitlData.items.filter((h) => h.agent_id === agentId && h.status === 'awaiting_approval').length);
@@ -426,8 +453,17 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   const openNewAction = (type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent') => {
     setEditingAction(null);
-    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', targetAgentId: '',  maxConcurrent: 3, batchSize: 1 });
-    // Load valid sub-agents when opening a sub_agent form
+    setActionForm({
+      name: '',
+      action_type: type,
+      approval_instructions: '',
+      aiStepId: '',
+      loginId: '',
+      scriptId: '',
+      targetAgentId: '',
+      maxConcurrent: 3,
+      batchSize: 1,
+    });
     if (type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
     }
@@ -435,32 +471,22 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   };
 
   const openEditAction = (action: AgentAction) => {
-    setEditingAction(action);
-    let loginUrl = '';
-    let loginVerify = '';
-    if (action.action_type === 'login' && action.prompt) {
-      try {
-        const parsed = JSON.parse(action.prompt);
-        loginUrl = parsed.url ?? '';
-        loginVerify = parsed.verify ?? '';
-      } catch { /* leave empty */ }
+    if (action.action_type === 'agent') {
+      const step = aiSteps.find((s) => s.id === action.ai_step_id);
+      if (step) { setViewingAiStep(step); return; }
     }
+    setEditingAction(action);
     setActionForm({
       name: action.name,
       action_type: action.action_type,
-      prompt: action.action_type === 'login' ? '' : (action.prompt ?? ''),
-      model: action.model ?? 'claude-sonnet-4-6',
-      connector_ids: action.connector_ids ?? [],
-      skill_ids: action.skill_ids ?? [],
       approval_instructions: action.approval_instructions ?? '',
-      loginUrl,
-      loginVerify,
+      aiStepId: action.ai_step_id ?? '',
+      loginId: action.login_id ?? '',
       scriptId: action.script_id ?? '',
       targetAgentId: action.target_agent_id ?? '',
       maxConcurrent: action.max_concurrent ?? 3,
       batchSize: action.batch_size ?? 1,
     });
-    // Load valid sub-agents when editing a sub_agent action
     if (action.action_type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
     }
@@ -468,38 +494,38 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   };
 
   const handleSaveAction = async () => {
-    if (!selectedOrgId || !actionForm.name.trim()) return;
+    if (!selectedOrgId) return;
+    // Approval is the only action type that requires a manually-entered name.
+    // All others derive it from the selected entity.
+    if (actionForm.action_type === 'approval' && !actionForm.name.trim()) return;
     try {
       setSavingAction(true);
-      const validConnectorIds = new Set(connectors.map((c) => c.id));
-      const validSkillIds = new Set(skills.map((s) => s.id));
-
       let payload: Record<string, unknown>;
       if (actionForm.action_type === 'agent') {
+        const selectedStep = aiSteps.find((s) => s.id === actionForm.aiStepId);
         payload = {
-          name: actionForm.name.trim(),
+          name: selectedStep?.name ?? 'AI Step',
           action_type: 'agent',
-          prompt: actionForm.prompt.trim(),
-          model: actionForm.model,
-          connector_ids: actionForm.connector_ids.filter((id) => validConnectorIds.has(id)),
-          skill_ids: actionForm.skill_ids.filter((id) => validSkillIds.has(id)),
+          ai_step_id: actionForm.aiStepId || null,
         };
       } else if (actionForm.action_type === 'login') {
+        const selectedLogin = logins.find((l) => l.id === actionForm.loginId);
         payload = {
-          name: actionForm.name.trim(),
+          name: selectedLogin?.name ?? 'Login',
           action_type: 'login',
-          prompt: JSON.stringify({ url: actionForm.loginUrl.trim(), verify: actionForm.loginVerify.trim() }),
-          model: actionForm.model,
+          login_id: actionForm.loginId || null,
         };
       } else if (actionForm.action_type === 'browser_script') {
+        const selectedScript = browserScripts.find((s) => s.id === actionForm.scriptId);
         payload = {
-          name: actionForm.name.trim(),
+          name: selectedScript?.name ?? 'Browser Script',
           action_type: 'browser_script',
           script_id: actionForm.scriptId,
         };
       } else if (actionForm.action_type === 'sub_agent') {
+        const selectedAgent = validSubAgents.find((a) => a.id === actionForm.targetAgentId);
         payload = {
-          name: actionForm.name.trim(),
+          name: selectedAgent?.name ?? 'Sub-agent',
           action_type: 'sub_agent',
           target_agent_id: actionForm.targetAgentId,
           max_concurrent: actionForm.maxConcurrent,
@@ -635,7 +661,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   }, [assignedGroups, groupMembers]);
 
   /** Append a template token to a form field (used by VariableChips). */
-  const insertToken = (field: 'prompt' | 'loginUrl' | 'loginVerify' | 'approval_instructions', token: string) => {
+  const insertToken = (field: 'approval_instructions', token: string) => {
     setActionForm((f) => ({ ...f, [field]: `${f[field] ?? ''}${token}` }));
   };
 
@@ -861,7 +887,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   <div key={action.id}>
                     <Card
                       className={cn(
-                        'group transition-all duration-150 cursor-default',
+                        'group transition-all duration-150 cursor-pointer',
                         dragIndex === idx && 'opacity-40 scale-[0.98]',
                         dropIndex === idx && dragIndex !== idx && 'ring-2 ring-primary ring-offset-1',
                       )}
@@ -870,6 +896,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       onDragOver={(e) => { e.preventDefault(); setDropIndex(idx); }}
                       onDragEnd={() => { setDragIndex(null); setDropIndex(null); }}
                       onDrop={() => handleDropAction(idx)}
+                      onClick={() => openEditAction(action)}
                     >
                       <CardContent className="py-2.5 px-3">
                         <div className="flex items-center gap-3">
@@ -912,30 +939,21 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                   : action.action_type === 'sub_agent' ? 'Run Agent'
                                   : 'AI Step'}
                               </Badge>
-                              {action.action_type === 'agent' && action.connector_ids && action.connector_ids.length > 0 && (
-                                <Badge variant="outline" className="text-xs">{action.connector_ids.length} connector{action.connector_ids.length !== 1 ? 's' : ''}</Badge>
-                              )}
-                              {action.action_type === 'agent' && action.skill_ids && action.skill_ids.length > 0 && (
-                                <Badge variant="outline" className="text-xs border-purple-400 text-purple-600 dark:text-purple-400">{action.skill_ids.length} skill{action.skill_ids.length !== 1 ? 's' : ''}</Badge>
-                              )}
                             </div>
                             <p className="text-xs text-muted-foreground mt-0.5 truncate">
                               {action.action_type === 'login'
-                                ? (() => { try { const p = JSON.parse(action.prompt ?? '{}'); return p.url || '—'; } catch { return '—'; } })()
+                                ? `→ ${action.login_name ?? '(no login selected)'}`
                                 : action.action_type === 'agent'
-                                ? (action.prompt ?? '—')
+                                ? `→ ${action.ai_step_name ?? '(no AI step selected)'}`
                                 : action.action_type === 'browser_script'
-                                ? (browserScripts.find((s) => s.id === action.script_id)?.name ?? action.script_id ?? '—')
+                                ? `→ ${action.script_name ?? '(no script selected)'}`
                                 : action.action_type === 'sub_agent'
                                 ? `→ ${action.target_agent_name ?? 'Unknown agent'}${(action.batch_size ?? 1) > 1 ? ` · batch ${action.batch_size}` : ''} · ×${action.max_concurrent ?? 3} concurrent`
                                 : (action.approval_instructions ?? '—')}
                             </p>
                           </div>
                           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditAction(action)}>
-                              <Pencil className="h-3.5 w-3.5" />
-                            </Button>
-                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleDeleteAction(action.id, action.name)}>
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e) => { e.stopPropagation(); handleDeleteAction(action.id, action.name); }}>
                               <Trash2 className="h-3.5 w-3.5 text-destructive" />
                             </Button>
                           </div>
@@ -1194,94 +1212,95 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            <div className="space-y-1">
-              <Label>Name <span className="text-destructive">*</span></Label>
-              <Input placeholder="Action name" value={actionForm.name} onChange={(e) => setActionForm(f => ({ ...f, name: e.target.value }))} />
-            </div>
+            {actionForm.action_type === 'approval' && (
+              <div className="space-y-1">
+                <Label>Name <span className="text-destructive">*</span></Label>
+                <Input placeholder="Action name" value={actionForm.name} onChange={(e) => setActionForm(f => ({ ...f, name: e.target.value }))} />
+              </div>
+            )}
 
             {actionForm.action_type === 'agent' && (
               <>
+                <EntityPreviewNotice
+                  entityLabel="AI step"
+                  editHref="/actions/ai-steps"
+                  editLabel="Actions → AI Steps"
+                />
                 <div className="space-y-1">
-                  <Label>Prompt / Instructions <span className="text-destructive">*</span></Label>
-                  <Textarea placeholder="Describe what this step should do…" value={actionForm.prompt} onChange={(e) => setActionForm(f => ({ ...f, prompt: e.target.value }))} rows={5} className="text-sm font-mono" />
-                  <VariableChips vars={availableVars} onInsert={(t) => insertToken('prompt', t)} />
-                </div>
-                <div className="space-y-1">
-                  <Label>Model</Label>
-                  <Select value={actionForm.model} onValueChange={(v) => setActionForm(f => ({ ...f, model: v }))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                  <Label>AI Step <span className="text-destructive">*</span></Label>
+                  <Select value={actionForm.aiStepId} onValueChange={(v) => setActionForm(f => ({ ...f, aiStepId: v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select an AI step…" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="claude-sonnet-4-6">Claude Sonnet 4.6</SelectItem>
-                      <SelectItem value="claude-opus-4-6">Claude Opus 4.6</SelectItem>
-                      <SelectItem value="claude-haiku-4-5-20251001">Claude Haiku 4.5</SelectItem>
+                      {aiSteps.length === 0 ? (
+                        <SelectItem value="_none" disabled>No AI steps yet — create one first</SelectItem>
+                      ) : (
+                        aiSteps.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)
+                      )}
                     </SelectContent>
                   </Select>
                 </div>
-                <MultiSelectPicker
-                  label="Connectors"
-                  addLabel="Add Connector"
-                  options={connectors.filter((c) => c.agent_enabled).map((c) => ({ id: c.id, label: (c as any).connector_name ?? c.id }))}
-                  selectedIds={actionForm.connector_ids}
-                  onAdd={(id) => setActionForm((f) => ({ ...f, connector_ids: [...f.connector_ids, id] }))}
-                  onRemove={(id) => setActionForm((f) => ({ ...f, connector_ids: f.connector_ids.filter((x) => x !== id) }))}
-                />
-                <MultiSelectPicker
-                  label="Skills"
-                  description="Selected skills are combined and sent as the system prompt for this step."
-                  addLabel="Add Skill"
-                  options={skills.map((s) => ({ id: s.id, label: s.name, subLabel: s.description ?? undefined }))}
-                  selectedIds={actionForm.skill_ids}
-                  onAdd={(id) => setActionForm((f) => ({ ...f, skill_ids: [...f.skill_ids, id] }))}
-                  onRemove={(id) => setActionForm((f) => ({ ...f, skill_ids: f.skill_ids.filter((x) => x !== id) }))}
-                  pillClass="bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/30 dark:text-purple-400 dark:border-purple-800"
-                />
+                {(() => {
+                  const selected = aiSteps.find((s) => s.id === actionForm.aiStepId);
+                  return selected ? (
+                    <AiStepPreview
+                      step={selected}
+                      connectors={connectors.filter((c) => c.agent_enabled).map((c) => ({ id: c.id, label: (c as unknown as { connector_name?: string }).connector_name ?? c.id }))}
+                      skills={skills}
+                      availableVars={availableVars}
+                    />
+                  ) : null;
+                })()}
               </>
             )}
 
             {actionForm.action_type === 'login' && (
               <>
-                <div className="rounded-md bg-sky-50 dark:bg-sky-950/30 border border-sky-200 dark:border-sky-800 px-3 py-2 text-xs text-sky-700 dark:text-sky-400">
-                  The agent will navigate to the URL and verify it can access the page. If login is required, it will pause and open the browser for you to log in manually.
-                </div>
+                <EntityPreviewNotice
+                  entityLabel="login profile"
+                  editHref="/actions/logins"
+                  editLabel="Actions → Logins"
+                />
                 <div className="space-y-1">
-                  <Label>URL to verify <span className="text-destructive">*</span></Label>
-                  <Input
-                    placeholder="https://app.example.com/dashboard"
-                    value={actionForm.loginUrl}
-                    onChange={(e) => setActionForm(f => ({ ...f, loginUrl: e.target.value }))}
-                  />
-                  <p className="text-xs text-muted-foreground">The page the agent will navigate to in order to check login status.</p>
-                  <VariableChips vars={availableVars} onInsert={(t) => insertToken('loginUrl', t)} />
+                  <Label>Login Profile <span className="text-destructive">*</span></Label>
+                  <Select value={actionForm.loginId} onValueChange={(v) => setActionForm(f => ({ ...f, loginId: v }))}>
+                    <SelectTrigger><SelectValue placeholder="Select a login profile…" /></SelectTrigger>
+                    <SelectContent>
+                      {logins.length === 0 ? (
+                        <SelectItem value="_none" disabled>No logins yet — create one first</SelectItem>
+                      ) : (
+                        logins.map((l) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)
+                      )}
+                    </SelectContent>
+                  </Select>
                 </div>
-                <div className="space-y-1">
-                  <Label>How to confirm you're logged in <span className="text-destructive">*</span></Label>
-                  <Textarea
-                    placeholder="I can see the main dashboard with my name and a logout button"
-                    value={actionForm.loginVerify}
-                    onChange={(e) => setActionForm(f => ({ ...f, loginVerify: e.target.value }))}
-                    rows={3}
-                    className="text-sm"
-                  />
-                  <p className="text-xs text-muted-foreground">Describe what you expect to see on screen when successfully logged in.</p>
-                  <VariableChips vars={availableVars} onInsert={(t) => insertToken('loginVerify', t)} />
-                </div>
+                {(() => {
+                  const selected = logins.find((l) => l.id === actionForm.loginId);
+                  return selected ? <LoginPreview login={selected} availableVars={availableVars} /> : null;
+                })()}
               </>
             )}
 
             {actionForm.action_type === 'approval' && (
-              <div className="space-y-1">
-                <Label>Instructions for Approver</Label>
-                <Textarea placeholder="Describe what the approver needs to review and decide…" value={actionForm.approval_instructions} onChange={(e) => setActionForm(f => ({ ...f, approval_instructions: e.target.value }))} rows={4} className="text-sm" />
-                <VariableChips vars={availableVars} onInsert={(t) => insertToken('approval_instructions', t)} />
-              </div>
+              <>
+                <div className="space-y-1">
+                  <Label>Instructions for Approver</Label>
+                  <Textarea placeholder="Describe what the approver needs to review and decide…" value={actionForm.approval_instructions} onChange={(e) => setActionForm(f => ({ ...f, approval_instructions: e.target.value }))} rows={4} className="text-sm" />
+                  <VariableChips vars={availableVars} onInsert={(t) => insertToken('approval_instructions', t)} />
+                </div>
+                <ApprovalPreview
+                  instructions={actionForm.approval_instructions}
+                  availableVars={availableVars}
+                />
+              </>
             )}
 
             {actionForm.action_type === 'browser_script' && (
               <>
-                <div className="rounded-md bg-violet-50 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-800 px-3 py-2 text-xs text-violet-700 dark:text-violet-400">
-                  The agent will run this browser script in its existing browser session.
-                  Script steps reference <code className="bg-white/40 dark:bg-black/20 px-1 rounded font-mono">{'{{variables}}'}</code> from prior actions by name.
-                </div>
+                <EntityPreviewNotice
+                  entityLabel="browser script"
+                  editHref="/actions/browser-scripts"
+                  editLabel="Actions → Browser Scripts"
+                />
                 <div className="space-y-1">
                   <Label>Script <span className="text-destructive">*</span></Label>
                   <Select value={actionForm.scriptId} onValueChange={(v) => setActionForm(f => ({ ...f, scriptId: v }))}>
@@ -1299,50 +1318,28 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </SelectContent>
                   </Select>
                 </div>
-                {actionForm.scriptId && (() => {
-                  const script = browserScripts.find((s) => s.id === actionForm.scriptId);
-                  const params = script?.parameters ? Object.keys(script.parameters) : [];
-                  if (params.length === 0) return null;
-                  const missing = params.filter((p) => !availableVars.includes(p));
-                  return (
-                    <div className="space-y-1.5">
-                      <Label className="text-xs">This script references variables:</Label>
-                      <div className="flex items-center gap-1 flex-wrap">
-                        {params.map((p) => {
-                          const available = availableVars.includes(p);
-                          return (
-                            <span
-                              key={p}
-                              className={cn(
-                                'text-[10px] font-mono px-1.5 py-0.5 rounded border',
-                                available
-                                  ? 'bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-400'
-                                  : 'bg-amber-500/10 border-amber-500/30 text-amber-700 dark:text-amber-400'
-                              )}
-                            >
-                              {`{{${p}}}`}
-                            </span>
-                          );
-                        })}
-                      </div>
-                      {missing.length > 0 && (
-                        <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                          Variables in amber are not produced by any prior action. Add a step that sets them, or confirm they're provided at trigger time.
-                        </p>
-                      )}
-                    </div>
-                  );
+                {(() => {
+                  const selected = browserScripts.find((s) => s.id === actionForm.scriptId);
+                  return selected ? (
+                    <BrowserScriptPreview script={selected} availableVars={availableVars} />
+                  ) : null;
                 })()}
               </>
             )}
 
             {actionForm.action_type === 'sub_agent' && (
               <>
-                <div className="rounded-md bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-400 space-y-2">
+                <EntityPreviewNotice
+                  entityLabel="sub-agent"
+                  editHref="/agents"
+                  editLabel="Agents"
+                  bodyOverride="This action runs another agent's workflow as a sub-agent. Batch size and max concurrent below are configurable per-action; the target agent's own configuration is managed separately."
+                />
+                <InfoBlock>
                   <p>The previous step must output a JSON array. Items are grouped into batches and each batch is sent to a sub-agent invocation. All item data and parent context are available as {'{{variables}}'} in prompts and browser scripts.</p>
                   <p><strong>How batch processing works:</strong> Inside the sub-agent, AI steps and browser scripts loop through each item in the batch sequentially. Login and approval steps run once and are shared across all items. Each item&apos;s output feeds into the next step for that same item.</p>
                   <p><strong>Speed tip:</strong> For maximum parallelization, keep batch size at 1 and increase max concurrent. This runs many sub-agents in parallel. Larger batch sizes are useful when you want to reuse a single browser session (e.g. one login) across multiple items.</p>
-                </div>
+                </InfoBlock>
                 <div className="space-y-1">
                   <Label>Target Agent <span className="text-destructive">*</span></Label>
                   <Select value={actionForm.targetAgentId} onValueChange={(v) => setActionForm(f => ({ ...f, targetAgentId: v }))}>
@@ -1360,6 +1357,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </SelectContent>
                   </Select>
                 </div>
+                {(() => {
+                  const selected = validSubAgents.find((a) => a.id === actionForm.targetAgentId);
+                  return selected ? <SubAgentPreview agent={selected} /> : null;
+                })()}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1">
                     <Label className="flex items-center gap-1.5">
@@ -1404,9 +1405,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               onClick={handleSaveAction}
               disabled={
                 savingAction ||
-                !actionForm.name.trim() ||
-                (actionForm.action_type === 'agent' && !actionForm.prompt.trim()) ||
-                (actionForm.action_type === 'login' && (!actionForm.loginUrl.trim() || !actionForm.loginVerify.trim())) ||
+                (actionForm.action_type === 'approval' && !actionForm.name.trim()) ||
+                (actionForm.action_type === 'agent' && !actionForm.aiStepId) ||
+                (actionForm.action_type === 'login' && !actionForm.loginId) ||
                 (actionForm.action_type === 'browser_script' && !actionForm.scriptId) ||
                 (actionForm.action_type === 'sub_agent' && !actionForm.targetAgentId)
               }
@@ -1416,6 +1417,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* ── AI Step Viewer (read-only) ────────────────────────── */}
+      <AiStepDialog
+        open={!!viewingAiStep}
+        onOpenChange={(o) => { if (!o) setViewingAiStep(null); }}
+        step={viewingAiStep}
+        connectors={connectors.filter((c: any) => c.agent_enabled).map((c: any) => ({ id: c.id, label: c.connector_name ?? c.id }))}
+        skills={skills}
+        readOnly
+      />
 
       {/* ── Trigger Dialog ────────────────────────────────────── */}
       <Dialog open={triggerDialogOpen} onOpenChange={setTriggerDialogOpen}>

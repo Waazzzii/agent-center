@@ -21,6 +21,10 @@ import {
   BarChart3,
   ShieldCheck,
   Video,
+  Zap,
+  LogIn,
+  MessageSquare,
+  Sparkles,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -49,15 +53,24 @@ const MAIN_ICONS: Record<string, React.ElementType> = {
   '/agents':           Bot,
   '/agent-history':    History,
   '/agent-analytics':  BarChart3,
+  '/interactions':     MessageSquare,
   '/approvals':        CheckCircle,
   '/skills':           Wand2,
   '/record':           Video,
   '/access':           ShieldCheck,
 };
-const CHILD_ICONS: Record<string, React.ElementType> = {};
+// Icons for grouper items (no href) — keyed by label
+const GROUPER_ICONS: Record<string, React.ElementType> = {
+  'Actions': Zap,
+};
+const CHILD_ICONS: Record<string, React.ElementType> = {
+  '/actions/ai-steps':        Sparkles,
+  '/actions/logins':          LogIn,
+  '/actions/browser-scripts': Video,
+};
 const orgMainNavItems: NavItem[] = mainItems.map((item) => ({
   ...item,
-  icon: MAIN_ICONS[item.href] ?? Bot,
+  icon: MAIN_ICONS[item.href] ?? GROUPER_ICONS[item.label] ?? Bot,
   children: item.children?.map((child) => ({ ...child, icon: CHILD_ICONS[child.href] ?? Bot })),
 }));
 
@@ -70,16 +83,22 @@ export function ViewModeSidebar() {
   const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
   const manuallyClosed = useRef<Set<string>>(new Set());
 
+  // Stable key for nav items.  Most items use their href; grouper items
+  // (children-only, no own page) fall back to their label.
+  const navKey = (item: { href: string; label: string }) => item.href || `group:${item.label}`;
+
   useEffect(() => {
     const newExpanded = new Set<string>();
     for (const item of orgMainNavItems) {
       if (!item.children?.length) continue;
-      if (manuallyClosed.current.has(item.href)) continue;
+      const key = navKey(item);
+      if (manuallyClosed.current.has(key)) continue;
+      const hrefMatchesPath = item.href && pathname.startsWith(item.href);
       if (
         item.children.some((c) => pathname.startsWith(c.href)) ||
-        pathname.startsWith(item.href)
+        hrefMatchesPath
       ) {
-        newExpanded.add(item.href);
+        newExpanded.add(key);
       }
     }
     if (newExpanded.size > 0) {
@@ -116,10 +135,14 @@ export function ViewModeSidebar() {
   const renderNavItem = (item: NavItem) => {
     const Icon = item.icon;
     const hasChildren = item.children && item.children.length > 0;
-    const isExpanded = hasChildren && expandedItems.has(item.href);
+    const key = navKey(item);
+    const isExpanded = hasChildren && expandedItems.has(key);
     const isChildActive = hasChildren && item.children!.some((c) => pathname.startsWith(c.href));
-    const isActive = !hasChildren && pathname.startsWith(item.href);
-    const isGrouper = hasChildren && item.children!.some((c) => c.href === item.href);
+    const isActive = !hasChildren && !!item.href && pathname.startsWith(item.href);
+    // A "grouper" is a parent nav item that has no own page and exists only
+    // to expand/collapse its children.  Either: the parent's href matches
+    // one of its children (legacy), or the parent has no href at all.
+    const isGrouper = hasChildren && (!item.href || item.children!.some((c) => c.href === item.href));
 
     const visibleChildren = hasChildren
       ? item.children!.filter((child) => {
@@ -129,12 +152,12 @@ export function ViewModeSidebar() {
       : [];
 
     return (
-      <div key={item.href}>
+      <div key={key}>
         {hasChildren ? (
           <div
             className={cn(
               'flex w-full items-center rounded-lg text-sm font-medium transition-colors',
-              !isGrouper && pathname.startsWith(item.href) && !isChildActive
+              !isGrouper && item.href && pathname.startsWith(item.href) && !isChildActive
                 ? 'bg-sidebar-accent text-sidebar-accent-foreground'
                 : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
             )}
@@ -142,7 +165,7 @@ export function ViewModeSidebar() {
             {isGrouper ? (
               <button
                 className="flex flex-1 items-center gap-3 px-3 py-2 text-left"
-                onClick={() => toggleExpanded(item.href)}
+                onClick={() => toggleExpanded(key)}
               >
                 <Icon className="h-5 w-5 shrink-0" />
                 <span className="flex-1">{item.label}</span>
@@ -157,8 +180,8 @@ export function ViewModeSidebar() {
                   href={item.href}
                   className="flex flex-1 items-center gap-3 px-3 py-2"
                   onClick={() => {
-                    manuallyClosed.current.delete(item.href);
-                    setExpandedItems((prev) => new Set([...prev, item.href]));
+                    manuallyClosed.current.delete(key);
+                    setExpandedItems((prev) => new Set([...prev, key]));
                     if (sidebarOpen) toggleSidebar();
                   }}
                 >
@@ -166,7 +189,7 @@ export function ViewModeSidebar() {
                   <span className="flex-1 text-left">{item.label}</span>
                 </Link>
                 <button
-                  onClick={() => toggleExpanded(item.href)}
+                  onClick={() => toggleExpanded(key)}
                   className="pr-3 py-2"
                   aria-label={isExpanded ? 'Collapse' : 'Expand'}
                 >

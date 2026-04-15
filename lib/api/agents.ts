@@ -18,20 +18,19 @@ export interface AgentAction {
   agent_id: string;
   name: string;
   action_type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent';
-  prompt?: string | null;
-  connector_ids?: string[] | null;
-  model: string;
-  skill_ids?: string[];
   approval_instructions?: string | null;
   notify_user_id?: string | null;
-  prior_action_id?: string | null;
-  next_action_id?: string | null;
   order_index: number;
-  /** browser_script actions only */
+  /** FKs to reusable entities */
+  ai_step_id?: string | null;
+  ai_step_name?: string | null;
+  login_id?: string | null;
+  login_name?: string | null;
   script_id?: string | null;
-  /** sub_agent actions only */
+  script_name?: string | null;
   target_agent_id?: string | null;
   target_agent_name?: string | null;
+  /** sub_agent tuning */
   max_concurrent?: number | null;
   batch_size?: number | null;
   created_at: string;
@@ -200,7 +199,10 @@ export interface ApprovalsListResponse {
   total_pages: number;
 }
 
-export async function getApprovals(orgId: string, params?: { status?: string; agent_id?: string; execution_id?: string; page?: number; limit?: number }) {
+export async function getApprovals(
+  orgId: string,
+  params?: { status?: string; agent_id?: string; execution_id?: string; action_types?: string; page?: number; limit?: number }
+) {
   const res = await agentClient.get<ApprovalsListResponse>(`/api/admin/${orgId}/approvals`, { params });
   return res.data;
 }
@@ -350,6 +352,16 @@ export async function clearAgentBrowserSession(orgId: string, agentId: string): 
  */
 export async function getNoVNCInfo(runId: string): Promise<NoVNCInfo> {
   const res = await agentClient.get<NoVNCInfo>(`/novnc/run/${runId}`);
+  return res.data;
+}
+
+/**
+ * Lazy HITL allocation: allocates a browser slot on demand for a paused run.
+ * Called when the user clicks "Open Browser" in the Interactions page.
+ * Returns the noVNC URL for the iframe.
+ */
+export async function openBrowserForRun(runId: string): Promise<{ runId: string; novncUrl: string }> {
+  const res = await agentClient.post<{ runId: string; novncUrl: string }>(`/agent/run/${runId}/open-browser`);
   return res.data;
 }
 
