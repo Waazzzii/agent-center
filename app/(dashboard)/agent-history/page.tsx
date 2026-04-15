@@ -46,6 +46,7 @@ import {
   Zap,
   ArrowUpRight,
   CalendarIcon,
+  GitBranch,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
@@ -198,7 +199,15 @@ function RunsTable({
               {/* Mobile layout */}
               <div className="md:hidden px-4 py-3 space-y-2">
                 <div className="flex items-center justify-between gap-2">
-                  <span className="font-medium text-sm truncate">{run.agent_name}</span>
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    {run.depth > 0 && (
+                      <GitBranch className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                    )}
+                    <span className="font-medium text-sm truncate">{run.agent_name}</span>
+                    {run.item_index != null && (
+                      <span className="text-[10px] font-mono text-muted-foreground shrink-0">#{run.item_index}</span>
+                    )}
+                  </div>
                   <StatusBadge status={displayStatus} />
                 </div>
                 <div className="flex items-center gap-2 flex-wrap">
@@ -225,9 +234,15 @@ function RunsTable({
 
               {/* Desktop layout */}
               <div className={`hidden md:grid ${RUN_COLS} gap-3 items-center px-4 py-3`}>
-                <div className="min-w-0 truncate">
-                  <span className="text-xs font-mono text-muted-foreground/50 mr-1.5">[{run.id.slice(-4).toUpperCase()}]</span>
-                  <span className="font-medium text-sm">{run.agent_name}</span>
+                <div className="min-w-0 truncate flex items-center gap-1.5" style={run.depth > 0 ? { paddingLeft: `${Math.min(run.depth, 3) * 16}px` } : undefined}>
+                  {run.depth > 0 && (
+                    <GitBranch className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
+                  )}
+                  <span className="text-xs font-mono text-muted-foreground/50 mr-1">[{run.id.slice(-4).toUpperCase()}]</span>
+                  <span className={cn('font-medium text-sm truncate', run.depth > 0 && 'text-indigo-700 dark:text-indigo-400')}>{run.agent_name}</span>
+                  {run.item_index != null && (
+                    <span className="text-[10px] font-mono text-muted-foreground shrink-0">#{run.item_index}</span>
+                  )}
                 </div>
                 <StatusBadge status={displayStatus} />
                 <TriggerBadge type={run.trigger_type} />

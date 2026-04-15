@@ -5,16 +5,13 @@ import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import {
-  CheckCircle2, ChevronRight, ChevronsRight, Play, AlertCircle, Loader2,
-  CircleDot, MousePointerClick, X, Save, RotateCcw, Trash2, Plus, Server,
+  CheckCircle2, ChevronRight, ChevronsRight, Play, AlertCircle, AlertTriangle, Loader2,
+  CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, GripVertical,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -36,12 +33,14 @@ import {
   stopStepRunRecording,
   updateStepRunStep,
   deleteStepRunStep,
+  syncStepRunSteps,
   captureStepRunWaitFor,
   cancelStepRunWaitForCapture,
   type BrowserScript,
   type RecordedStep,
 } from '@/lib/api/scripts';
 import { cn } from '@/lib/utils';
+import { BottomPanel } from './panels';
 
 const agentApiUrl = process.env.NEXT_PUBLIC_AGENT_API_URL ?? '';
 
@@ -72,7 +71,7 @@ function stepLabel(step: RecordedStep): string {
     case 'extract':    return `Extract → ${step.field_name ?? ''}`;
     case 'switch_tab': return `Switch to tab ${step.tab_index ?? ''}`;
     case 'close_tab':  return 'Close tab';
-    case 'wait_for':     return `Wait for: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? ''}`;
+    case 'wait_for':     return `Wait: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? 'element'}`;
     case 'wait_for_tab': return `Wait for new tab${step.selector ? `: ${step.waitFor?.description ?? step.selector}` : ''}`;
     default:           return step.action;
   }
@@ -105,6 +104,8 @@ export function RunScriptModal({
 
   // ── Unified script name (both modes) ─────────────────────────
   const [scriptName, setScriptName] = useState('');
+  const [scriptDescription, setScriptDescription] = useState('');
+  const [showDescription, setShowDescription] = useState(false);
 
   // ── Test / step-run mode ──────────────────────────────────────
   const [runId, setRunId] = useState<string | null>(null);
@@ -159,6 +160,9 @@ export function RunScriptModal({
 
   // ── Current step editor resize ────────────────────────────────
   const [stepEditorHeight, setStepEditorHeight] = useState(200);
+  const [dragStepIdx, setDragStepIdx] = useState<number | null>(null);
+  const [dropStepIdx, setDropStepIdx] = useState<number | null>(null);
+  const cancelAutoRunRef = useRef(false);
   const resizeDragRef = useRef<{ startY: number; startH: number } | null>(null);
 
   const handleResizeMouseDown = (e: React.MouseEvent) => {
@@ -190,6 +194,8 @@ export function RunScriptModal({
     setStarting(false);
     setTempScriptId(null);
     setScriptName('');
+    setScriptDescription('');
+    setShowDescription(false);
     setRunId(null);
     setStepRunState(null);
     setEditedStep('');
@@ -238,9 +244,14 @@ export function RunScriptModal({
         handleStartRecordSession();
       } else {
         setScriptName(script?.name ?? '');
-        if (script && script.parameters.length === 0) {
-          handleStartStepRun();
+        setScriptDescription(script?.description ?? '');
+        // Pre-seed: recording defaults from parameters, then override with
+        // persisted test_values (user's latest test overrides survive sessions)
+        if (script?.parameters && typeof script.parameters === 'object') {
+          setParams({ ...script.parameters, ...(script.test_values ?? {}) });
         }
+        // Always auto-start — variables are editable inline in the Variables Panel
+        handleStartStepRun();
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -313,6 +324,21 @@ export function RunScriptModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hasActiveSession]);
 
+  // Cancel wait-for capture on Esc
+  useEffect(() => {
+    if (!isCapturingWaitFor) return;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        captureAbortRef.current?.abort();
+        captureAbortRef.current = null;
+        cancelStepRunWaitForCapture(orgId!, runId!).catch(() => {});
+        setIsCapturingWaitFor(false);
+      }
+    };
+    window.addEventListener('keydown', handleEsc);
+    return () => window.removeEventListener('keydown', handleEsc);
+  }, [isCapturingWaitFor, orgId, runId]);
+
   // ── Helpers ───────────────────────────────────────────────────
 
   /**
@@ -321,9 +347,10 @@ export function RunScriptModal({
    *   - Consumed: referenced via {{name}} in value/url/field_name
    *   - Produced: set by an extract step (the field_name is the variable)
    */
+  type VariableRef = { index: number; action: string };
   type VariableInfo = {
-    sources: number[];   // step indices that produce this variable (extract steps)
-    consumers: number[]; // step indices that reference {{name}}
+    sources: VariableRef[];   // steps that produce this variable (extract steps)
+    consumers: VariableRef[]; // steps that reference {{name}}
   };
   const analyzeVariables = (steps: RecordedStep[]): Map<string, VariableInfo> => {
     const vars = new Map<string, VariableInfo>();
@@ -335,19 +362,43 @@ export function RunScriptModal({
       // Consumers: anywhere {{name}} appears in value/url/field_name
       for (const src of [s.value ?? '', s.field_name ?? '', s.url ?? '']) {
         for (const m of (src.match(/\{\{(\w+)\}\}/g) ?? [])) {
-          ensure(m.slice(2, -2)).consumers.push(i);
+          ensure(m.slice(2, -2)).consumers.push({ index: i, action: s.action });
         }
       }
       // Sources: extract steps set a variable named field_name
       if (s.action === 'extract' && s.field_name) {
-        ensure(s.field_name).sources.push(i);
+        ensure(s.field_name).sources.push({ index: i, action: s.action });
       }
     });
     return vars;
   };
 
-  /** Legacy string[] shape used by the save flow — keyed by the analyzer. */
-  const extractParams = (steps: RecordedStep[]) => Array.from(analyzeVariables(steps).keys());
+  /**
+   * Build the parameters object for saving: { name: defaultValue }.
+   * Default values come from the current test values (params state),
+   * so whatever the user typed during recording becomes the default.
+   */
+  const buildParameters = (steps: RecordedStep[]): Record<string, string> => {
+    const vars = analyzeVariables(steps);
+    const result: Record<string, string> = {};
+    // Build a map of _defaultValue from steps for fallback
+    const defaults: Record<string, string> = {};
+    for (const s of steps) {
+      if (s._defaultValue) {
+        if (s.action === 'fill' && s.value) {
+          const match = s.value.match(/^\{\{(\w+)\}\}$/);
+          if (match) defaults[match[1]] = s._defaultValue;
+        }
+        if (s.action === 'extract' && s.field_name) {
+          defaults[s.field_name] = s._defaultValue;
+        }
+      }
+    }
+    for (const name of vars.keys()) {
+      result[name] = params[name] || defaults[name] || '';
+    }
+    return result;
+  };
 
   // ── Provisioning poll (shared hook) ────────────────────────────
   // Drives the provisioning UI. Set provisioningRunId to start polling;
@@ -539,19 +590,30 @@ export function RunScriptModal({
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
     try {
-      const res = await executeStepRunStep(orgId, runId);
-      setStepRunState((s) => ({
-        currentIndex: res.currentIndex,
-        totalSteps:   res.totalSteps,
-        step:         res.step,
-        steps:        s?.steps ?? [],
-        screenshot:   res.screenshot,
-        extracted:    res.extracted,
-        done:         res.done,
-        status:       'waiting',
-      }));
+      const res = await executeStepRunStep(orgId, runId, params);
+      setStepRunState((s) => {
+        // Merge the executed step back so auto-locked selectors are reflected
+        const steps = [...(s?.steps ?? [])];
+        if (res.executedStep && res.currentIndex > 0) {
+          steps[res.currentIndex - 1] = res.executedStep;
+        }
+        return {
+          currentIndex: res.currentIndex,
+          totalSteps:   res.totalSteps,
+          step:         res.step,
+          steps,
+          screenshot:   res.screenshot,
+          extracted:    res.extracted,
+          done:         res.done,
+          status:       'waiting',
+        };
+      });
       setEditedStep(res.step ? JSON.stringify(res.step, null, 2) : '');
       setStepEditError('');
+      // Live-update test values from extracted data (extract steps set variables)
+      if (res.extracted && Object.keys(res.extracted).length > 0) {
+        setParams((p) => ({ ...p, ...res.extracted }));
+      }
       if (res.done) toast.success('All steps completed!');
     } catch (err: any) {
       const screenshot = err?.response?.data?.screenshot ?? null;
@@ -563,24 +625,45 @@ export function RunScriptModal({
 
   const handleRunAll = async () => {
     if (!runId || !orgId || !stepRunState || stepRunState.done) return;
+    cancelAutoRunRef.current = false;
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
     let finished = false;
-    while (!finished) {
+    while (!finished && !cancelAutoRunRef.current) {
       try {
-        const res = await executeStepRunStep(orgId, runId);
+        const res = await executeStepRunStep(orgId, runId, params);
         finished = res.done;
-        setStepRunState((s) => ({
-          currentIndex: res.currentIndex,
-          totalSteps:   res.totalSteps,
-          step:         res.step,
-          steps:        s?.steps ?? [],
-          screenshot:   res.screenshot,
-          extracted:    res.extracted,
-          done:         res.done,
-          status:       res.done ? 'waiting' : 'running',
-        }));
+        setStepRunState((s) => {
+          const steps = [...(s?.steps ?? [])];
+          if (res.executedStep && res.currentIndex > 0) {
+            steps[res.currentIndex - 1] = res.executedStep;
+          }
+          return {
+            currentIndex: res.currentIndex,
+            totalSteps:   res.totalSteps,
+            step:         res.step,
+            steps,
+            screenshot:   res.screenshot,
+            extracted:    res.extracted,
+            done:         res.done,
+            status:       res.done ? 'waiting' : 'running',
+          };
+        });
+        // Live-update test values from extracted data
+        if (res.extracted && Object.keys(res.extracted).length > 0) {
+          setParams((p) => ({ ...p, ...res.extracted }));
+        }
         if (res.done) {
+          // Force one more state update to ensure the last executedStep merge is visible
+          const lastExecutedStep = res.executedStep;
+          if (lastExecutedStep && res.currentIndex > 0) {
+            setStepRunState((s) => {
+              if (!s) return s;
+              const steps = [...s.steps];
+              steps[res.currentIndex - 1] = lastExecutedStep;
+              return { ...s, steps };
+            });
+          }
           setEditedStep('');
           toast.success('All steps completed!');
         }
@@ -591,6 +674,11 @@ export function RunScriptModal({
         setError(msg);
         finished = true;
       }
+    }
+    if (cancelAutoRunRef.current) {
+      cancelAutoRunRef.current = false;
+      setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
+      toast.info('Auto-run stopped');
     }
   };
 
@@ -640,22 +728,119 @@ export function RunScriptModal({
   };
 
   const handleExit = () => {
-    if (!runId) { performExit(); return; }
-    // Only warn if there's something that would be lost on exit
-    const warn =
-      (isRecording && liveRecordedSteps.length > 0) ||
-      (mode === 'record' && !hasSavedSession && (stepRunState?.steps?.length ?? 0) > 0) ||
-      (mode !== 'record' && hasChanges);
-    if (warn) {
+    // Always warn if there's an active session — unsaved changes may be lost
+    if (runId || provisioningRunId) {
       setShowExitWarning(true);
     } else {
       performExit();
     }
   };
 
+  // ── Rename variable — updates all step references ───────────
+  const handleRenameVariable = (oldName: string, newName: string) => {
+    const safeName = newName.trim().replace(/\s+/g, '_').replace(/\W/g, '');
+    if (!safeName || safeName === oldName) return;
+    // Update all step references: {{oldName}} → {{newName}} in value/url/field_name
+    const updatedSteps = (stepRunState?.steps ?? []).map((s) => {
+      const updated = { ...s };
+      if (updated.value) updated.value = updated.value.replace(new RegExp(`\\{\\{${oldName}\\}\\}`, 'g'), `{{${safeName}}}`);
+      if (updated.url) updated.url = updated.url.replace(new RegExp(`\\{\\{${oldName}\\}\\}`, 'g'), `{{${safeName}}}`);
+      if (updated.field_name === oldName) updated.field_name = safeName;
+      return updated;
+    });
+    setStepRunState((s) => s ? { ...s, steps: updatedSteps } : s);
+    setParams((p) => {
+      const { [oldName]: val, ...rest } = p;
+      return { ...rest, [safeName]: val ?? '' };
+    });
+    setHasChanges(true);
+  };
+
+  // ── Delete variable (only when not in use) ─────────────────
+  const handleDeleteVariable = (name: string) => {
+    setParams((p) => {
+      const { [name]: _, ...rest } = p;
+      return rest;
+    });
+  };
+
+  // ── Drag-and-drop step reorder ──────────────────────────────
+  const handleDropStep = (targetIdx: number) => {
+    if (dragStepIdx === null || dragStepIdx === targetIdx || !stepRunState) return;
+    const newSteps = [...(stepRunState.steps ?? [])];
+    const [dragged] = newSteps.splice(dragStepIdx, 1);
+    newSteps.splice(targetIdx, 0, dragged!);
+    // Shift newStepIndices to match reorder
+    setNewStepIndices((prev) => {
+      const arr = [...prev];
+      const updated = new Set<number>();
+      for (const idx of arr) {
+        if (idx === dragStepIdx) {
+          updated.add(targetIdx);
+        } else {
+          let shifted = idx;
+          if (idx > dragStepIdx) shifted--;
+          if (shifted >= targetIdx) shifted++;
+          updated.add(shifted);
+        }
+      }
+      return updated;
+    });
+    setStepRunState((s) => s ? { ...s, steps: newSteps, totalSteps: newSteps.length } : s);
+    setHasChanges(true);
+    setDragStepIdx(null);
+    setDropStepIdx(null);
+    // Sync to worker immediately so executions/jumps use the reordered list
+    if (runId && orgId) syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+  };
+
+  // ── Add explicit wait step — triggers the element picker, then inserts ──
+  const handleAddWaitStep = async () => {
+    if (!runId || !orgId || !stepRunState || isCapturingWaitFor) return;
+
+    // Trigger the element picker overlay in the browser
+    setIsCapturingWaitFor(true);
+    const controller = new AbortController();
+    captureAbortRef.current = controller;
+    try {
+      const result = await captureStepRunWaitFor(orgId, runId, controller.signal);
+
+      // Build the wait_for step from the captured element
+      const waitStep: RecordedStep = {
+        action: 'wait_for',
+        selector: result.selector,
+        waitFor: { selector: result.selector, description: result.description },
+        elementSnapshot: result.elementSnapshot ?? undefined,
+      };
+
+      // Insert after the current step
+      const idx = stepRunState.currentIndex + 1;
+      const newSteps = [...(stepRunState.steps ?? [])];
+      newSteps.splice(idx, 0, waitStep);
+      setStepRunState((s) => s ? {
+        ...s,
+        steps: newSteps,
+        totalSteps: newSteps.length,
+        step: waitStep,
+      } : s);
+      setEditedStep(JSON.stringify(waitStep, null, 2));
+      setNewStepIndices((prev) => new Set([...prev, idx]));
+      setHasChanges(true);
+      // Sync to worker immediately so executions/jumps use the updated list
+      await syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+      toast.success('Wait step added');
+    } catch (err: any) {
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.name === 'CanceledError') return;
+      toast.error(err?.response?.data?.error || err?.message || 'Wait-for capture failed');
+    } finally {
+      captureAbortRef.current = null;
+      setIsCapturingWaitFor(false);
+    }
+  };
+
   // ── Unified save (stays in the session window) ───────────────
   const handleDeleteStep = async (stepIndex: number) => {
-    if (!runId || !orgId) return;
+    if (!runId || !orgId || isRecording) return;
     try {
       const updatedState = await deleteStepRunStep(orgId, runId, stepIndex);
       setStepRunState((s) => s ? {
@@ -670,6 +855,16 @@ export function RunScriptModal({
       setEditedStep(updatedState.step ? JSON.stringify(updatedState.step, null, 2) : '');
       setStepEditError('');
       setHasChanges(true);
+      // Clean up new-step indicators: remove the deleted index and shift higher ones down
+      setNewStepIndices((prev) => {
+        const next = new Set<number>();
+        for (const idx of prev) {
+          if (idx < stepIndex) next.add(idx);
+          else if (idx > stepIndex) next.add(idx - 1);
+          // idx === stepIndex is dropped
+        }
+        return next;
+      });
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to delete step');
     }
@@ -677,6 +872,24 @@ export function RunScriptModal({
 
   const handleSave = async () => {
     if (!orgId) return;
+
+    // Auto-apply any pending JSON edits locally before saving.
+    // The full step list (including this edit) gets synced to the worker
+    // via syncStepRunSteps later in the save flow.
+    if (editedStep && stepRunState) {
+      try {
+        const parsed = JSON.parse(editedStep);
+        if (parsed?.action) {
+          const idx = stepRunState.currentIndex;
+          setStepRunState((s) => {
+            if (!s) return s;
+            const steps = [...s.steps];
+            if (idx < steps.length) steps[idx] = parsed;
+            return { ...s, steps };
+          });
+        }
+      } catch { /* invalid JSON — skip */ }
+    }
 
     if (mode === 'record') {
       let steps = stepRunState?.steps ?? [];
@@ -699,18 +912,21 @@ export function RunScriptModal({
 
       try {
         const name = scriptName.trim() || 'Untitled Script';
-        const params = extractParams(steps);
+        const parameters = buildParameters(steps);
 
         if (tempScriptId) {
           // Already saved once — update in place
-          await updateScript(orgId, tempScriptId, { name, steps, parameters: params });
+          await updateScript(orgId, tempScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: params });
         } else {
           // First save — create the script now
-          const created = await createScript(orgId, { name, steps, parameters: params });
+          const created = await createScript(orgId, { name, steps, parameters, test_values: params });
           setTempScriptId(created.id);
         }
+        // Sync steps to the worker so jumps/executions use the saved version
+        if (runId) await syncStepRunSteps(orgId, runId, steps).catch(() => {});
         toast.success('Script saved!');
         setHasSavedSession(true);
+        setNewStepIndices(new Set()); // clear "new" indicators after save
         onSaved?.();
       } catch (err: any) {
         toast.error(err?.response?.data?.message || err?.message || 'Failed to save');
@@ -720,8 +936,11 @@ export function RunScriptModal({
       if (!script) return;
       const steps = stepRunState?.steps ?? [];
       try {
-        await updateScript(orgId, script.id, { steps, parameters: extractParams(steps) });
+        await updateScript(orgId, script.id, { steps, parameters: buildParameters(steps), test_values: params, description: scriptDescription || undefined });
+        // Sync steps to the worker so jumps/executions use the saved version
+        if (runId) await syncStepRunSteps(orgId, runId, steps).catch(() => {});
         setHasChanges(false);
+        setNewStepIndices(new Set());
         toast.success('Changes saved!');
       } catch (err: any) {
         toast.error(err?.response?.data?.message || err?.message || 'Failed to save');
@@ -747,7 +966,7 @@ export function RunScriptModal({
 
       setRunId(orphanSession.runId);
       setViewerUrl(`/live/run/${orphanSession.runId}`);
-      setScriptName(run?.steps?.length ? `Resumed session` : scriptName || '');
+      setScriptName(scriptName || script?.name || '');
       setStepRunState({
         currentIndex: run.currentIndex ?? 0,
         totalSteps:   run.totalSteps ?? 0,
@@ -765,7 +984,10 @@ export function RunScriptModal({
       clearActiveBrowserSession();
       setOrphanSession(null);
       if (mode === 'record') handleStartRecordSession();
-      else if (script && script.parameters.length === 0) handleStartStepRun();
+      else if (script) {
+        if (script.parameters && typeof script.parameters === 'object') setParams({ ...script.parameters, ...(script.test_values ?? {}) });
+        handleStartStepRun();
+      }
     } finally {
       setResumingOrphan(false);
     }
@@ -784,7 +1006,10 @@ export function RunScriptModal({
     if (mode === 'record') handleStartRecordSession();
     else {
       setScriptName(script?.name ?? '');
-      if (script && script.parameters.length === 0) handleStartStepRun();
+      if (script) {
+        if (script.parameters && typeof script.parameters === 'object') setParams({ ...script.parameters, ...(script.test_values ?? {}) });
+        handleStartStepRun();
+      }
     }
   };
 
@@ -815,36 +1040,6 @@ export function RunScriptModal({
     }
   };
 
-  const handleCaptureWaitFor = async () => {
-    if (!runId || !orgId || !stepRunState) return;
-    if (isCapturingWaitFor) {
-      captureAbortRef.current?.abort();
-      captureAbortRef.current = null;
-      await cancelStepRunWaitForCapture(orgId, runId);
-      setIsCapturingWaitFor(false);
-      return;
-    }
-    setIsCapturingWaitFor(true);
-    const controller = new AbortController();
-    captureAbortRef.current = controller;
-    try {
-      const result = await captureStepRunWaitFor(orgId, runId, controller.signal);
-      const updatedState = await updateStepRunStep(orgId, runId, {
-        waitFor: { selector: result.selector, description: result.description },
-      });
-      setStepRunState((s) => s ? { ...s, steps: updatedState.steps ?? s.steps, step: updatedState.step ?? s.step } : s);
-      setEditedStep(updatedState.step ? JSON.stringify(updatedState.step, null, 2) : editedStep);
-      setStepEditError('');
-      setHasChanges(true);
-    } catch (err: any) {
-      if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.name === 'CanceledError') return;
-      toast.error(err?.response?.data?.error || err?.message || 'Wait-for capture failed');
-    } finally {
-      captureAbortRef.current = null;
-      setIsCapturingWaitFor(false);
-    }
-  };
-
   const handleApplyStepEdit = async () => {
     if (!runId || !orgId) return;
     let parsed: RecordedStep;
@@ -865,12 +1060,39 @@ export function RunScriptModal({
     }
   };
 
+  // Auto-seed test values from _defaultValue on newly-recorded steps.
+  // Must be before early returns to satisfy Rules of Hooks.
+  const allVisibleSteps = [...(stepRunState?.steps ?? []), ...liveRecordedSteps];
+  // Build a fingerprint of all _defaultValue entries so the effect fires when
+  // new defaults appear (not just when step count changes).
+  const defaultsFingerprint = allVisibleSteps
+    .filter((s) => s._defaultValue)
+    .map((s) => `${s.action}:${s.field_name ?? s.value ?? ''}:${s._defaultValue}`)
+    .join('|');
+  useEffect(() => {
+    const newDefaults: Record<string, string> = {};
+    for (const s of allVisibleSteps) {
+      if (!s._defaultValue) continue;
+      if (s.action === 'fill' && s.value) {
+        const match = s.value.match(/^\{\{(\w+)\}\}$/);
+        if (match && !params[match[1]]) newDefaults[match[1]] = s._defaultValue;
+      }
+      if (s.action === 'extract' && s.field_name && !params[s.field_name]) {
+        newDefaults[s.field_name] = s._defaultValue;
+      }
+    }
+    if (Object.keys(newDefaults).length > 0) {
+      setParams((p) => ({ ...newDefaults, ...p }));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [defaultsFingerprint]);
+
   if (!open) return null;
   if (typeof document === 'undefined') return null;
 
   const isExecuting = stepRunState?.status === 'running' || starting;
   const isRecordMode = mode === 'record';
-  const needsParams = !isRecordMode && !!script && script.parameters.length > 0 && !runId && !isProvisioning;
+  // No separate params form — variables are always edited inline in the Variables Panel
   const hasSteps = (stepRunState?.totalSteps ?? 0) > 0 || (stepRunState?.steps?.length ?? 0) > 0;
 
   // ── Derived: does exit need a warning? ────────────────────────
@@ -891,6 +1113,17 @@ export function RunScriptModal({
   const stepCount = showLiveDirectly
     ? liveRecordedSteps.length
     : (stepRunState?.totalSteps ?? script?.steps?.length ?? 0);
+
+  // A step needs selector review if it has multiple candidates (untested) or
+  // has a selector but no candidates (picker-added wait_for, untested).
+  // A step needs selector review if it targets an element and hasn't been
+  // tested yet. The _tested flag is set by the worker after successful execution.
+  const needsSelectorReview = (s: RecordedStep) => {
+    if (s.action === 'navigate' || s.action === 'press_key') return false;
+    const sel = s.selector ?? s.waitFor?.selector;
+    if (!sel || sel === 'body') return false;
+    return !s._tested;
+  };
 
   const portal = createPortal(
     <div className="fixed z-50 inset-0 md:left-64 bg-background flex flex-col">
@@ -926,16 +1159,36 @@ export function RunScriptModal({
             </span>
           )}
 
-          {/* Editable name */}
-          <input
-            className="text-sm font-medium bg-transparent border-none outline-none focus:ring-1 focus:ring-border rounded px-1 min-w-0 w-52"
-            value={scriptName}
-            onChange={(e) => setScriptName(e.target.value)}
-            onBlur={handleSaveScriptName}
-            onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
-            placeholder="Script name…"
-            disabled={starting}
-          />
+          {/* Editable name + description toggle */}
+          <div className="flex flex-col min-w-0">
+            <input
+              className="text-sm font-medium bg-transparent border-none outline-none focus:ring-1 focus:ring-border rounded px-1 min-w-0 w-52"
+              value={scriptName}
+              onChange={(e) => setScriptName(e.target.value)}
+              onBlur={handleSaveScriptName}
+              onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+              placeholder="Script name…"
+              disabled={starting}
+            />
+            {showDescription ? (
+              <input
+                className="text-[10px] text-muted-foreground bg-transparent border-none outline-none focus:ring-1 focus:ring-border rounded px-1 min-w-0 w-52"
+                value={scriptDescription}
+                onChange={(e) => setScriptDescription(e.target.value)}
+                onBlur={() => { if (!scriptDescription.trim()) setShowDescription(false); }}
+                onKeyDown={(e) => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
+                placeholder="Add a description…"
+                autoFocus
+              />
+            ) : (
+              <button
+                className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground px-1 text-left transition-colors"
+                onClick={() => setShowDescription(true)}
+              >
+                {scriptDescription || '+ Add description'}
+              </button>
+            )}
+          </div>
 
           {/* Progress chip */}
           {stepRunState && !stepRunState.done && stepRunState.totalSteps > 0 && !isRecording && (
@@ -955,8 +1208,8 @@ export function RunScriptModal({
           {runId && (
             <Button
               variant={isRecording ? 'destructive' : 'ghost'}
-              size="sm"
-              className="h-7 w-7 p-0"
+              size="icon"
+              className="h-7 w-7"
               onClick={isRecordMode && isRecording ? handleStopRecordSession : handleToggleRecording}
               disabled={starting || (isExecuting && !isRecording) || isCapturingWaitFor}
               title={isRecording ? 'Stop recording' : 'Record new steps here'}
@@ -965,21 +1218,24 @@ export function RunScriptModal({
             </Button>
           )}
 
-          {/* Wait-for picker — step mode only, only on wait_for steps, not while actively recording */}
-          {runId && !stepRunState?.done && !autoMode && !isRecording &&
-           stepRunState?.step?.action === 'wait_for' && (
+          {/* Add wait step — always visible when run active, disabled during record/execute */}
+          {runId && !stepRunState?.done && (
             <Button
-              variant={isCapturingWaitFor ? 'secondary' : 'ghost'}
-              size="sm"
-              className="h-7 w-7 p-0"
-              onClick={handleCaptureWaitFor}
-              disabled={(isExecuting || isRecording) && !isCapturingWaitFor}
-              title={isCapturingWaitFor ? 'Cancel — click an element or press Esc' : 'Click an element to set the wait-for target for this step'}
+              variant={isCapturingWaitFor ? 'default' : 'ghost'}
+              size="icon"
+              className="h-7 w-7 focus-visible:ring-0 focus-visible:ring-offset-0"
+              onClick={isCapturingWaitFor ? () => {
+                captureAbortRef.current?.abort();
+                captureAbortRef.current = null;
+                cancelStepRunWaitForCapture(orgId!, runId!).catch(() => {});
+                setIsCapturingWaitFor(false);
+              } : handleAddWaitStep}
+              disabled={!isCapturingWaitFor && (isRecording || isExecuting)}
+              title={isCapturingWaitFor ? 'Cancel — press Esc or click here' : 'Add a wait step — click an element on the page'}
             >
               {isCapturingWaitFor
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <MousePointerClick className="h-3.5 w-3.5" />
-              }
+                : <Clock className="h-3.5 w-3.5" />}
             </Button>
           )}
 
@@ -1003,37 +1259,47 @@ export function RunScriptModal({
                   disabled={isExecuting || isRecording}
                 >Auto</button>
               </div>
-              <Button
-                onClick={stepRunState?.done ? () => handleJumpToStep(0) : (autoMode ? handleRunAll : handleExecuteStep)}
-                disabled={isExecuting || isCapturingWaitFor || isRecording || (!stepRunState?.done && !hasSteps)}
-                size="sm"
-              >
-                {isExecuting
-                  ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                  : stepRunState?.done
-                    ? <RotateCcw className="mr-1.5 h-3 w-3" />
-                    : autoMode
-                      ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
-                      : <Play className="mr-1.5 h-3 w-3 fill-current" />
-                }
-                {stepRunState?.done ? 'Restart' : autoMode ? 'Run All' : 'Next'}
-              </Button>
+              {/* Stop button — visible during auto-run */}
+              {isExecuting && autoMode ? (
+                <Button
+                  variant="destructive"
+                  size="sm"
+                  onClick={() => { cancelAutoRunRef.current = true; }}
+                >
+                  <X className="mr-1.5 h-3 w-3" />
+                  Stop
+                </Button>
+              ) : (
+                <Button
+                  onClick={stepRunState?.done ? () => handleJumpToStep(0) : (autoMode ? handleRunAll : handleExecuteStep)}
+                  disabled={isExecuting || isCapturingWaitFor || isRecording || (!stepRunState?.done && !hasSteps)}
+                  size="sm"
+                >
+                  {isExecuting
+                    ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    : stepRunState?.done
+                      ? <RotateCcw className="mr-1.5 h-3 w-3" />
+                      : autoMode
+                        ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
+                        : <Play className="mr-1.5 h-3 w-3 fill-current" />
+                  }
+                  {stepRunState?.done ? 'Restart' : autoMode ? 'Run All' : 'Run Step'}
+                </Button>
+              )}
             </>
           )}
 
-          {/* Save — record: whenever there are steps; test: when edits are pending */}
-          {((isRecordMode && hasSteps) || (!isRecordMode && hasChanges && runId)) && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className={cn('h-7 w-7 p-0', !isRecordMode && 'text-primary')}
-              onClick={handleSave}
-              disabled={isExecuting}
-              title={isRecordMode ? 'Save script' : 'Save changes to script'}
-            >
-              <Save className="h-3.5 w-3.5" />
-            </Button>
-          )}
+          {/* Save — always visible */}
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7"
+            onClick={handleSave}
+            disabled={isExecuting || isRecording}
+            title="Save"
+          >
+            <Save className="h-3.5 w-3.5" />
+          </Button>
 
           {/* Exit — always (X icon); enabled even during provisioning so user can leave */}
           <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={handleExit} disabled={starting && !isProvisioning} title="Exit">
@@ -1128,49 +1394,46 @@ export function RunScriptModal({
         {/* Right panel */}
         <div className="flex flex-col overflow-hidden bg-background w-[480px] shrink-0 border-l">
 
-          {/* ── Params form (test mode pre-run) ── */}
-          {needsParams && (
-            <>
-              <div className="px-3 py-2 border-b shrink-0">
-                <p className="text-xs uppercase tracking-wide font-semibold text-muted-foreground">Parameters</p>
-              </div>
-              <div className="flex-1 overflow-y-auto p-3 space-y-3">
-                {script!.parameters.map((param) => (
-                  <div key={param} className="space-y-1.5">
-                    <Label className="text-xs">{param}</Label>
-                    <Input
-                      placeholder={`Enter ${param}…`}
-                      value={params[param] ?? ''}
-                      onChange={(e) => setParams((p) => ({ ...p, [param]: e.target.value }))}
-                      className="h-8 text-xs"
-                    />
-                  </div>
-                ))}
-              </div>
-              <div className="border-t p-3">
-                {error && (
-                  <p className="text-xs text-destructive mb-2 flex items-center gap-1.5">
-                    <AlertCircle className="h-3.5 w-3.5 shrink-0" />{error}
-                  </p>
-                )}
-                <Button className="w-full" size="sm" onClick={handleStartStepRun} disabled={starting}>
-                  {starting ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
-                  Start Testing
-                </Button>
-              </div>
-            </>
-          )}
-
           {/* ── Unified step list (record + test + review) ── */}
-          {!needsParams && (
+          {(
             <>
               <div className="px-3 py-2 border-b shrink-0">
-                <p className="text-xs uppercase tracking-wide font-semibold text-muted-foreground">
-                  {`Steps (${stepCount})`}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="text-xs uppercase tracking-wide font-semibold text-muted-foreground">
+                    {`Steps (${stepCount})`}
+                  </p>
+                  {(() => {
+                    const unresolvedCount = stepsToShow.filter(needsSelectorReview).length;
+                    if (unresolvedCount === 0) return null;
+                    return (
+                      <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400" title={`${unresolvedCount} step${unresolvedCount !== 1 ? 's' : ''} with multiple selector candidates. Run each step to auto-select the best selector.`}>
+                        <AlertTriangle className="h-3 w-3" />
+                        {unresolvedCount} unresolved
+                      </span>
+                    );
+                  })()}
+                </div>
               </div>
 
-              <div ref={stepListRef} className="flex-1 overflow-y-auto divide-y text-xs min-h-0">
+              <div
+                ref={stepListRef}
+                className="flex-1 overflow-y-auto divide-y text-xs min-h-0"
+                tabIndex={0}
+                onKeyDown={(e) => {
+                  if (isExecuting || isRecording || !stepRunState || stepRunState.done) return;
+                  const max = (stepRunState.steps?.length ?? 0) - 1;
+                  if (max < 0) return;
+                  if (e.key === 'ArrowDown') {
+                    e.preventDefault();
+                    const next = Math.min(stepRunState.currentIndex + 1, max);
+                    if (next !== stepRunState.currentIndex) handleJumpToStep(next);
+                  } else if (e.key === 'ArrowUp') {
+                    e.preventDefault();
+                    const prev = Math.max(stepRunState.currentIndex - 1, 0);
+                    if (prev !== stepRunState.currentIndex) handleJumpToStep(prev);
+                  }
+                }}
+              >
 
                 {/* Empty-state while recording hasn't captured anything yet (or still connecting) */}
                 {isRecordMode && stepsToShow.length === 0 && (starting || isRecording) && (
@@ -1190,24 +1453,6 @@ export function RunScriptModal({
                   </div>
                 )}
 
-                {/* Recording indicator at top — when currentIndex === 0 (no steps executed yet) */}
-                {isRecording && !showLiveDirectly && stepRunState && stepRunState.currentIndex === 0 && (
-                  <>
-                    <div className="px-3 py-1 flex items-center gap-2 bg-red-500/5 border-b border-red-500/15">
-                      <span className="relative flex h-1.5 w-1.5 shrink-0">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-500 opacity-75" />
-                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-red-500" />
-                      </span>
-                      <span className="text-xs text-red-400">Recording — steps insert here</span>
-                    </div>
-                    {liveRecordedSteps.map((r, ri) => (
-                      <div key={`rec-${ri}`} className="px-3 py-1.5 flex items-center gap-2 text-muted-foreground bg-red-500/5">
-                        <Plus className="h-3 w-3 shrink-0 text-green-500" />
-                        <span className="truncate flex-1">{stepLabel(r)}</span>
-                      </div>
-                    ))}
-                  </>
-                )}
 
                 {/* Unified step list — same display logic for both record and test modes */}
                 {stepsToShow.map((s, i) => {
@@ -1217,8 +1462,9 @@ export function RunScriptModal({
                   // Show recording position + live steps BEFORE the current step (after last executed).
                   // currentIndex > 0: show after the last executed step (i === currentIndex - 1).
                   // currentIndex === 0: handled by the header element above the map.
+                  // Show recording insertion indicator AFTER the current step
                   const showLiveInsert = isRecording && !showLiveDirectly && stepRunState &&
-                    stepRunState.currentIndex > 0 && i === stepRunState.currentIndex - 1;
+                    i === stepRunState.currentIndex;
                   const isNew       = newStepIndices.has(i);
                   const isJumping   = jumpingTo === i;
                   const isHovered   = hoveredStep === i && !isExecuting && !isRecording;
@@ -1226,47 +1472,64 @@ export function RunScriptModal({
                     <div key={i}>
                       <div
                         className={cn(
-                          'px-3 py-1.5 flex items-center gap-2 group relative',
+                          'py-1.5 flex items-center gap-1.5 group relative',
+                          isRecording ? 'px-3' : 'px-1.5 cursor-pointer',
                           isCurrent  ? 'bg-primary/10 font-medium' : 'text-muted-foreground',
-                          isNew && !isCurrent && 'bg-green-500/5',
+                          isNew && 'bg-green-500/5',
                           isHovered && !isCurrent && 'bg-muted/40',
+                          !isRecording && dropStepIdx === i && dragStepIdx !== i && 'border-t-2 border-primary',
                         )}
+                        draggable={!isExecuting && !isRecording}
+                        onDragStart={isRecording ? undefined : () => setDragStepIdx(i)}
+                        onDragEnd={isRecording ? undefined : () => { setDragStepIdx(null); setDropStepIdx(null); }}
+                        onDragOver={isRecording ? undefined : (e) => { e.preventDefault(); setDropStepIdx(i); }}
+                        onDrop={isRecording ? undefined : () => handleDropStep(i)}
                         onMouseEnter={() => setHoveredStep(i)}
                         onMouseLeave={() => setHoveredStep(null)}
+                        onClick={() => { if (!isCurrent && !isExecuting && !isRecording && !stepRunState?.done) handleJumpToStep(i); }}
                       >
-                        <span className={cn('w-5 shrink-0 text-right tabular-nums', isCompleted && !isHovered && 'line-through')}>
-                          {i + 1}.
+                        {/* Drag handle — only in test mode */}
+                        {!isRecording && (
+                          <div className={cn(
+                            'cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-muted-foreground shrink-0',
+                            isExecuting && 'invisible'
+                          )}>
+                            <GripVertical className="h-3.5 w-3.5" />
+                          </div>
+                        )}
+                        {/* Step number — replaced by green check (completed) or green + (new) */}
+                        <span className="w-5 shrink-0 text-right tabular-nums flex items-center justify-end">
+                          {isCompleted ? (
+                            <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                          ) : isNew ? (
+                            <Plus className="h-3.5 w-3.5 text-green-500" />
+                          ) : (
+                            <>{i + 1}</>
+                          )}
                         </span>
                         <span className="truncate flex-1">
                           {stepLabel(s)}
                         </span>
-                        {isCurrent && !isHovered ? (
-                          <ChevronRight className="h-3 w-3 ml-auto shrink-0 text-primary" />
-                        ) : isHovered ? (
-                          <div className="ml-auto shrink-0 flex items-center gap-2">
-                            {!isCurrent && !stepRunState?.done && (
-                              <button
-                                className="flex items-center gap-1 text-xs text-primary hover:underline"
-                                onClick={() => handleJumpToStep(i)}
-                                disabled={isJumping}
-                              >
-                                {isJumping ? <Loader2 className="h-3 w-3 animate-spin" /> : <ChevronRight className="h-3 w-3" />}
-                                Run from here
-                              </button>
-                            )}
+                        {/* Actions: delete (on hover) + selector warning (persistent) */}
+                        <div className="ml-auto shrink-0 flex items-center gap-1">
+                          {isHovered && (
                             <button
                               className="text-muted-foreground hover:text-destructive transition-colors"
                               onClick={(e) => { e.stopPropagation(); handleDeleteStep(i); }}
                               title="Delete step"
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
+                              <Trash2 className="h-3 w-3" />
                             </button>
-                          </div>
-                        ) : isNew ? (
-                          <Plus className="h-3 w-3 ml-auto shrink-0 text-green-500" />
+                          )}
+                          {needsSelectorReview(s) && (
+                            <span title="Selector needs review — run this step to auto-select"><AlertTriangle className="h-3 w-3 text-amber-500" /></span>
+                          )}
+                        </div>
+                        {isCurrent && !isHovered ? (
+                          <ChevronRight className="h-3 w-3 shrink-0 text-primary" />
                         ) : null}
                       </div>
-                      {/* Recording insertion point — shown before the current (next-to-run) step */}
+                      {/* Recording insertion point — shown after the current step */}
                       {showLiveInsert && (
                         <>
                           <div className="px-3 py-1 flex items-center gap-2 bg-red-500/5 border-y border-red-500/15">
@@ -1296,46 +1559,6 @@ export function RunScriptModal({
                 )}
               </div>
 
-              {/* ── Current step editor (resizable) ── */}
-              {!stepRunState?.done && stepRunState?.step && (
-                <div className="border-t shrink-0 flex flex-col">
-                  {/* Drag handle */}
-                  <div
-                    className="h-1.5 bg-border/60 hover:bg-primary/40 cursor-row-resize transition-colors shrink-0"
-                    onMouseDown={handleResizeMouseDown}
-                    title="Drag to resize"
-                  />
-                  <div className="px-3 pt-2 pb-1 flex items-center justify-between shrink-0">
-                    <p className="text-xs font-medium text-muted-foreground">Current step</p>
-                    <div className="flex items-center gap-2">
-                      {stepEditError && <p className="text-xs text-destructive">{stepEditError}</p>}
-                      <button
-                        className="text-xs text-primary hover:underline disabled:opacity-40 disabled:no-underline"
-                        onClick={handleApplyStepEdit}
-                        disabled={isExecuting || isRecording}
-                      >
-                        Apply
-                      </button>
-                    </div>
-                  </div>
-                  <div className="px-3 pb-3">
-                    <Textarea
-                      className="font-mono text-xs resize-none w-full"
-                      style={{ height: stepEditorHeight }}
-                      value={editedStep}
-                      onChange={(e) => { setEditedStep(e.target.value); setStepEditError(''); }}
-                      onKeyDown={(e) => {
-                        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-                          e.preventDefault();
-                          handleApplyStepEdit();
-                        }
-                      }}
-                      spellCheck={false}
-                    />
-                  </div>
-                </div>
-              )}
-
               {/* Error */}
               {error && (
                 <div className="border-t px-3 py-2 shrink-0">
@@ -1345,55 +1568,42 @@ export function RunScriptModal({
                 </div>
               )}
 
-              {/* Variables Panel — shows all {{variables}} produced/consumed by steps */}
+              {/* ── Bottom panel (extracted component) ── */}
               {(() => {
                 const vars = analyzeVariables(stepsToShow);
-                if (vars.size === 0) return null;
+                const allNames = [...new Set([...vars.keys(), ...Object.keys(params).filter((k) => !vars.has(k))])];
+                const idx = stepRunState?.done
+                  ? Math.max(0, (stepRunState?.steps?.length ?? 1) - 1)
+                  : (stepRunState?.currentIndex ?? 0);
+                const curStep = stepRunState?.steps?.[idx] ?? null;
                 return (
-                  <div className="border-t px-3 py-2 shrink-0 space-y-1.5 max-h-52 overflow-y-auto">
-                    <div className="flex items-center justify-between">
-                      <p className="text-xs font-medium text-muted-foreground">Variables ({vars.size})</p>
-                      <span className="text-[10px] text-muted-foreground/70">Test values feed the next run</span>
-                    </div>
-                    {Array.from(vars.entries()).map(([name, info]) => (
-                      <div key={name} className="space-y-1 rounded border border-border/50 bg-muted/20 px-2 py-1.5">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-mono text-xs text-purple-400 truncate flex-1 min-w-0">{name}</span>
-                          {info.sources.length > 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-500 whitespace-nowrap">
-                              Set by #{info.sources.map((i) => i + 1).join(', #')}
-                            </span>
-                          )}
-                          {info.consumers.length > 0 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-500 whitespace-nowrap">
-                              Read by #{info.consumers.map((i) => i + 1).join(', #')}
-                            </span>
-                          )}
-                        </div>
-                        <Input
-                          placeholder={`Test value for {{${name}}}`}
-                          value={params[name] ?? ''}
-                          onChange={(e) => setParams((p) => ({ ...p, [name]: e.target.value }))}
-                          className="h-7 text-xs"
-                        />
-                      </div>
-                    ))}
-                  </div>
+                  <BottomPanel
+                    variables={vars}
+                    params={params}
+                    onParamsChange={setParams}
+                    onRenameVariable={handleRenameVariable}
+                    onDeleteVariable={handleDeleteVariable}
+                    hoveredStep={hoveredStep}
+                    variableNames={allNames}
+                    currentStep={curStep}
+                    currentStepIndex={idx}
+                    onUpdateStep={(updated) => {
+                      const newSteps = [...(stepRunState?.steps ?? [])];
+                      newSteps[idx] = updated;
+                      setStepRunState((s) => s ? { ...s, steps: newSteps, step: updated } : s);
+                      setEditedStep(JSON.stringify(updated, null, 2));
+                      setHasChanges(true);
+                    }}
+                    needsSelectorReview={needsSelectorReview}
+                    editedStep={editedStep}
+                    onEditedStepChange={(v) => { setEditedStep(v); setStepEditError(''); }}
+                    stepEditError={stepEditError}
+                    isExecuting={isExecuting}
+                    isRecording={isRecording}
+                    extracted={stepRunState?.extracted ?? {}}
+                  />
                 );
               })()}
-
-              {/* Extracted values */}
-              {stepRunState && Object.keys(stepRunState.extracted).length > 0 && (
-                <div className="border-t px-3 py-2 shrink-0 space-y-1">
-                  <p className="text-xs font-medium text-muted-foreground">Extracted</p>
-                  {Object.entries(stepRunState.extracted).map(([k, v]) => (
-                    <div key={k} className="flex gap-1.5 text-xs">
-                      <span className="font-mono text-purple-400 shrink-0">{k}</span>
-                      <span className="text-muted-foreground truncate">{v}</span>
-                    </div>
-                  ))}
-                </div>
-              )}
             </>
           )}
         </div>
@@ -1413,9 +1623,7 @@ export function RunScriptModal({
           <DialogHeader>
             <DialogTitle>Exit session?</DialogTitle>
             <DialogDescription>
-              {(isRecording && liveRecordedSteps.length > 0)
-                ? 'You have an active recording in progress. Your unsaved steps will be discarded.'
-                : 'You have unsaved changes. Use the Save button to keep them before exiting.'}
+              Any unsaved changes will be lost. Use Save before exiting to keep your work.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1423,10 +1631,10 @@ export function RunScriptModal({
               pendingNavRef.current = null;
               setShowExitWarning(false);
             }}>
-              Continue
+              Cancel
             </Button>
             <Button variant="destructive" size="sm" onClick={() => { setShowExitWarning(false); performExit(); }}>
-              Discard & exit
+              Exit
             </Button>
           </DialogFooter>
         </DialogContent>

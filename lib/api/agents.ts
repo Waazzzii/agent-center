@@ -32,8 +32,8 @@ export interface AgentAction {
   /** sub_agent actions only */
   target_agent_id?: string | null;
   target_agent_name?: string | null;
-  input_field?: string | null;
   max_concurrent?: number | null;
+  batch_size?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -370,5 +370,78 @@ export async function getExecutionTree(orgId: string, executionId: string): Prom
 /** Get direct child executions (sub-agent runs) for a parent execution. */
 export async function getExecutionChildren(orgId: string, executionId: string): Promise<ExecutionChild[]> {
   const res = await agentClient.get<ExecutionChild[]>(`/api/admin/${orgId}/executions/${executionId}/children`);
+  return res.data;
+}
+
+// ─── Execution Analytics ──────────────────────────────────────
+
+export interface AnalyticsSummary {
+  total: number;
+  completed: number;
+  failed: number;
+  aborted: number;
+  running: number;
+  avg_duration_s: number | null;
+  success_rate: number | null;
+}
+
+export interface DailyCount {
+  date: string;
+  total: number;
+  completed: number;
+  failed: number;
+  aborted: number;
+}
+
+export interface AgentStats {
+  agent_id: string;
+  agent_name: string;
+  total: number;
+  completed: number;
+  failed: number;
+  aborted: number;
+  avg_duration_s: number | null;
+}
+
+export interface BatchItemStats {
+  total_items: number;
+  completed: number;
+  failed: number;
+  success_rate: number | null;
+}
+
+export interface RecentFailure {
+  id: string;
+  agent_name: string;
+  status: string;
+  error_message: string | null;
+  started_at: string;
+  completed_at: string | null;
+  duration_s: number | null;
+  trigger_type: string;
+}
+
+export interface TriggerTypeCount {
+  trigger_type: string;
+  count: number;
+}
+
+export interface ExecutionAnalytics {
+  summary: AnalyticsSummary;
+  daily: DailyCount[];
+  perAgent: AgentStats[];
+  batchItems: BatchItemStats;
+  recentFailures: RecentFailure[];
+  triggerTypes: TriggerTypeCount[];
+}
+
+export async function getExecutionAnalytics(
+  orgId: string,
+  params?: { from?: string; to?: string }
+): Promise<ExecutionAnalytics> {
+  const res = await agentClient.get<ExecutionAnalytics>(
+    `/api/admin/${orgId}/execution-analytics`,
+    { params }
+  );
   return res.data;
 }

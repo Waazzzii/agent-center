@@ -8,18 +8,17 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Trash2, Play } from 'lucide-react';
+import { Trash2, Pencil } from 'lucide-react';
 import { listScripts, deleteScript, type BrowserScript } from '@/lib/api/scripts';
 import { RunScriptModal } from './RunScriptModal';
 
 interface ScriptsListProps {
   orgId: string | null;
-  onEdit?: (script: BrowserScript) => void;
   /** Increment this to trigger a list refresh from the outside. */
   refreshKey?: number;
 }
 
-export function ScriptsList({ orgId, onEdit, refreshKey }: ScriptsListProps) {
+export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
   const [loading, setLoading] = useState(false);
   const [runModalScript, setRunModalScript] = useState<BrowserScript | null>(null);
@@ -95,7 +94,7 @@ export function ScriptsList({ orgId, onEdit, refreshKey }: ScriptsListProps) {
                   <tr
                     key={script.id}
                     className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
-                    onClick={() => onEdit?.(script)}
+                    onClick={() => setRunModalScript(script)}
                   >
                     <td className="px-4 py-3 pr-4">
                       <div>
@@ -108,11 +107,11 @@ export function ScriptsList({ orgId, onEdit, refreshKey }: ScriptsListProps) {
                       </div>
                     </td>
                     <td className="py-3 pr-4">
-                      {script.parameters.length === 0 ? (
+                      {Object.keys(script.parameters ?? {}).length === 0 ? (
                         <span className="text-muted-foreground">—</span>
                       ) : (
                         <div className="flex flex-wrap gap-1">
-                          {script.parameters.map((p) => (
+                          {Object.keys(script.parameters).map((p) => (
                             <Badge key={p} variant="secondary" className="text-xs px-1.5 py-0 h-5 font-mono">
                               {p}
                             </Badge>
@@ -131,20 +130,22 @@ export function ScriptsList({ orgId, onEdit, refreshKey }: ScriptsListProps) {
                     <td className="py-3 pr-4 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1">
                         <Button
-                          size="sm"
-                          variant="default"
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
                           onClick={() => setRunModalScript(script)}
+                          title="Edit script"
                         >
-                          <Play className="mr-1.5 h-3.5 w-3.5" />
-                          Test
+                          <Pencil className="h-3.5 w-3.5" />
                         </Button>
                         <Button
-                          size="sm"
+                          size="icon"
                           variant="ghost"
+                          className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
                           onClick={() => setScriptToDelete(script)}
-                          className="text-destructive hover:text-destructive hover:bg-destructive/10"
+                          title="Delete script"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                     </td>

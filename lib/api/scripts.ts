@@ -50,6 +50,10 @@ export interface RecordedStep {
   };
   /** Human-readable label for what this step waits for. Computed server-side via annotateStep(). */
   _waitLabel?: string | null;
+  /** Original literal value before auto-parameterization (used as test default). */
+  _defaultValue?: string;
+  /** Set to true after the step has been successfully executed during testing. */
+  _tested?: boolean;
 }
 
 export interface BrowserSession {
@@ -67,7 +71,10 @@ export interface BrowserScript {
   name: string;
   description?: string;
   steps: RecordedStep[];
-  parameters: string[];
+  /** Variable name → recording-time default. E.g. { "email": "user@example.com" } */
+  parameters: Record<string, string>;
+  /** Variable name → latest test value (persisted across sessions). */
+  test_values: Record<string, string>;
   created_at: string;
   updated_at: string;
 }
@@ -135,7 +142,8 @@ export async function createScript(
     name: string;
     description?: string;
     steps: RecordedStep[];
-    parameters: string[];
+    parameters: Record<string, string>;
+    test_values?: Record<string, string>;
   }
 ): Promise<BrowserScript> {
   const res = await agentClient.post<BrowserScript>(
@@ -152,7 +160,8 @@ export async function updateScript(
     name: string;
     description: string;
     steps: RecordedStep[];
-    parameters: string[];
+    parameters: Record<string, string>;
+    test_values: Record<string, string>;
   }>
 ): Promise<BrowserScript> {
   const res = await agentClient.patch<BrowserScript>(
@@ -275,9 +284,10 @@ export async function getStepRun(orgId: string, runId: string): Promise<StepRun>
 
 export async function executeStepRunStep(
   orgId: string,
-  runId: string
-): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string> }> {
-  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/execute`);
+  runId: string,
+  params?: Record<string, string>,
+): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep }> {
+  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/execute`, params ? { params } : undefined);
   return res.data;
 }
 
@@ -328,6 +338,11 @@ export async function abortStepRun(orgId: string, runId: string): Promise<void> 
   await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}`);
 }
 
+/** Sync the full step list to the worker after local edits (insert, reorder, delete). */
+export async function syncStepRunSteps(orgId: string, runId: string, steps: RecordedStep[]): Promise<StepRun> {
+  const res = await agentClient.put<StepRun>(`/api/admin/${orgId}/step-runs/${runId}/steps`, { steps });
+  return res.data;
+}
 
 export async function startStepRunRecording(orgId: string, runId: string): Promise<StepRun & { recordingActive: boolean }> {
   const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/record-start`);
@@ -351,7 +366,7 @@ export async function captureStepRunWaitFor(
   orgId: string,
   runId: string,
   signal?: AbortSignal
-): Promise<{ selector: string; description: string | null }> {
+): Promise<{ selector: string; description: string | null; elementSnapshot?: ElementSnapshot }> {
   const res = await agentClient.post(
     `/api/admin/${orgId}/step-runs/${runId}/capture-wait-for`,
     {},

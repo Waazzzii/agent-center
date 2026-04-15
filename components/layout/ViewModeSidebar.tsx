@@ -18,6 +18,7 @@ import {
   Bot,
   CheckCircle,
   History,
+  BarChart3,
   ShieldCheck,
   Video,
 } from 'lucide-react';
@@ -45,12 +46,13 @@ interface NavItem {
 
 // Merge icons onto shared nav items so they work in the sidebar
 const MAIN_ICONS: Record<string, React.ElementType> = {
-  '/agents':        Bot,
-  '/agent-history': History,
-  '/approvals':     CheckCircle,
-  '/skills':        Wand2,
-  '/record':        Video,
-  '/access':        ShieldCheck,
+  '/agents':           Bot,
+  '/agent-history':    History,
+  '/agent-analytics':  BarChart3,
+  '/approvals':        CheckCircle,
+  '/skills':           Wand2,
+  '/record':           Video,
+  '/access':           ShieldCheck,
 };
 const CHILD_ICONS: Record<string, React.ElementType> = {};
 const orgMainNavItems: NavItem[] = mainItems.map((item) => ({

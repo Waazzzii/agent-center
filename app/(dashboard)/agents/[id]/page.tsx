@@ -29,7 +29,6 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -303,9 +302,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // Action dialog
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [editingAction, setEditingAction] = useState<AgentAction | null>(null);
-  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', targetAgentId: '', inputField: '', maxConcurrent: 3 });
+  const [actionForm, setActionForm] = useState({ name: '', action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [] as string[], skill_ids: [] as string[], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', targetAgentId: '',  maxConcurrent: 3, batchSize: 1 });
   const [validSubAgents, setValidSubAgents] = useState<Agent[]>([]);
   const [savingAction, setSavingAction] = useState(false);
+  const [actionTypeModalOpen, setActionTypeModalOpen] = useState(false);
 
   // Trigger dialog
   const [triggerDialogOpen, setTriggerDialogOpen] = useState(false);
@@ -426,7 +426,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   const openNewAction = (type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent') => {
     setEditingAction(null);
-    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', targetAgentId: '', inputField: '', maxConcurrent: 3 });
+    setActionForm({ name: '', action_type: type, prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], skill_ids: [], approval_instructions: '', loginUrl: '', loginVerify: '', scriptId: '', targetAgentId: '',  maxConcurrent: 3, batchSize: 1 });
     // Load valid sub-agents when opening a sub_agent form
     if (type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -457,8 +457,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       loginVerify,
       scriptId: action.script_id ?? '',
       targetAgentId: action.target_agent_id ?? '',
-      inputField: action.input_field ?? '',
       maxConcurrent: action.max_concurrent ?? 3,
+      batchSize: action.batch_size ?? 1,
     });
     // Load valid sub-agents when editing a sub_agent action
     if (action.action_type === 'sub_agent' && selectedOrgId) {
@@ -502,8 +502,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           name: actionForm.name.trim(),
           action_type: 'sub_agent',
           target_agent_id: actionForm.targetAgentId,
-          input_field: actionForm.inputField.trim() || null,
           max_concurrent: actionForm.maxConcurrent,
+          batch_size: actionForm.batchSize,
         };
       } else {
         payload = {
@@ -635,7 +635,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   }, [assignedGroups, groupMembers]);
 
   /** Append a template token to a form field (used by VariableChips). */
-  const insertToken = (field: 'prompt' | 'loginUrl' | 'loginVerify' | 'approval_instructions' | 'inputField', token: string) => {
+  const insertToken = (field: 'prompt' | 'loginUrl' | 'loginVerify' | 'approval_instructions', token: string) => {
     setActionForm((f) => ({ ...f, [field]: `${f[field] ?? ''}${token}` }));
   };
 
@@ -653,7 +653,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       for (const a of actions) {
         if (a.action_type === 'browser_script' && a.script_id) {
           const script = browserScripts.find((s) => s.id === a.script_id);
-          if (script?.parameters) all.push(...script.parameters);
+          if (script?.parameters) all.push(...Object.keys(script.parameters));
         }
       }
       return Array.from(new Set(all));
@@ -664,7 +664,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     for (const a of prior) {
       if (a.action_type === 'browser_script' && a.script_id) {
         const script = browserScripts.find((s) => s.id === a.script_id);
-        if (script?.parameters) names.push(...script.parameters);
+        if (script?.parameters) names.push(...Object.keys(script.parameters));
       }
     }
     return Array.from(new Set(names));
@@ -850,137 +850,118 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             </div>
 
-            {/* Actions */}
+            {/* Steps */}
             <div>
-              <div className="flex items-center justify-between mb-2 px-1">
-                <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Actions</p>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="outline" className="h-7 text-xs">
-                      <Plus className="mr-1.5 h-3.5 w-3.5" />Add Action
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem onClick={() => openNewAction('agent')}>
-                      <PlayCircle className="mr-2 h-4 w-4" />Agent Step
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => openNewAction('approval')}>
-                      <CheckCircle2 className="mr-2 h-4 w-4" />Approval
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => openNewAction('login')} disabled={!agentRequiresBrowser}>
-                      <LogIn className="mr-2 h-4 w-4" />Login Step
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => openNewAction('browser_script')} disabled={!agentRequiresBrowser}>
-                      <CircleDot className="mr-2 h-4 w-4" />Browser Script
-                    </DropdownMenuItem>
-                    <DropdownMenuItem onClick={() => openNewAction('sub_agent')}>
-                      <GitBranch className="mr-2 h-4 w-4" />Sub Agent
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+              <div className="mb-2 px-1">
+                <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Steps</p>
               </div>
 
-              {actions.length === 0 ? (
-                <Card className="border-dashed border-2">
-                  <CardContent className="py-8 text-center text-sm text-muted-foreground">
-                    No actions yet. Add one to build your workflow.
-                  </CardContent>
-                </Card>
-              ) : (
-                <div>
-                  {actions.map((action, idx) => (
-                    <div key={action.id}>
-                      <Card
-                        className={cn(
-                          'group transition-all duration-150 cursor-default',
-                          dragIndex === idx && 'opacity-40 scale-[0.98]',
-                          dropIndex === idx && dragIndex !== idx && 'ring-2 ring-primary ring-offset-1',
-                        )}
-                        draggable
-                        onDragStart={() => setDragIndex(idx)}
-                        onDragOver={(e) => { e.preventDefault(); setDropIndex(idx); }}
-                        onDragEnd={() => { setDragIndex(null); setDropIndex(null); }}
-                        onDrop={() => handleDropAction(idx)}
-                      >
-                        <CardContent className="py-2.5 px-3">
-                          <div className="flex items-center gap-3">
-                            <div className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                              <GripVertical className="h-4 w-4" />
-                            </div>
-                            <div className={cn(
-                              'w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm font-bold select-none',
-                              action.action_type === 'approval'
-                                ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                                : action.action_type === 'login'
-                                ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
-                                : action.action_type === 'browser_script'
-                                ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
-                                : action.action_type === 'sub_agent'
-                                ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-                                : 'bg-primary/10 text-primary'
-                            )}>
-                              {action.action_type === 'login' ? <LogIn className="h-3.5 w-3.5" />
-                                : action.action_type === 'browser_script' ? <CircleDot className="h-3.5 w-3.5" />
-                                : action.action_type === 'sub_agent' ? <GitBranch className="h-3.5 w-3.5" />
-                                : idx + 1}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <span className="font-medium text-sm">{action.name}</span>
-                                <Badge
-                                  variant={action.action_type === 'agent' ? 'secondary' : 'outline'}
-                                  className={cn('text-xs',
-                                    action.action_type === 'approval' && 'border-orange-400 text-orange-600',
-                                    action.action_type === 'login' && 'border-sky-400 text-sky-600 dark:text-sky-400',
-                                    action.action_type === 'browser_script' && 'border-violet-400 text-violet-600 dark:text-violet-400',
-                                    action.action_type === 'sub_agent' && 'border-indigo-400 text-indigo-600 dark:text-indigo-400',
-                                  )}
-                                >
-                                  {action.action_type === 'approval' ? 'Approval'
-                                    : action.action_type === 'login' ? 'Login'
-                                    : action.action_type === 'browser_script' ? 'Browser Script'
-                                    : action.action_type === 'sub_agent' ? 'Sub Agent'
-                                    : 'Agent'}
-                                </Badge>
-                                {action.action_type === 'agent' && action.connector_ids && action.connector_ids.length > 0 && (
-                                  <Badge variant="outline" className="text-xs">{action.connector_ids.length} connector{action.connector_ids.length !== 1 ? 's' : ''}</Badge>
-                                )}
-                                {action.action_type === 'agent' && action.skill_ids && action.skill_ids.length > 0 && (
-                                  <Badge variant="outline" className="text-xs border-purple-400 text-purple-600 dark:text-purple-400">{action.skill_ids.length} skill{action.skill_ids.length !== 1 ? 's' : ''}</Badge>
-                                )}
-                              </div>
-                              <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                                {action.action_type === 'login'
-                                  ? (() => { try { const p = JSON.parse(action.prompt ?? '{}'); return p.url || '—'; } catch { return '—'; } })()
-                                  : action.action_type === 'agent'
-                                  ? (action.prompt ?? '—')
-                                  : action.action_type === 'browser_script'
-                                  ? (browserScripts.find((s) => s.id === action.script_id)?.name ?? action.script_id ?? '—')
-                                  : action.action_type === 'sub_agent'
-                                  ? `→ ${action.target_agent_name ?? 'Unknown agent'}${action.input_field ? ` (field: ${action.input_field})` : ''} ×${action.max_concurrent ?? 3} concurrent`
-                                  : (action.approval_instructions ?? '—')}
-                              </p>
-                            </div>
-                            <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditAction(action)}>
-                                <Pencil className="h-3.5 w-3.5" />
-                              </Button>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleDeleteAction(action.id, action.name)}>
-                                <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                              </Button>
-                            </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                      {idx < actions.length - 1 && (
-                        <div className="flex justify-center py-1">
-                          <div className="w-px h-4 bg-border" />
-                        </div>
+              <div>
+                {actions.map((action, idx) => (
+                  <div key={action.id}>
+                    <Card
+                      className={cn(
+                        'group transition-all duration-150 cursor-default',
+                        dragIndex === idx && 'opacity-40 scale-[0.98]',
+                        dropIndex === idx && dragIndex !== idx && 'ring-2 ring-primary ring-offset-1',
                       )}
+                      draggable
+                      onDragStart={() => setDragIndex(idx)}
+                      onDragOver={(e) => { e.preventDefault(); setDropIndex(idx); }}
+                      onDragEnd={() => { setDragIndex(null); setDropIndex(null); }}
+                      onDrop={() => handleDropAction(idx)}
+                    >
+                      <CardContent className="py-2.5 px-3">
+                        <div className="flex items-center gap-3">
+                          <div className="cursor-grab active:cursor-grabbing text-muted-foreground/40 hover:text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                            <GripVertical className="h-4 w-4" />
+                          </div>
+                          <div className={cn(
+                            'w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm font-bold select-none',
+                            action.action_type === 'approval'
+                              ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
+                              : action.action_type === 'login'
+                              ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
+                              : action.action_type === 'browser_script'
+                              ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
+                              : action.action_type === 'sub_agent'
+                              ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
+                              : 'bg-primary/10 text-primary'
+                          )}>
+                            {action.action_type === 'login' ? <LogIn className="h-3.5 w-3.5" />
+                              : action.action_type === 'browser_script' ? <CircleDot className="h-3.5 w-3.5" />
+                              : action.action_type === 'sub_agent' ? <GitBranch className="h-3.5 w-3.5" />
+                              : action.action_type === 'approval' ? <CheckCircle2 className="h-3.5 w-3.5" />
+                              : idx + 1}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-medium text-sm">{action.name}</span>
+                              <Badge
+                                variant={action.action_type === 'agent' ? 'secondary' : 'outline'}
+                                className={cn('text-xs',
+                                  action.action_type === 'approval' && 'border-orange-400 text-orange-600',
+                                  action.action_type === 'login' && 'border-sky-400 text-sky-600 dark:text-sky-400',
+                                  action.action_type === 'browser_script' && 'border-violet-400 text-violet-600 dark:text-violet-400',
+                                  action.action_type === 'sub_agent' && 'border-indigo-400 text-indigo-600 dark:text-indigo-400',
+                                )}
+                              >
+                                {action.action_type === 'approval' ? 'Human Review'
+                                  : action.action_type === 'login' ? 'Browser Login'
+                                  : action.action_type === 'browser_script' ? 'Browser Script'
+                                  : action.action_type === 'sub_agent' ? 'Run Agent'
+                                  : 'AI Step'}
+                              </Badge>
+                              {action.action_type === 'agent' && action.connector_ids && action.connector_ids.length > 0 && (
+                                <Badge variant="outline" className="text-xs">{action.connector_ids.length} connector{action.connector_ids.length !== 1 ? 's' : ''}</Badge>
+                              )}
+                              {action.action_type === 'agent' && action.skill_ids && action.skill_ids.length > 0 && (
+                                <Badge variant="outline" className="text-xs border-purple-400 text-purple-600 dark:text-purple-400">{action.skill_ids.length} skill{action.skill_ids.length !== 1 ? 's' : ''}</Badge>
+                              )}
+                            </div>
+                            <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                              {action.action_type === 'login'
+                                ? (() => { try { const p = JSON.parse(action.prompt ?? '{}'); return p.url || '—'; } catch { return '—'; } })()
+                                : action.action_type === 'agent'
+                                ? (action.prompt ?? '—')
+                                : action.action_type === 'browser_script'
+                                ? (browserScripts.find((s) => s.id === action.script_id)?.name ?? action.script_id ?? '—')
+                                : action.action_type === 'sub_agent'
+                                ? `→ ${action.target_agent_name ?? 'Unknown agent'}${(action.batch_size ?? 1) > 1 ? ` · batch ${action.batch_size}` : ''} · ×${action.max_concurrent ?? 3} concurrent`
+                                : (action.approval_instructions ?? '—')}
+                            </p>
+                          </div>
+                          <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => openEditAction(action)}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={() => handleDeleteAction(action.id, action.name)}>
+                              <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                            </Button>
+                          </div>
+                        </div>
+                      </CardContent>
+                    </Card>
+                    <div className="flex justify-center py-1">
+                      <div className="w-px h-4 bg-border" />
                     </div>
-                  ))}
-                </div>
-              )}
+                  </div>
+                ))}
+
+                {/* Add Step card */}
+                <button
+                  type="button"
+                  className="w-full"
+                  onClick={() => setActionTypeModalOpen(true)}
+                >
+                  <Card className="border-dashed border-2 hover:border-primary/50 hover:bg-muted/20 transition-colors cursor-pointer">
+                    <CardContent className="py-4 flex items-center justify-center gap-2">
+                      <Plus className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm text-muted-foreground font-medium">Add Step</span>
+                    </CardContent>
+                  </Card>
+                </button>
+              </div>
             </div>
           </div>
         </TabsContent>
@@ -1205,11 +1186,11 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           <DialogHeader>
             <DialogTitle>
               {editingAction ? 'Edit' : 'Add'}{' '}
-              {actionForm.action_type === 'approval' ? 'Approval'
-                : actionForm.action_type === 'login' ? 'Login Step'
+              {actionForm.action_type === 'approval' ? 'Human Review'
+                : actionForm.action_type === 'login' ? 'Browser Login'
                 : actionForm.action_type === 'browser_script' ? 'Browser Script'
-                : actionForm.action_type === 'sub_agent' ? 'Sub Agent'
-                : 'Agent Step'}
+                : actionForm.action_type === 'sub_agent' ? 'Run Agent'
+                : 'AI Step'}
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
@@ -1320,7 +1301,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 </div>
                 {actionForm.scriptId && (() => {
                   const script = browserScripts.find((s) => s.id === actionForm.scriptId);
-                  const params = script?.parameters ?? [];
+                  const params = script?.parameters ? Object.keys(script.parameters) : [];
                   if (params.length === 0) return null;
                   const missing = params.filter((p) => !availableVars.includes(p));
                   return (
@@ -1357,8 +1338,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
             {actionForm.action_type === 'sub_agent' && (
               <>
-                <div className="rounded-md bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-400">
-                  The previous step must output a JSON array. This action will run the selected agent once for each item in the array.
+                <div className="rounded-md bg-indigo-50 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800 px-3 py-2 text-xs text-indigo-700 dark:text-indigo-400 space-y-2">
+                  <p>The previous step must output a JSON array. Items are grouped into batches and each batch is sent to a sub-agent invocation. All item data and parent context are available as {'{{variables}}'} in prompts and browser scripts.</p>
+                  <p><strong>How batch processing works:</strong> Inside the sub-agent, AI steps and browser scripts loop through each item in the batch sequentially. Login and approval steps run once and are shared across all items. Each item&apos;s output feeds into the next step for that same item.</p>
+                  <p><strong>Speed tip:</strong> For maximum parallelization, keep batch size at 1 and increase max concurrent. This runs many sub-agents in parallel. Larger batch sizes are useful when you want to reuse a single browser session (e.g. one login) across multiple items.</p>
                 </div>
                 <div className="space-y-1">
                   <Label>Target Agent <span className="text-destructive">*</span></Label>
@@ -1377,49 +1360,40 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-1">
-                  <Label>Input Field</Label>
-                  <Input
-                    placeholder="e.g. reservation_id, url (leave empty to pass entire item)"
-                    value={actionForm.inputField}
-                    onChange={(e) => setActionForm(f => ({ ...f, inputField: e.target.value }))}
-                    className="text-sm"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    The JSON field from each array item to pass as the sub-agent's input. Leave empty to pass the entire item.
-                  </p>
-                  {availableVars.length > 0 && (
-                    <div className="flex items-center gap-1 flex-wrap mt-1">
-                      <span className="text-[10px] text-muted-foreground/70">From prior step:</span>
-                      {availableVars.map((v) => (
-                        <button
-                          key={v}
-                          type="button"
-                          onClick={() => setActionForm(f => ({ ...f, inputField: v }))}
-                          className="text-[10px] font-mono px-1.5 py-0.5 rounded border border-border bg-muted/30 hover:bg-muted hover:border-foreground/30 transition-colors"
-                        >
-                          {v}
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-                <div className="space-y-1">
-                  <Label className="flex items-center gap-1.5">
-                    Max Concurrent
-                    <span className="text-xs font-normal text-muted-foreground" title="Higher concurrency uses more browser slots. Balance with other agents that may need capacity.">(i)</span>
-                  </Label>
-                  <Input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={actionForm.maxConcurrent}
-                    onChange={(e) => setActionForm(f => ({ ...f, maxConcurrent: Math.max(1, Math.min(10, parseInt(e.target.value) || 1)) }))}
-                    className="w-24"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    How many sub-agents to run in parallel. Higher values use more capacity — balance with other agents that may need browser slots.
-                  </p>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1">
+                    <Label className="flex items-center gap-1.5">
+                      Batch Size
+                      <span className="text-xs font-normal text-muted-foreground" title="Number of items from the input array to send per sub-agent invocation.">(i)</span>
+                    </Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      value={actionForm.batchSize}
+                      onChange={(e) => setActionForm(f => ({ ...f, batchSize: Math.max(1, parseInt(e.target.value) || 1) }))}
+                      className="w-24"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Items per sub-agent call. Default 1 sends one item at a time.
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="flex items-center gap-1.5">
+                      Max Concurrent
+                      <span className="text-xs font-normal text-muted-foreground" title="Higher concurrency uses more browser slots. Balance with other agents that may need capacity.">(i)</span>
+                    </Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={actionForm.maxConcurrent}
+                      onChange={(e) => setActionForm(f => ({ ...f, maxConcurrent: Math.max(1, Math.min(10, parseInt(e.target.value) || 1)) }))}
+                      className="w-24"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      How many sub-agents to run in parallel.
+                    </p>
+                  </div>
                 </div>
               </>
             )}
@@ -1488,6 +1462,130 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               {savingTrigger ? 'Creating…' : 'Create Trigger'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Add Step Type Modal ──────────────────────────────── */}
+      <Dialog open={actionTypeModalOpen} onOpenChange={setActionTypeModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Add a Step</DialogTitle>
+          </DialogHeader>
+          <div className="grid grid-cols-1 gap-2 py-1">
+            {/* AI Step */}
+            <button
+              type="button"
+              className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
+              onClick={() => { setActionTypeModalOpen(false); openNewAction('agent'); }}
+            >
+              <div className="p-2 rounded-lg bg-primary/10 shrink-0">
+                <PlayCircle className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <p className="font-medium text-sm">AI Step</p>
+                <p className="text-xs text-muted-foreground">Run an AI model to process, generate, or analyze data</p>
+              </div>
+            </button>
+
+            {/* Human Review */}
+            <button
+              type="button"
+              className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
+              onClick={() => { setActionTypeModalOpen(false); openNewAction('approval'); }}
+            >
+              <div className="p-2 rounded-lg bg-orange-100 dark:bg-orange-900/30 shrink-0">
+                <CheckCircle2 className="h-4 w-4 text-orange-600 dark:text-orange-400" />
+              </div>
+              <div>
+                <p className="font-medium text-sm">Human Review</p>
+                <p className="text-xs text-muted-foreground">Pause for a human to review and approve before continuing</p>
+              </div>
+            </button>
+
+            {/* Run Agent */}
+            <button
+              type="button"
+              className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
+              onClick={() => { setActionTypeModalOpen(false); openNewAction('sub_agent'); }}
+            >
+              <div className="p-2 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 shrink-0">
+                <GitBranch className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+              </div>
+              <div>
+                <p className="font-medium text-sm">Run Agent</p>
+                <p className="text-xs text-muted-foreground">Run another agent once for each item in a list</p>
+              </div>
+            </button>
+
+            {/* Browser steps — gated on requires_browser */}
+            {agentRequiresBrowser ? (
+              <>
+                <button
+                  type="button"
+                  className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
+                  onClick={() => { setActionTypeModalOpen(false); openNewAction('login'); }}
+                >
+                  <div className="p-2 rounded-lg bg-sky-100 dark:bg-sky-900/30 shrink-0">
+                    <LogIn className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Browser Login</p>
+                    <p className="text-xs text-muted-foreground">Verify browser login before running browser steps</p>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
+                  onClick={() => { setActionTypeModalOpen(false); openNewAction('browser_script'); }}
+                >
+                  <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0">
+                    <CircleDot className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Browser Script</p>
+                    <p className="text-xs text-muted-foreground">Execute a recorded browser automation script</p>
+                  </div>
+                </button>
+              </>
+            ) : (
+              <div className="rounded-lg border border-dashed p-3 space-y-2.5 mt-0.5">
+                <div className="flex items-center gap-2">
+                  <Monitor className="h-4 w-4 text-sky-500 shrink-0" />
+                  <p className="text-sm font-medium">Browser Steps</p>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  <strong>Browser Login</strong> and <strong>Browser Script</strong> steps require browser mode to be enabled for this agent. Enable it below, then add browser steps.
+                </p>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs border-sky-300 text-sky-600 hover:bg-sky-50 hover:border-sky-400 dark:text-sky-400 dark:border-sky-700 dark:hover:bg-sky-950/30"
+                  onClick={async () => {
+                    if (!selectedOrgId) return;
+                    try {
+                      await updateAgent(selectedOrgId, agentId, { requires_browser: true });
+                      setAgentRequiresBrowser(true);
+                      toast.success('Browser enabled');
+                    } catch {
+                      toast.error('Failed to enable browser');
+                    }
+                  }}
+                >
+                  <Monitor className="mr-1.5 h-3.5 w-3.5" />Enable Browser
+                </Button>
+                <div className="flex gap-2 opacity-40 pointer-events-none pt-0.5">
+                  <div className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 flex-1">
+                    <LogIn className="h-3.5 w-3.5 text-sky-500" />
+                    <span className="text-xs">Browser Login</span>
+                  </div>
+                  <div className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 flex-1">
+                    <CircleDot className="h-3.5 w-3.5 text-violet-500" />
+                    <span className="text-xs">Browser Script</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
 

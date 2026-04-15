@@ -103,11 +103,11 @@ const STEP_TYPES: Array<{ value: StepType | 'all'; label: string }> = [
 ];
 
 const ACTION_TYPE_LABEL: Record<string, string> = {
-  agent:          'Agent',
-  approval:       'Approval',
-  login:          'Login',
+  agent:          'AI Step',
+  approval:       'Human Review',
+  login:          'Browser Login',
   browser_script: 'Browser Script',
-  sub_agent:      'Sub Agent',
+  sub_agent:      'Run Agent',
 };
 
 const ACTION_TYPE_CLS: Record<string, string> = {
