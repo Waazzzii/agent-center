@@ -11,6 +11,8 @@ export interface Agent {
   browser_session_id?: string | null;
   created_at: string;
   updated_at: string;
+  /** Agents that use this agent as a sub-agent target.  Empty = can have sub-agent actions. */
+  used_as_sub_agent_by?: { agent_id: string; name: string }[];
 }
 
 export interface AgentAction {
@@ -401,6 +403,44 @@ export async function getExecutionTree(orgId: string, executionId: string): Prom
 /** Get direct child executions (sub-agent runs) for a parent execution. */
 export async function getExecutionChildren(orgId: string, executionId: string): Promise<ExecutionChild[]> {
   const res = await agentClient.get<ExecutionChild[]>(`/api/admin/${orgId}/executions/${executionId}/children`);
+  return res.data;
+}
+
+// ─── Full Execution Tree (nested hierarchy) ─────────────────────
+
+export interface FullTreeNode {
+  type: 'execution' | 'action' | 'batch_item';
+  id: string;
+  label: string;
+  status: string;
+  started_at: string;
+  completed_at?: string | null;
+  duration_ms?: number | null;
+  // Execution-specific
+  agent_name?: string;
+  item_index?: number | null;
+  depth?: number;
+  error_message?: string | null;
+  // Action-specific
+  action_type?: string;
+  tokens_input?: number | null;
+  tokens_output?: number | null;
+  cost_usd?: number | string | null;
+  model?: string | null;
+  output?: string | null;
+  batch_item_count?: number;
+  batch_item_index?: number | null;
+  // Children
+  children?: FullTreeNode[];
+}
+
+export async function getFullExecutionTree(orgId: string, executionId: string): Promise<FullTreeNode> {
+  const res = await agentClient.get<FullTreeNode>(`/api/admin/${orgId}/executions/${executionId}/full-tree`);
+  return res.data;
+}
+
+export async function getActionBatchItems(orgId: string, executionId: string, actionLogId: string): Promise<{ items: FullTreeNode[] }> {
+  const res = await agentClient.get<{ items: FullTreeNode[] }>(`/api/admin/${orgId}/executions/${executionId}/actions/${actionLogId}/batch-items`);
   return res.data;
 }
 

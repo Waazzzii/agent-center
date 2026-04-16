@@ -54,6 +54,16 @@ export interface RecordedStep {
   _defaultValue?: string;
   /** Set to true after the step has been successfully executed during testing. */
   _tested?: boolean;
+  /** URL extraction config — only set when selector === '__url__'. */
+  url_extraction?: {
+    method: 'query_param' | 'path_segment' | 'url_match';
+    /** Query parameter name (method=query_param) */
+    param_name?: string;
+    /** Path segment index, 0-based (method=path_segment) */
+    path_index?: number;
+    /** Literal value to find in the URL (method=url_match) */
+    match_value?: string;
+  };
 }
 
 export interface BrowserSession {
@@ -238,6 +248,8 @@ export interface StepRun {
   steps: RecordedStep[];
   extracted: Record<string, string>;
   lastScreenshot: string | null;
+  /** Current page URL — used by "Extract from URL" to auto-detect query/path params. */
+  pageUrl?: string | null;
   status: 'waiting' | 'running' | 'done' | 'error' | 'provisioning';
   /** Live steps captured during active recording (polled in real-time). */
   recordedSteps?: RecordedStep[];
@@ -287,7 +299,7 @@ export async function executeStepRunStep(
   runId: string,
   params?: Record<string, string>,
   signal?: AbortSignal,
-): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep }> {
+): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep; pageUrl?: string | null }> {
   const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/execute`, params ? { params } : undefined, { signal });
   return res.data;
 }

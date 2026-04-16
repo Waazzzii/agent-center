@@ -1339,6 +1339,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       )}
                     </SelectContent>
                   </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Only agents without their own sub-agent actions are shown. Nesting is limited to one level.
+                  </p>
                 </div>
                 <EntityPreviewNotice
                   entityLabel="sub-agent"
@@ -1497,20 +1500,33 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             </button>
 
-            {/* Run Agent */}
-            <button
-              type="button"
-              className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
-              onClick={() => { setActionTypeModalOpen(false); openNewAction('sub_agent'); }}
-            >
-              <div className="p-2 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 shrink-0">
-                <GitBranch className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
-              </div>
-              <div>
-                <p className="font-medium text-sm">Run Agent</p>
-                <p className="text-xs text-muted-foreground">Run another agent once for each item in a list</p>
-              </div>
-            </button>
+            {/* Run Agent — disabled if this agent is used as a sub-agent elsewhere (nesting limited to one level) */}
+            {(() => {
+              const usedBy = agent?.used_as_sub_agent_by ?? [];
+              const disabled = usedBy.length > 0;
+              return (
+                <button
+                  type="button"
+                  className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted/50'}`}
+                  onClick={() => { if (!disabled) { setActionTypeModalOpen(false); openNewAction('sub_agent'); } }}
+                  disabled={disabled}
+                >
+                  <div className="p-2 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 shrink-0">
+                    <GitBranch className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Run Agent</p>
+                    {disabled ? (
+                      <p className="text-xs text-destructive">
+                        Used as a sub-agent by {usedBy.map((u) => u.name).join(', ')} — nesting is limited to one level
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">Run another agent once for each item in a list</p>
+                    )}
+                  </div>
+                </button>
+              );
+            })()}
 
             {/* Browser steps — gated on requires_browser */}
             {agentRequiresBrowser ? (

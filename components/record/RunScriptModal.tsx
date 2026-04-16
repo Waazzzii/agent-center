@@ -69,7 +69,9 @@ function stepLabel(step: RecordedStep): string {
     case 'fill':       return `Fill: ${step.selector ?? ''} = ${step.value ?? ''}`;
     case 'select':     return `Select: ${step.value ?? ''} in ${step.selector ?? ''}`;
     case 'press_key':  return `Press: ${step.key ?? ''}`;
-    case 'extract':    return `Extract → ${step.field_name ?? ''}`;
+    case 'extract':    return step.selector === '__url__'
+      ? `Extract URL ${step.url_extraction?.method === 'query_param' ? `?${step.url_extraction.param_name}` : step.url_extraction?.method === 'path_segment' ? `path[${step.url_extraction.path_index}]` : 'match'} → {{${step.field_name ?? '?'}}}${step._defaultValue ? ` = "${step._defaultValue}"` : ''}`
+      : `Extract → {{${step.field_name ?? '?'}}}${step._defaultValue ? ` = "${step._defaultValue}"` : ''}`;
     case 'switch_tab': return `Switch to tab ${step.tab_index ?? ''}`;
     case 'close_tab':  return 'Close tab';
     case 'wait_for':     return `Wait: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? 'element'}`;
@@ -119,6 +121,7 @@ export function RunScriptModal({
     extracted: Record<string, string>;
     done: boolean;
     status: 'waiting' | 'running' | 'error';
+    pageUrl?: string | null;
   } | null>(null);
   const [editedStep, setEditedStep]     = useState('');
   const [stepEditError, setStepEditError] = useState('');
@@ -136,6 +139,14 @@ export function RunScriptModal({
   // ── Wait-for capture ──────────────────────────────────────────
   const [isCapturingWaitFor, setIsCapturingWaitFor] = useState(false);
   const captureAbortRef = useRef<AbortController | null>(null);
+
+  // ── VNC iframe ref + recording state sync ──────────────────────
+  const vncIframeRef = useRef<HTMLIFrameElement | null>(null);
+
+  // ── URL extraction dialog ──────────────────────────────────────
+  const [urlExtractOpen, setUrlExtractOpen] = useState(false);
+  const [urlExtractValue, setUrlExtractValue] = useState('');
+  const [urlExtractFieldName, setUrlExtractFieldName] = useState('');
 
   // ── VM provisioning (async slot allocation) ───────────────────
   const [provisioningRunId, setProvisioningRunId] = useState<string | null>(null);
@@ -607,6 +618,7 @@ export function RunScriptModal({
           extracted:    res.extracted,
           done:         res.done,
           status:       'waiting',
+          pageUrl:      res.pageUrl ?? s?.pageUrl ?? null,
         };
       });
       setEditedStep(res.step ? JSON.stringify(res.step, null, 2) : '');
@@ -693,8 +705,10 @@ export function RunScriptModal({
     }
   };
 
-  /** Stop button handler — cancels the in-flight HTTP request AND tells
-   *  the backend to abort the step run so the browser halts immediately. */
+  /** Stop button handler — cancels the auto-run loop but keeps the step
+   *  run alive so the user can click individual steps, re-run, edit, etc.
+   *  Only the in-flight HTTP request is aborted (so we don't wait for the
+   *  current step to finish). The backend session stays intact. */
   const handleStopAutoRun = () => {
     cancelAutoRunRef.current = true;
     // Abort the in-flight HTTP request so the await returns immediately
@@ -702,10 +716,8 @@ export function RunScriptModal({
       autoRunAbortRef.current.abort();
       autoRunAbortRef.current = null;
     }
-    // Tell the backend to halt the step run on the browser worker
-    if (runId && orgId) {
-      abortStepRun(orgId, runId).catch(() => {});
-    }
+    // Don't call abortStepRun — that kills the backend session and makes
+    // all subsequent step clicks return "step run not found".
   };
 
   const handleJumpToStep = async (targetIndex: number) => {
@@ -862,6 +874,216 @@ export function RunScriptModal({
       captureAbortRef.current = null;
       setIsCapturingWaitFor(false);
     }
+  };
+
+  // ── Listen for Copy events from the VNC iframe ──────────────────
+  // The VNC Copy button always postMessages.  We only create an extract
+  // step when a script session is active (runId set, not done).  When
+  // not in a session the message is simply ignored — the clipboard copy
+  // already happened inside the iframe.
+  // Only create extract steps when actively recording — during plain
+  // testing the Copy button just copies to the local clipboard.
+  const scriptSessionRef = useRef(isRecording);
+  scriptSessionRef.current = isRecording;
+  const smartCopyRef = useRef<(text: string) => void>(() => {});
+
+  // Ref is updated below after handleSmartCopyWithText is declared.
+
+  // ── Smart Copy — core logic shared by toolbar button + VNC button ──
+  const handleSmartCopyWithText = async (clipText: string) => {
+    if (!runId || !orgId || !clipText) return;
+
+    // Fetch the LIVE page URL from the backend
+    let liveUrl = '';
+    try {
+      const freshState = await getStepRun(orgId, runId);
+      liveUrl = freshState?.pageUrl ?? '';
+      if (liveUrl) setStepRunState((s) => s ? { ...s, pageUrl: liveUrl } : s);
+    } catch { /* fall through */ }
+
+    if (!liveUrl) {
+      setUrlExtractValue(clipText);
+      setUrlExtractFieldName('');
+      setUrlExtractOpen(true);
+      return;
+    }
+
+    // Auto-detect where the value lives in the URL
+    let method: 'query_param' | 'path_segment' | 'url_match' | null = null;
+    let fieldName = '';
+    let paramName = '';
+    let pathIndex = 0;
+
+    try {
+      const parsed = new URL(liveUrl);
+      for (const [key, val] of parsed.searchParams.entries()) {
+        if (val === clipText) {
+          method = 'query_param';
+          paramName = key;
+          fieldName = key;
+          break;
+        }
+      }
+      if (!method) {
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        const idx = segments.indexOf(clipText);
+        if (idx >= 0) {
+          method = 'path_segment';
+          pathIndex = idx;
+          fieldName = idx > 0 ? `${segments[idx - 1].replace(/s$/, '')}_id` : `path_${idx}`;
+        }
+      }
+    } catch { /* invalid URL */ }
+
+    if (!method && liveUrl.includes(clipText)) {
+      method = 'url_match';
+      fieldName = 'extracted_value';
+    }
+
+    if (!method) {
+      setUrlExtractValue(clipText);
+      setUrlExtractFieldName('');
+      setUrlExtractOpen(true);
+      toast.error(`"${clipText}" not found in current URL — enter details manually`);
+      return;
+    }
+
+    const urlExtraction: RecordedStep['url_extraction'] =
+      method === 'query_param'  ? { method, param_name: paramName } :
+      method === 'path_segment' ? { method, path_index: pathIndex } :
+                                  { method, match_value: clipText };
+
+    const step: RecordedStep = {
+      action: 'extract',
+      selector: '__url__',
+      field_name: fieldName,
+      text: clipText,
+      _defaultValue: clipText,
+      url_extraction: urlExtraction,
+    };
+
+    const insertAt = stepRunState?.currentIndex ?? 0;
+    setStepRunState((s) => {
+      if (!s) return s;
+      const newSteps = [...s.steps];
+      newSteps.splice(insertAt, 0, step);
+      return { ...s, steps: newSteps, totalSteps: newSteps.length };
+    });
+    setNewStepIndices((prev) => new Set([...prev, insertAt]));
+    setHasChanges(true);
+    if (runId && orgId) {
+      const newSteps = [...(stepRunState?.steps ?? [])];
+      newSteps.splice(insertAt, 0, step);
+      syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+    }
+
+    const label = method === 'query_param' ? `?${paramName}` : method === 'path_segment' ? `path[${pathIndex}]` : 'match';
+    toast.success(`Extracted ${label} → {{${fieldName}}} = "${clipText}"`);
+  };
+
+  // Keep the ref current so the message listener always calls the latest version
+  smartCopyRef.current = handleSmartCopyWithText;
+
+  // ── postMessage listener — one-time setup, uses refs for fresh state ──
+  useEffect(() => {
+    const handler = (e: MessageEvent) => {
+      if (e.data?.type !== 'vnc-extract-copy' || !e.data?.text) return;
+      if (!scriptSessionRef.current) return;
+      smartCopyRef.current(e.data.text.trim());
+    };
+    window.addEventListener('message', handler);
+    return () => window.removeEventListener('message', handler);
+  }, []);
+
+  // ── Extract from URL (manual dialog — fallback) ────────────────
+  const handleExtractUrl = async () => {
+    setUrlExtractValue('');
+    setUrlExtractFieldName('');
+    // Fetch live URL before opening dialog
+    if (runId && orgId) {
+      try {
+        const freshState = await getStepRun(orgId, runId);
+        if (freshState?.pageUrl) setStepRunState((s) => s ? { ...s, pageUrl: freshState.pageUrl } : s);
+      } catch { /* use cached */ }
+    }
+    setUrlExtractOpen(true);
+  };
+
+  /** Analyze where a value appears in the URL and create the appropriate extract step. */
+  const handleUrlExtractConfirm = () => {
+    const val = urlExtractValue.trim();
+    const currentUrl = stepRunState?.pageUrl ?? '';
+    let autoFieldName = '';  // auto-detected from query param key
+
+    if (!val) { toast.error('Enter the value to extract'); return; }
+
+    let urlExtraction: RecordedStep['url_extraction'];
+
+    // 1. Check query parameters first (most specific)
+    try {
+      const parsed = new URL(currentUrl);
+      for (const [key, paramVal] of parsed.searchParams.entries()) {
+        if (paramVal === val) {
+          urlExtraction = { method: 'query_param', param_name: key };
+          autoFieldName = key;
+          break;
+        }
+      }
+    } catch { /* invalid URL — skip query param check */ }
+
+    // 2. Check path segments
+    if (!urlExtraction) {
+      try {
+        const parsed = new URL(currentUrl);
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        const idx = segments.indexOf(val);
+        if (idx >= 0) {
+          urlExtraction = { method: 'path_segment', path_index: idx };
+          autoFieldName = idx > 0 ? `${segments[idx - 1].replace(/s$/, '')}_id` : `path_${idx}`;
+        }
+      } catch { /* skip */ }
+    }
+
+    // 3. Fall back to exact string match
+    if (!urlExtraction) {
+      if (currentUrl.includes(val)) {
+        urlExtraction = { method: 'url_match', match_value: val };
+        autoFieldName = 'extracted_value';
+      } else {
+        toast.error(`"${val}" not found in the current URL`);
+        return;
+      }
+    }
+
+    // Use user-provided name, or auto-detected, or generic fallback
+    const fieldName = urlExtractFieldName.trim() || autoFieldName || 'extracted_value';
+
+    const step: RecordedStep = {
+      action: 'extract',
+      selector: '__url__',
+      field_name: fieldName,
+      text: val,
+      _defaultValue: val,
+      url_extraction: urlExtraction,
+    };
+
+    // Insert after current step index
+    const insertAt = (stepRunState?.currentIndex ?? 0);
+    setStepRunState((s) => {
+      if (!s) return s;
+      const newSteps = [...s.steps];
+      newSteps.splice(insertAt, 0, step);
+      return { ...s, steps: newSteps, totalSteps: newSteps.length };
+    });
+    setNewStepIndices((prev) => new Set([...prev, insertAt]));
+    setHasChanges(true);
+    if (runId && orgId) {
+      const newSteps = [...(stepRunState?.steps ?? [])];
+      newSteps.splice(insertAt, 0, step);
+      syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+    }
+    setUrlExtractOpen(false);
+    toast.success(`URL extract step added: ${urlExtraction.method === 'query_param' ? `?${urlExtraction.param_name}` : urlExtraction.method === 'path_segment' ? `path[${urlExtraction.path_index}]` : 'match'} → {{${fieldName}}}`);
   };
 
   // ── Unified save (stays in the session window) ───────────────
@@ -1384,10 +1606,12 @@ export function RunScriptModal({
             </div>
           ) : viewerUrl ? (
             <iframe
+              ref={vncIframeRef}
               src={`${agentApiUrl}${viewerUrl}`}
               className="w-full h-full border-0 block"
               scrolling="no"
               title="Browser"
+              allow="clipboard-read; clipboard-write"
             />
           ) : isProvisioning ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
@@ -1645,6 +1869,74 @@ export function RunScriptModal({
             </Button>
             <Button variant="destructive" size="sm" onClick={() => { setShowExitWarning(false); performExit(); }}>
               Exit
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Extract from URL dialog ───────────────────────────── */}
+      <Dialog open={urlExtractOpen} onOpenChange={setUrlExtractOpen}>
+        <DialogContent showCloseButton={false} className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Extract from URL</DialogTitle>
+            <DialogDescription>
+              Paste or type the value you see in the URL.  The system auto-detects whether it&apos;s a query parameter, path segment, or exact match.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            {stepRunState?.pageUrl && (
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-1">Current URL</p>
+                <p className="text-xs font-mono bg-muted rounded px-2 py-1.5 break-all select-all">
+                  {stepRunState.pageUrl}
+                </p>
+              </div>
+            )}
+            <div>
+              <label className="text-xs font-medium block mb-1">Value to extract <span className="text-destructive">*</span></label>
+              <input
+                className="w-full border rounded-md px-2.5 py-1.5 text-sm font-mono bg-background"
+                placeholder="e.g. 12345 or contract_id"
+                value={urlExtractValue}
+                onChange={(e) => setUrlExtractValue(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleUrlExtractConfirm()}
+                autoFocus
+              />
+              {urlExtractValue.trim() && stepRunState?.pageUrl && (() => {
+                const val = urlExtractValue.trim();
+                const url = stepRunState.pageUrl!;
+                // Quick preview of detection
+                try {
+                  const parsed = new URL(url);
+                  for (const [key, pv] of parsed.searchParams.entries()) {
+                    if (pv === val) return <p className="text-xs text-emerald-600 mt-1">✓ Detected as query parameter: <strong>?{key}</strong></p>;
+                  }
+                  const segs = parsed.pathname.split('/').filter(Boolean);
+                  const idx = segs.indexOf(val);
+                  if (idx >= 0) return <p className="text-xs text-emerald-600 mt-1">✓ Detected as path segment at position <strong>{idx}</strong></p>;
+                } catch { /* skip */ }
+                if (url.includes(val)) return <p className="text-xs text-blue-600 mt-1">✓ Found as exact string match in URL</p>;
+                return <p className="text-xs text-red-500 mt-1">✗ Value not found in the current URL</p>;
+              })()}
+            </div>
+            <div>
+              <label className="text-xs font-medium block mb-1">Variable name</label>
+              <input
+                className="w-full border rounded-md px-2.5 py-1.5 text-sm font-mono bg-background"
+                placeholder="e.g. contract_id"
+                value={urlExtractFieldName}
+                onChange={(e) => setUrlExtractFieldName(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleUrlExtractConfirm()}
+              />
+              <p className="text-xs text-muted-foreground mt-1">
+                Use as {'{{' + (urlExtractFieldName.trim() || 'variable_name') + '}}'} in later steps
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={() => setUrlExtractOpen(false)}>Cancel</Button>
+            <Button size="sm" onClick={handleUrlExtractConfirm} disabled={!urlExtractValue.trim()}>
+              Add Extract Step
             </Button>
           </DialogFooter>
         </DialogContent>

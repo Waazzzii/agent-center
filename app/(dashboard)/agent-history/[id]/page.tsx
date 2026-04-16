@@ -31,8 +31,9 @@ import {
   GitBranch,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getExecutionChildren, type ExecutionChild } from '@/lib/api/agents';
+import { getExecutionChildren, getFullExecutionTree, type ExecutionChild, type FullTreeNode } from '@/lib/api/agents';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { ExecutionTreePanel } from '@/components/execution/ExecutionTreePanel';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -481,6 +482,10 @@ export default function ExecutionStepsPage() {
   const [childRuns, setChildRuns] = useState<ChildExecution[]>([]);
   const [loadingChildren, setLoadingChildren] = useState(false);
 
+  // Full execution tree (left panel)
+  const [treeData, setTreeData] = useState<FullTreeNode | null>(null);
+  const [selectedTreeNode, setSelectedTreeNode] = useState<FullTreeNode | null>(null);
+
   // ── Fetchers ───────────────────────────────────────────────────────────────
 
   const fetchSummary = useCallback(async () => {
@@ -525,6 +530,14 @@ export default function ExecutionStepsPage() {
   useEffect(() => { fetchActions(); }, [fetchActions]);
   useEffect(() => { fetchSteps(); }, [fetchSteps]);
 
+  // Load the full execution tree for the left panel
+  useEffect(() => {
+    if (!selectedOrgId || !id) return;
+    getFullExecutionTree(selectedOrgId, id)
+      .then((tree) => setTreeData(tree))
+      .catch(() => {}); // non-fatal — page still works without tree
+  }, [selectedOrgId, id]);
+
   // ── Realtime: live-updating run detail ────────────────────────────
   // Any execution/action status change on this run refreshes the summary,
   // the actions list, and (if the current viewed action is the one that
@@ -565,6 +578,15 @@ export default function ExecutionStepsPage() {
     router.replace(url.pathname + url.search, { scroll: false });
   }, [router]);
 
+  /** Handle tree node selection — sync with the existing action selection system */
+  const handleTreeSelect = useCallback((node: FullTreeNode) => {
+    setSelectedTreeNode(node);
+    if (node.type === 'action' || node.type === 'batch_item') {
+      // Select this action in the existing tab system
+      setSelectedActionId(node.id);
+    }
+  }, []);
+
   const filteredSteps = steps.filter((s) => {
     if (!search) return true;
     const q = search.toLowerCase();
@@ -574,12 +596,12 @@ export default function ExecutionStepsPage() {
   // ── Render ─────────────────────────────────────────────────────────────────
 
   return (
-    <div className="flex flex-col gap-5 p-6 max-w-5xl mx-auto">
+    <div className="flex flex-col h-[calc(100vh-4rem)]">
 
-      {/* Back + Parent breadcrumb */}
-      <div className="flex items-center gap-2 flex-wrap">
+      {/* Back + header bar */}
+      <div className="flex items-center gap-2 flex-wrap px-6 py-3 border-b shrink-0">
         <Button variant="ghost" size="sm" asChild className="gap-1.5 -ml-2 w-fit text-muted-foreground">
-          <Link href="/agent-history"><ArrowLeft className="h-4 w-4" />Back to history</Link>
+          <Link href="/agent-history"><ArrowLeft className="h-4 w-4" />Back</Link>
         </Button>
         {summary?.parent_execution_id && (
           <Button variant="ghost" size="sm" asChild className="gap-1.5 w-fit text-indigo-600 dark:text-indigo-400">
@@ -589,7 +611,36 @@ export default function ExecutionStepsPage() {
             </Link>
           </Button>
         )}
+        {summary && (
+          <>
+            <span className="text-muted-foreground">·</span>
+            <span className="font-medium text-sm">{summary.agent_name}</span>
+            <StatusBadge status={summary.status} />
+            <span className="text-xs font-mono text-muted-foreground/60 bg-muted px-1.5 py-0.5 rounded">
+              {id.slice(-6).toUpperCase()}
+            </span>
+          </>
+        )}
       </div>
+
+      {/* Split pane: tree left + details right */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+
+        {/* Left: Execution tree */}
+        {treeData && (
+          <div className="w-72 shrink-0 border-r overflow-auto bg-muted/20">
+            <ExecutionTreePanel
+              tree={treeData}
+              selectedId={selectedTreeNode?.id ?? selectedActionId}
+              onSelect={handleTreeSelect}
+              orgId={selectedOrgId!}
+              executionId={id}
+            />
+          </div>
+        )}
+
+        {/* Right: existing detail content */}
+        <div className="flex-1 overflow-auto p-6 max-w-5xl space-y-5">
 
       {/* Execution header */}
       {loadingSummary ? (
@@ -797,6 +848,9 @@ export default function ExecutionStepsPage() {
           )}
         </>
       )}
+
+        </div>{/* end right pane */}
+      </div>{/* end split pane */}
     </div>
   );
 }
