@@ -32,6 +32,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getExecutionChildren, type ExecutionChild } from '@/lib/api/agents';
+import { useEventStream } from '@/lib/hooks/use-event-stream';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -75,9 +76,14 @@ interface ActionRow {
   action_type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent';
   status: string;
   started_at: string;
+  completed_at?: string | null;
   output: string | null;
   error_message: string | null;
   approval_instructions: string | null;
+  tokens_input?: number | null;
+  tokens_output?: number | null;
+  cost_usd?: number | string | null;
+  model?: string | null;
 }
 
 interface ChildExecution {
@@ -360,6 +366,44 @@ function ActionPanel({
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Started</p>
               <span className="text-sm">{formatDate(selectedAction.started_at)}</span>
             </div>
+            {selectedAction.completed_at && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Duration</p>
+                <span className="text-sm tabular-nums">
+                  {(() => {
+                    const ms = new Date(selectedAction.completed_at).getTime() - new Date(selectedAction.started_at).getTime();
+                    if (ms < 1000) return `${ms}ms`;
+                    if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`;
+                    return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
+                  })()}
+                </span>
+              </div>
+            )}
+            {(selectedAction.tokens_input != null && selectedAction.tokens_input > 0) && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Tokens</p>
+                <span className="text-sm tabular-nums">
+                  {(selectedAction.tokens_input ?? 0).toLocaleString()} in / {(selectedAction.tokens_output ?? 0).toLocaleString()} out
+                </span>
+              </div>
+            )}
+            {selectedAction.cost_usd != null && parseFloat(String(selectedAction.cost_usd)) > 0 && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Cost</p>
+                <span className="text-sm tabular-nums text-emerald-700 dark:text-emerald-400">
+                  {(() => {
+                    const c = parseFloat(String(selectedAction.cost_usd));
+                    return c < 0.01 ? '< $0.01' : `$${c.toFixed(4)}`;
+                  })()}
+                </span>
+              </div>
+            )}
+            {selectedAction.model && (
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground mb-1">Model</p>
+                <span className="text-sm font-mono">{selectedAction.model}</span>
+              </div>
+            )}
           </div>
 
           {selectedAction.approval_instructions && (
@@ -480,6 +524,24 @@ export default function ExecutionStepsPage() {
   useEffect(() => { fetchSummary(); }, [fetchSummary]);
   useEffect(() => { fetchActions(); }, [fetchActions]);
   useEffect(() => { fetchSteps(); }, [fetchSteps]);
+
+  // ── Realtime: live-updating run detail ────────────────────────────
+  // Any execution/action status change on this run refreshes the summary,
+  // the actions list, and (if the current viewed action is the one that
+  // changed) its steps.  Debounced so burst events coalesce.
+  const detailRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEventStream({
+    topics: id ? [`run:${id}`] : [],
+    enabled: !!id && !!selectedOrgId,
+    onEvent: () => {
+      if (detailRefreshTimer.current) clearTimeout(detailRefreshTimer.current);
+      detailRefreshTimer.current = setTimeout(() => {
+        fetchSummary();
+        fetchActions();
+        fetchSteps();
+      }, 200);
+    },
+  });
   useEffect(() => { setPage(1); setSearch(''); }, [selectedActionId, selectedType]);
 
   // Fetch child runs when a sub_agent action is selected
@@ -541,7 +603,7 @@ export default function ExecutionStepsPage() {
               Run #{id.slice(-4).toUpperCase()}
             </span>
           </div>
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground flex-wrap">
             <Clock className="h-3.5 w-3.5 shrink-0" />
             <span>Started {formatDate(summary.started_at)}</span>
             {summary.completed_at && <><span className="opacity-40">&bull;</span><span>Completed {formatDate(summary.completed_at)}</span></>}
@@ -553,6 +615,32 @@ export default function ExecutionStepsPage() {
               </Button>
             )}
           </div>
+
+          {/* Run-level cost + token rollup, aggregated from action_logs */}
+          {(() => {
+            const totals = actions.reduce((acc, a) => ({
+              ti: acc.ti + (a.tokens_input ?? 0),
+              to: acc.to + (a.tokens_output ?? 0),
+              cost: acc.cost + parseFloat(String(a.cost_usd ?? 0) || '0'),
+            }), { ti: 0, to: 0, cost: 0 });
+            const anyTokens = totals.ti > 0 || totals.to > 0;
+            if (!anyTokens) return null;
+            return (
+              <div className="flex items-center gap-3 text-xs text-muted-foreground mt-0.5 flex-wrap">
+                <span className="tabular-nums">
+                  {totals.ti.toLocaleString()} in / {totals.to.toLocaleString()} out tokens
+                </span>
+                {totals.cost > 0 && (
+                  <>
+                    <span className="opacity-40">·</span>
+                    <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                      {totals.cost < 0.01 ? '< $0.01' : `$${totals.cost.toFixed(4)}`}
+                    </span>
+                  </>
+                )}
+              </div>
+            );
+          })()}
           {summary.error_message && (
             <p className="text-sm text-red-600 dark:text-red-400 font-mono bg-red-50 dark:bg-red-950/30 rounded px-3 py-2 mt-1">
               {summary.error_message}

@@ -11,6 +11,10 @@ export interface AiStepOutput {
  * Render the JSON output instruction block that the executor auto-appends
  * to every AI step prompt at runtime when outputs are declared.
  *
+ * The response is ALWAYS a JSON array of objects — single-result responses
+ * become a one-element array.  This makes the shape consistent and lets
+ * downstream sub-agents iterate without guessing.
+ *
  * IMPORTANT: keep this in sync with the executor's inline version in
  * `agent-backend/services/agents/agent-executor.service.js` → runPromptAction.
  * Both must produce identical text so the UI preview matches what Claude
@@ -20,16 +24,18 @@ export function buildOutputInstructionBlock(outputs: AiStepOutput[]): string {
   const usable = outputs.filter((o) => o.key.trim());
   if (usable.length === 0) return '';
   const schemaLines = usable
-    .map((o) => `  "${o.key.trim()}": ${JSON.stringify(o.description ?? '')}`)
+    .map((o) => `    "${o.key.trim()}": ${JSON.stringify(o.description ?? '')}`)
     .join(',\n');
   return [
     '',
     '---',
-    'Respond with ONLY a JSON object (no markdown fences, no surrounding prose) matching this schema:',
-    '{',
+    'Respond with ONLY a JSON array (no markdown fences, no surrounding prose) where each element matches this schema:',
+    '[',
+    '  {',
     schemaLines,
-    '}',
-    'Each key\'s value must be the actual data described — do NOT repeat the description.',
+    '  }',
+    ']',
+    'Return ALL results found as separate elements in the array.  If only one result, return a one-element array.  If none, return an empty array [].  Each value must be the actual data described — do NOT repeat the description.',
   ].join('\n');
 }
 

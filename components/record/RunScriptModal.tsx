@@ -624,15 +624,22 @@ export function RunScriptModal({
     }
   };
 
+  // AbortController for the in-flight step execution request.  When the
+  // user clicks Stop, we abort the HTTP request AND tell the backend to
+  // halt the step run — the browser stops mid-action immediately.
+  const autoRunAbortRef = useRef<AbortController | null>(null);
+
   const handleRunAll = async () => {
     if (!runId || !orgId || !stepRunState || stepRunState.done) return;
     cancelAutoRunRef.current = false;
+    const controller = new AbortController();
+    autoRunAbortRef.current = controller;
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
     let finished = false;
     while (!finished && !cancelAutoRunRef.current) {
       try {
-        const res = await executeStepRunStep(orgId, runId, params);
+        const res = await executeStepRunStep(orgId, runId, params, controller.signal);
         finished = res.done;
         setStepRunState((s) => {
           const steps = [...(s?.steps ?? [])];
@@ -669,6 +676,8 @@ export function RunScriptModal({
           toast.success('All steps completed!');
         }
       } catch (err: any) {
+        // AbortError means the user clicked Stop — not a real error.
+        if (err?.name === 'AbortError' || err?.name === 'CanceledError' || cancelAutoRunRef.current) break;
         const screenshot = err?.response?.data?.screenshot ?? null;
         const msg = err?.response?.data?.error || err?.message || 'Step failed';
         setStepRunState((s) => s ? { ...s, status: 'error', screenshot: screenshot ?? s.screenshot } : s);
@@ -676,10 +685,26 @@ export function RunScriptModal({
         finished = true;
       }
     }
+    autoRunAbortRef.current = null;
     if (cancelAutoRunRef.current) {
       cancelAutoRunRef.current = false;
       setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
       toast.info('Auto-run stopped');
+    }
+  };
+
+  /** Stop button handler — cancels the in-flight HTTP request AND tells
+   *  the backend to abort the step run so the browser halts immediately. */
+  const handleStopAutoRun = () => {
+    cancelAutoRunRef.current = true;
+    // Abort the in-flight HTTP request so the await returns immediately
+    if (autoRunAbortRef.current) {
+      autoRunAbortRef.current.abort();
+      autoRunAbortRef.current = null;
+    }
+    // Tell the backend to halt the step run on the browser worker
+    if (runId && orgId) {
+      abortStepRun(orgId, runId).catch(() => {});
     }
   };
 
@@ -1260,12 +1285,13 @@ export function RunScriptModal({
                   disabled={isExecuting || isRecording}
                 >Auto</button>
               </div>
-              {/* Stop button — visible during auto-run */}
+              {/* Stop button — visible during auto-run.  Cancels the in-flight
+                  HTTP request AND tells the backend to halt the step run. */}
               {isExecuting && autoMode ? (
                 <Button
                   variant="destructive"
                   size="sm"
-                  onClick={() => { cancelAutoRunRef.current = true; }}
+                  onClick={handleStopAutoRun}
                 >
                   <X className="mr-1.5 h-3 w-3" />
                   Stop

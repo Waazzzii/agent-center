@@ -50,6 +50,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
+import { useEventStream } from '@/lib/hooks/use-event-stream';
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -171,8 +172,12 @@ function TriggerBadge({ type }: { type: string }) {
 
 // ─── Runs Table ───────────────────────────────────────────────
 
-const RUN_COLS = 'grid-cols-[1fr_140px_120px_90px_80px_160px_130px]';
-
+/**
+ * Card-based run feed.  Each row shows the agent name, a visual progress
+ * bar (one dot per action), duration, token/cost rollup, and relationship
+ * cues (sub-agent indicator, child count for parents).  Clicking the row
+ * goes to the detail view; inline icons handle secondary actions.
+ */
 function RunsTable({
   runs,
   onOpenBrowser,
@@ -188,127 +193,186 @@ function RunsTable({
   return (
     <div className="divide-y">
       {runs.map((run) => {
-        const completedSteps = (run.action_logs ?? []).filter((a) => a.status === 'completed' || a.status === 'approved').length;
+        const actions = run.action_logs ?? [];
         const displayStatus = run.display_status ?? run.status;
-        const durationMs = run.started_at && run.completed_at
-          ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
-          : null;
+        const isRunning     = run.status === 'executing' || run.status === 'provisioning';
+        const isAwaiting    = run.status === 'awaiting_approval';
+        const durationMs =
+          run.completed_at
+            ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
+            : isRunning || isAwaiting
+              ? Date.now() - new Date(run.started_at).getTime()
+              : null;
+        const costUsd = typeof run.cost_usd === 'string' ? parseFloat(run.cost_usd) : (run.cost_usd ?? 0);
+        const tokensTotal = (run.tokens_input ?? 0) + (run.tokens_output ?? 0);
+        const childCount = run.child_count ?? 0;
+
         return (
-          <div key={run.id} className="cursor-pointer hover:bg-muted/40 transition-colors" onClick={() => router.push(`/agent-history/${run.id}`)}>
-            <div className="w-full">
-              {/* Mobile layout */}
-              <div className="md:hidden px-4 py-3 space-y-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-1.5 min-w-0">
-                    {run.depth > 0 && (
-                      <GitBranch className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
-                    )}
-                    <span className="font-medium text-sm truncate">{run.agent_name}</span>
-                    {run.item_index != null && (
-                      <span className="text-[10px] font-mono text-muted-foreground shrink-0">#{run.item_index}</span>
-                    )}
-                  </div>
-                  <StatusBadge status={displayStatus} />
-                </div>
+          <div
+            key={run.id}
+            className="cursor-pointer hover:bg-muted/40 transition-colors px-4 py-3"
+            onClick={() => router.push(`/agent-history/${run.id}`)}
+          >
+            <div className="flex items-start gap-3">
+              {/* Leading status glyph */}
+              <div className="pt-1 shrink-0">
+                <StatusGlyph status={displayStatus} />
+              </div>
+
+              <div className="flex-1 min-w-0">
+                {/* Row 1: name + badges */}
                 <div className="flex items-center gap-2 flex-wrap">
+                  {run.depth > 0 && <GitBranch className="h-3.5 w-3.5 text-indigo-500 shrink-0" />}
+                  <span className={cn(
+                    'font-medium text-sm',
+                    run.depth > 0 && 'text-indigo-700 dark:text-indigo-400'
+                  )}>
+                    {run.agent_name}
+                  </span>
+                  {run.item_index != null && (
+                    <span className="text-[10px] font-mono text-muted-foreground">#{run.item_index}</span>
+                  )}
                   <TriggerBadge type={run.trigger_type} />
-                  <span className="text-xs text-muted-foreground">{completedSteps}/{(run.action_logs ?? []).length} steps</span>
-                  <span className="text-xs text-muted-foreground">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
+                  {childCount > 0 && (
+                    <Badge variant="outline" className="gap-1 text-[10px] h-5 border-indigo-300 text-indigo-600 dark:text-indigo-400">
+                      <GitBranch className="h-2.5 w-2.5" />
+                      {childCount} sub-agent{childCount === 1 ? '' : 's'}
+                    </Badge>
+                  )}
+                  <StatusBadge status={displayStatus} />
+                  {run.has_active_browser && (
+                    <Badge variant="outline" className="gap-1 text-[10px] h-5 border-blue-300 text-blue-600 dark:text-blue-400">
+                      <Monitor className="h-2.5 w-2.5" />
+                      browser
+                    </Badge>
+                  )}
                 </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-xs text-muted-foreground">{formatDate(run.started_at)}</span>
-                  <div className="flex items-center gap-1">
-                    {displayStatus === 'awaiting_approval' && (
-                      <Link
-                        href={`/approvals?execution_id=${run.id}`}
-                        className="text-violet-500 hover:text-violet-600"
-                        title="Go to approval request"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        <ArrowUpRight className="h-4 w-4" />
-                      </Link>
-                    )}
+
+                {/* Row 2: progress dots */}
+                {actions.length > 0 && (
+                  <div className="flex items-center gap-0.5 mt-2">
+                    {actions.map((a) => (
+                      <span
+                        key={a.id}
+                        className={cn(
+                          'h-1.5 rounded-full transition-all',
+                          a.status === 'completed' || a.status === 'approved' ? 'bg-emerald-500 w-5' :
+                          a.status === 'failed'    ? 'bg-red-500 w-5' :
+                          a.status === 'aborted'   ? 'bg-red-400 w-5' :
+                          a.status === 'awaiting_approval' ? 'bg-amber-500 w-5 animate-pulse' :
+                          a.status === 'executing' ? 'bg-blue-500 w-5 animate-pulse' :
+                          a.status === 'denied'    ? 'bg-red-600 w-5' :
+                          'bg-muted w-3'
+                        )}
+                        title={`${a.action_name ?? a.action_type} · ${a.status}`}
+                      />
+                    ))}
+                    <span className="text-[10px] text-muted-foreground ml-2 tabular-nums">
+                      {actions.filter((a) => a.status === 'completed' || a.status === 'approved').length}/{actions.length}
+                    </span>
                   </div>
+                )}
+
+                {/* Row 3: meta */}
+                <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground flex-wrap">
+                  <span>{formatDate(run.started_at)}</span>
+                  {durationMs != null && (
+                    <>
+                      <span>·</span>
+                      <span className="tabular-nums">{formatDuration(durationMs)}{isRunning || isAwaiting ? ' so far' : ''}</span>
+                    </>
+                  )}
+                  {tokensTotal > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="tabular-nums">
+                        {tokensTotal >= 1000 ? `${(tokensTotal / 1000).toFixed(1)}K` : tokensTotal} tokens
+                      </span>
+                    </>
+                  )}
+                  {costUsd > 0 && (
+                    <>
+                      <span>·</span>
+                      <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
+                        {costUsd < 0.01 ? '< $0.01' : `$${costUsd.toFixed(2)}`}
+                      </span>
+                    </>
+                  )}
+                  <span className="font-mono opacity-60">·  {run.id.slice(-6).toUpperCase()}</span>
                 </div>
               </div>
 
-              {/* Desktop layout */}
-              <div className={`hidden md:grid ${RUN_COLS} gap-3 items-center px-4 py-3`}>
-                <div className="min-w-0 truncate flex items-center gap-1.5" style={run.depth > 0 ? { paddingLeft: `${Math.min(run.depth, 3) * 16}px` } : undefined}>
-                  {run.depth > 0 && (
-                    <GitBranch className="h-3.5 w-3.5 text-indigo-500 shrink-0" />
-                  )}
-                  <span className="text-xs font-mono text-muted-foreground/50 mr-1">[{run.id.slice(-4).toUpperCase()}]</span>
-                  <span className={cn('font-medium text-sm truncate', run.depth > 0 && 'text-indigo-700 dark:text-indigo-400')}>{run.agent_name}</span>
-                  {run.item_index != null && (
-                    <span className="text-[10px] font-mono text-muted-foreground shrink-0">#{run.item_index}</span>
-                  )}
-                </div>
-                <StatusBadge status={displayStatus} />
-                <TriggerBadge type={run.trigger_type} />
-                <span className="text-sm text-muted-foreground">{completedSteps}/{(run.action_logs ?? []).length}</span>
-                <span className="text-sm text-muted-foreground tabular-nums">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
-                <span className="text-xs text-muted-foreground">{formatDate(run.started_at)}</span>
-                <div className="flex items-center justify-end gap-0.5">
+              {/* Actions */}
+              <div className="flex items-center gap-0.5 shrink-0">
+                {isAwaiting && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40"
+                    title="Go to Interactions"
+                    asChild
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Link href={`/interactions`}>
+                      <ArrowUpRight className="h-3.5 w-3.5" />
+                    </Link>
+                  </Button>
+                )}
+                {run.has_active_browser && (
                   <Button
                     variant="ghost"
                     size="icon"
                     className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                    title="View execution steps"
-                    asChild
-                    onClick={(e) => e.stopPropagation()}
+                    title="Open live browser view"
+                    onClick={(e) => { e.stopPropagation(); onOpenBrowser(run); }}
                   >
-                    <Link href={`/agent-history/${run.id}`}>
-                      <Eye className="h-3.5 w-3.5" />
-                    </Link>
+                    <Monitor className="h-3.5 w-3.5" />
                   </Button>
-                  {displayStatus === 'awaiting_approval' && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-violet-500 hover:text-violet-600 hover:bg-violet-50 dark:hover:bg-violet-950/40"
-                      title="Go to approval request"
-                      asChild
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      <Link href={`/approvals?execution_id=${run.id}`}>
-                        <ArrowUpRight className="h-3.5 w-3.5" />
-                      </Link>
-                    </Button>
-                  )}
-                  {run.agent_requires_browser && (run.status === 'executing' || run.status === 'awaiting_approval') && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                      title="Open live browser view"
-                      onClick={(e) => { e.stopPropagation(); onOpenBrowser(run); }}
-                    >
-                      <Monitor className="h-3.5 w-3.5" />
-                    </Button>
-                  )}
-                  {onAbort && (ABORTABLE_STATUSES as readonly string[]).includes(run.status) && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="h-7 w-7 text-destructive/70 hover:text-destructive hover:bg-destructive/10"
-                      title={run.status === 'queued' ? 'Remove from queue' : 'Abort run'}
-                      disabled={abortingRunId === run.id}
-                      onClick={(e) => { e.stopPropagation(); onAbort(run); }}
-                    >
-                      {abortingRunId === run.id
-                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        : <XCircle className="h-3.5 w-3.5" />
-                      }
-                    </Button>
-                  )}
-                </div>
+                )}
+                {onAbort && (ABORTABLE_STATUSES as readonly string[]).includes(run.status) && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 text-destructive/70 hover:text-destructive hover:bg-destructive/10"
+                    title={run.status === 'queued' ? 'Remove from queue' : 'Abort run'}
+                    disabled={abortingRunId === run.id}
+                    onClick={(e) => { e.stopPropagation(); onAbort(run); }}
+                  >
+                    {abortingRunId === run.id
+                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      : <XCircle className="h-3.5 w-3.5" />
+                    }
+                  </Button>
+                )}
               </div>
             </div>
           </div>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * Leading glyph — makes status scannable even before reading the badge.
+ */
+function StatusGlyph({ status }: { status: string }) {
+  const map: Record<string, { color: string; pulse: boolean; char: string }> = {
+    executing:         { color: 'bg-blue-500',    pulse: true,  char: '●' },
+    provisioning:      { color: 'bg-slate-400',   pulse: true,  char: '●' },
+    queued:            { color: 'bg-slate-300',   pulse: false, char: '●' },
+    awaiting_approval: { color: 'bg-violet-500',  pulse: true,  char: '●' },
+    awaiting_login:    { color: 'bg-amber-500',   pulse: true,  char: '●' },
+    completed:         { color: 'bg-emerald-500', pulse: false, char: '●' },
+    failed:            { color: 'bg-red-500',     pulse: false, char: '●' },
+    aborted:           { color: 'bg-red-400',     pulse: false, char: '●' },
+  };
+  const s = map[status] ?? map.executing;
+  return (
+    <span className="relative flex h-2 w-2 mt-1">
+      {s.pulse && <span className={cn('animate-ping absolute h-full w-full rounded-full opacity-75', s.color)} />}
+      <span className={cn('relative rounded-full h-2 w-2', s.color)} />
+    </span>
   );
 }
 
@@ -366,9 +430,11 @@ export default function AgentExecutionsPage() {
       agentId?: string;
       from?: string;
       to?: string;
+      silent?: boolean;
     }
   ) => {
     if (!selectedOrgId) return;
+    const silent   = opts?.silent ?? false;
     const statuses = opts?.statuses  !== undefined ? opts.statuses  : statusFilters;
     const trigger  = opts?.trigger   !== undefined ? opts.trigger   : triggerFilter;
     const agentId  = opts?.agentId   !== undefined ? opts.agentId   : agentFilter;
@@ -376,7 +442,7 @@ export default function AgentExecutionsPage() {
     const to       = opts?.to        !== undefined ? opts.to        : toFilter;
 
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const params: Record<string, any> = { page: pg, limit: PAGE_SIZE };
       if (statuses.length > 0) params.status       = statuses;
       if (trigger)              params.trigger_type = trigger;
@@ -388,9 +454,9 @@ export default function AgentExecutionsPage() {
       setTotal(data.total);
       setTotalPages(data.pages);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to load history');
+      if (!silent) toast.error(err.message || 'Failed to load history');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [selectedOrgId, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter]);
 
@@ -479,6 +545,24 @@ export default function AgentExecutionsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId]);
 
+  // ─── Realtime: refresh on any execution status change in this org ──
+  // Debounce bursts of events (sibling auto-resume fires many at once)
+  // so we issue a single refresh instead of one per event.
+  const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scheduleRefresh = useCallback(() => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+    refreshTimerRef.current = setTimeout(() => {
+      loadHistory(page, { silent: true });
+      loadSummary();
+    }, 200);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page]);
+  useEventStream({
+    topics: selectedOrgId ? [`org:${selectedOrgId}:executions`] : [],
+    enabled: !!selectedOrgId,
+    onEvent: scheduleRefresh,
+  });
+
   // Seed agent filter from URL param once agents list is loaded
   useEffect(() => {
     if (!initialAgentId.current || agents.length === 0) return;
@@ -521,17 +605,7 @@ export default function AgentExecutionsPage() {
 
   if (!permitted) return <NoPermissionContent />;
 
-  const tableHeader = (
-    <div className={`hidden md:grid ${RUN_COLS} gap-3 px-4 py-2 border-b bg-muted/40 text-xs font-semibold uppercase tracking-wider text-muted-foreground`}>
-      <span>Agent</span>
-      <span>Status</span>
-      <span>Trigger</span>
-      <span>Steps</span>
-      <span>Duration</span>
-      <span>Started</span>
-      <span />
-    </div>
-  );
+  // Card-based feed — no grid header needed (info is inline per card).
 
   return (
     <div className="space-y-6">
@@ -879,7 +953,6 @@ export default function AgentExecutionsPage() {
                 </div>
               ) : (
                 <>
-                  {tableHeader}
                   <RunsTable
                     runs={runs}
                     onOpenBrowser={(run) => setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name })}

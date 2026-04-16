@@ -68,6 +68,11 @@ export interface AgentApprovalItem {
   agent_id: string;
   agent_name: string;
   approval_instructions: string | null;
+  /** Login profile id — only set for action_type='login'.  Used to group
+   *  concurrent login HITLs (same login_id ⇒ same underlying login). */
+  login_id: string | null;
+  /** Login profile display name — only set when login_id is set. */
+  login_name: string | null;
 }
 
 export interface AgentDetail extends Agent {
@@ -225,6 +230,15 @@ export interface ExecutionRun {
   organization_id: string;
   agent_name: string;
   agent_requires_browser: boolean;
+  /** True only when a browser slot is currently allocated in the worker pool
+   *  for this run.  Per-action browser model: runs flip between having a
+   *  browser and not, so this is checked live at list time. */
+  has_active_browser: boolean;
+  /** Aggregates rolled up from action_logs, so the feed doesn't need extra queries. */
+  tokens_input?: number;
+  tokens_output?: number;
+  cost_usd?: number | string;  // NUMERIC serializes as string from pg
+  child_count?: number;
   trigger_type: 'webhook' | 'cron' | 'manual' | 'sub_agent';
   trigger_id: string | null;
   status: 'executing' | 'completed' | 'failed' | 'aborted' | 'awaiting_approval' | 'provisioning' | 'queued';
@@ -247,8 +261,13 @@ export interface ExecutionAction {
   action_type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent';
   status: string;
   started_at: string;
+  completed_at?: string | null;
   output: string | null;
   error_message: string | null;
+  tokens_input?: number | null;
+  tokens_output?: number | null;
+  cost_usd?: number | string | null;
+  model?: string | null;
 }
 
 /** Node in the execution tree (parent + all descendants) */
@@ -438,18 +457,64 @@ export interface TriggerTypeCount {
   count: number;
 }
 
+export interface CostStats {
+  tokens_input: number | string;
+  tokens_output: number | string;
+  tokens_cache_read: number | string;
+  tokens_cache_write: number | string;
+  cost_usd: number | string;
+  ai_steps: number | string;
+}
+
+export interface ActionTypeStats {
+  action_type: string;
+  total: number | string;
+  completed: number | string;
+  failed: number | string;
+  paused: number | string;
+  avg_duration_s: number | null;
+  cost_usd: number | string;
+}
+
+export interface FailureHotspot {
+  agent_id: string;
+  agent_name: string;
+  action_name: string;
+  action_type: string;
+  failures: number | string;
+  last_failed_at: string;
+  last_error: string | null;
+}
+
+export interface LiveSnapshot {
+  active: number | string;
+  queued: number | string;
+  awaiting: number | string;
+}
+
 export interface ExecutionAnalytics {
+  range: { from: string; to: string };
   summary: AnalyticsSummary;
   daily: DailyCount[];
   perAgent: AgentStats[];
   batchItems: BatchItemStats;
   recentFailures: RecentFailure[];
   triggerTypes: TriggerTypeCount[];
+  cost: CostStats;
+  actionTypes: ActionTypeStats[];
+  hotspots: FailureHotspot[];
+  live: LiveSnapshot;
+  previous: {
+    summary: AnalyticsSummary;
+    cost: CostStats;
+    from: string;
+    to: string;
+  } | null;
 }
 
 export async function getExecutionAnalytics(
   orgId: string,
-  params?: { from?: string; to?: string }
+  params?: { from?: string; to?: string; compare?: boolean }
 ): Promise<ExecutionAnalytics> {
   const res = await agentClient.get<ExecutionAnalytics>(
     `/api/admin/${orgId}/execution-analytics`,

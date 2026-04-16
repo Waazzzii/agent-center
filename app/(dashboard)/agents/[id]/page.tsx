@@ -16,7 +16,6 @@ import { getConnectors } from '@/lib/api/connectors';
 import { getSkills, type Skill } from '@/lib/api/skills';
 import { listScripts, type BrowserScript } from '@/lib/api/scripts';
 import { listAiSteps, type AiStep } from '@/lib/api/ai-steps';
-import { AiStepDialog } from '@/components/actions/AiStepDialog';
 import { listLogins, type Login } from '@/lib/api/logins';
 import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
 import { AiStepPreview } from '@/components/actions/AiStepPreview';
@@ -324,7 +323,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     batchSize: 1,
   });
   const [aiSteps, setAiSteps] = useState<AiStep[]>([]);
-  const [viewingAiStep, setViewingAiStep] = useState<AiStep | null>(null);
   const [logins, setLogins] = useState<Login[]>([]);
   const [validSubAgents, setValidSubAgents] = useState<Agent[]>([]);
   const [savingAction, setSavingAction] = useState(false);
@@ -471,10 +469,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   };
 
   const openEditAction = (action: AgentAction) => {
-    if (action.action_type === 'agent') {
-      const step = aiSteps.find((s) => s.id === action.ai_step_id);
-      if (step) { setViewingAiStep(step); return; }
-    }
     setEditingAction(action);
     setActionForm({
       name: action.name,
@@ -1221,11 +1215,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
             {actionForm.action_type === 'agent' && (
               <>
-                <EntityPreviewNotice
-                  entityLabel="AI step"
-                  editHref="/actions/ai-steps"
-                  editLabel="Actions → AI Steps"
-                />
                 <div className="space-y-1">
                   <Label>AI Step <span className="text-destructive">*</span></Label>
                   <Select value={actionForm.aiStepId} onValueChange={(v) => setActionForm(f => ({ ...f, aiStepId: v }))}>
@@ -1239,6 +1228,11 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </SelectContent>
                   </Select>
                 </div>
+                <EntityPreviewNotice
+                  entityLabel="AI step"
+                  editHref="/actions/ai-steps"
+                  editLabel="Actions → AI Steps"
+                />
                 {(() => {
                   const selected = aiSteps.find((s) => s.id === actionForm.aiStepId);
                   return selected ? (
@@ -1329,17 +1323,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
             {actionForm.action_type === 'sub_agent' && (
               <>
-                <EntityPreviewNotice
-                  entityLabel="sub-agent"
-                  editHref="/agents"
-                  editLabel="Agents"
-                  bodyOverride="This action runs another agent's workflow as a sub-agent. Batch size and max concurrent below are configurable per-action; the target agent's own configuration is managed separately."
-                />
-                <InfoBlock>
-                  <p>The previous step must output a JSON array. Items are grouped into batches and each batch is sent to a sub-agent invocation. All item data and parent context are available as {'{{variables}}'} in prompts and browser scripts.</p>
-                  <p><strong>How batch processing works:</strong> Inside the sub-agent, AI steps and browser scripts loop through each item in the batch sequentially. Login and approval steps run once and are shared across all items. Each item&apos;s output feeds into the next step for that same item.</p>
-                  <p><strong>Speed tip:</strong> For maximum parallelization, keep batch size at 1 and increase max concurrent. This runs many sub-agents in parallel. Larger batch sizes are useful when you want to reuse a single browser session (e.g. one login) across multiple items.</p>
-                </InfoBlock>
                 <div className="space-y-1">
                   <Label>Target Agent <span className="text-destructive">*</span></Label>
                   <Select value={actionForm.targetAgentId} onValueChange={(v) => setActionForm(f => ({ ...f, targetAgentId: v }))}>
@@ -1357,6 +1340,17 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </SelectContent>
                   </Select>
                 </div>
+                <EntityPreviewNotice
+                  entityLabel="sub-agent"
+                  editHref="/agents"
+                  editLabel="Agents"
+                  bodyOverride="This action runs another agent's workflow as a sub-agent. Batch size and max concurrent below are configurable per-action; the target agent's own configuration is managed separately."
+                />
+                <InfoBlock>
+                  <p>The previous step must output a JSON array. Items are grouped into batches and each batch is sent to a sub-agent invocation. All item data and parent context are available as {'{{variables}}'} in prompts and browser scripts.</p>
+                  <p><strong>How batch processing works:</strong> Inside the sub-agent, AI steps and browser scripts loop through each item in the batch sequentially. Login and approval steps run once and are shared across all items. Each item&apos;s output feeds into the next step for that same item.</p>
+                  <p><strong>Speed tip:</strong> For maximum parallelization, keep batch size at 1 and increase max concurrent. This runs many sub-agents in parallel. Larger batch sizes are useful when you want to reuse a single browser session (e.g. one login) across multiple items.</p>
+                </InfoBlock>
                 {(() => {
                   const selected = validSubAgents.find((a) => a.id === actionForm.targetAgentId);
                   return selected ? <SubAgentPreview agent={selected} /> : null;
@@ -1417,16 +1411,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* ── AI Step Viewer (read-only) ────────────────────────── */}
-      <AiStepDialog
-        open={!!viewingAiStep}
-        onOpenChange={(o) => { if (!o) setViewingAiStep(null); }}
-        step={viewingAiStep}
-        connectors={connectors.filter((c: any) => c.agent_enabled).map((c: any) => ({ id: c.id, label: c.connector_name ?? c.id }))}
-        skills={skills}
-        readOnly
-      />
 
       {/* ── Trigger Dialog ────────────────────────────────────── */}
       <Dialog open={triggerDialogOpen} onOpenChange={setTriggerDialogOpen}>

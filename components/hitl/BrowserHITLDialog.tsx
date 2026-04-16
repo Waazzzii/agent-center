@@ -18,7 +18,6 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   Monitor,
@@ -29,6 +28,7 @@ import {
   PauseCircle,
 } from 'lucide-react';
 import { ProvisioningNotice } from './ProvisioningNotice';
+import { useEventStream } from '@/lib/hooks/use-event-stream';
 
 interface Props {
   open: boolean;
@@ -73,7 +73,6 @@ function StatusPill({ status }: { status: BrowserRunStatus['status'] }) {
 
 export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe' }: Props) {
   const isInteractive = mode === 'interactive';
-  const { confirm } = useConfirmDialog();
   const [runStatus, setRunStatus] = useState<BrowserRunStatus | null>(null);
   const [novnc, setNovnc] = useState<NoVNCInfo | null>(null);
   const [loadingNovnc, setLoadingNovnc] = useState(false);
@@ -126,6 +125,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
   }, [open, runId, runStatus?.status]);
 
   // ── Status polling (10s) — runs after provisioning is complete ──
+  // Kept as a safety net; SSE below drives the fast path.
 
   const fetchStatus = async () => {
     try {
@@ -142,6 +142,16 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
       setPollError(true);
     }
   };
+
+  // ── Realtime: flip the status pill the moment the backend transitions.
+  // `run:<runId>` is the universal topic — works for both agent executions
+  // and standalone login runs.  Refetch on any event since the status
+  // mapping (auth_required vs awaiting_approval etc.) is server-side.
+  useEventStream({
+    topics: open && runId ? [`run:${runId}`] : [],
+    enabled: open,
+    onEvent: () => { fetchStatus().catch(() => {}); },
+  });
 
   const startStatusPoll = () => {
     if (intervalRef.current) clearInterval(intervalRef.current);
@@ -193,24 +203,21 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
 
   // ── HITL resume ──────────────────────────────────────────────
 
+  /**
+   * Close the dialog.  Behind the scenes we abort the browser session so the
+   * slot is released.  This only ends the login attempt — any workflow runs
+   * waiting on the login stay paused and can be retried from the Logins or
+   * Interactions list.  Use the run row's abort control to stop a workflow.
+   */
   const handleAbort = async () => {
-    const confirmed = await confirm({
-      title: 'Abort Run',
-      description: 'This will stop the agent and close the browser session. Any unsaved progress will be lost. Are you sure?',
-      confirmText: 'Abort Run',
-      cancelText: 'Keep Running',
-      variant: 'destructive',
-    });
-    if (!confirmed) return;
     setAborting(true);
     try {
       await abortBrowserRun(runId);
-      toast.success('Agent run aborted');
-      onOpenChange(false);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error ?? 'Failed to abort run');
+    } catch {
+      // Slot may already be gone — closing is still the right outcome.
     } finally {
       setAborting(false);
+      onOpenChange(false);
     }
   };
 
@@ -293,25 +300,23 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
                 }
               </Button>
             )}
-            {!isTerminal && (
-              <Button
-                variant="outline"
-                size="sm"
-                className="h-7 text-xs border-destructive/40 text-destructive hover:bg-destructive hover:text-destructive-foreground"
-                onClick={handleAbort}
-                disabled={aborting || resuming}
-              >
-                {aborting
-                  ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Aborting…</>
-                  : <>Abort</>
-                }
-              </Button>
-            )}
-            {!isInteractive && (
-              <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => onOpenChange(false)}>
-                Close
-              </Button>
-            )}
+            {/* Close button.
+                - observe (background task): closes the dialog; session keeps
+                  running so the user can come back later.
+                - interactive (manual login): tears down the browser session
+                  too, since leaving it mid-login would waste a slot.  The
+                  workflow runs waiting on the login stay paused and can be
+                  retried any time. */}
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              onClick={isTerminal || !isInteractive ? () => onOpenChange(false) : handleAbort}
+              disabled={aborting || resuming}
+            >
+              {aborting ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+              Close
+            </Button>
           </div>
         </div>
 

@@ -23,11 +23,12 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   Plus, Pencil, Trash2, LogIn, Loader2, CheckCircle2, AlertCircle, HelpCircle,
-  ShieldCheck, Monitor,
+  ShieldCheck,
 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import { LoginFormBody } from '@/components/actions/LoginFormBody';
+import { useEventStream } from '@/lib/hooks/use-event-stream';
 import {
   listActiveVerifySessions,
   getActiveVerifySession,
@@ -131,19 +132,35 @@ export default function LoginsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [Object.keys(activeSessions).join(','), selectedOrgId]);
 
-  const load = useCallback(async () => {
+  // `silent` = true for SSE-triggered refreshes — updates the list without
+  // flashing the loading spinner.  The initial page load and manual refresh
+  // use `silent = false` so the user sees a proper loading state.
+  const load = useCallback(async (silent = false) => {
     if (!selectedOrgId) return;
-    setLoading(true);
+    if (!silent) setLoading(true);
     try {
       setItems(await listLogins(selectedOrgId));
     } catch {
-      toast.error('Failed to load logins');
+      if (!silent) toast.error('Failed to load logins');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [selectedOrgId]);
 
   useEffect(() => { load(); }, [load]);
+
+  // ── Realtime: silently reload when any login profile in this org changes.
+  // Coalesces rapid-fire events (e.g. verify + mark_logged_in arriving
+  // within ms) into a single reload.  No loading spinner — just swap data.
+  const loginRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEventStream({
+    topics: selectedOrgId ? [`org:${selectedOrgId}:logins`] : [],
+    enabled: !!selectedOrgId,
+    onEvent: () => {
+      if (loginRefreshTimer.current) clearTimeout(loginRefreshTimer.current);
+      loginRefreshTimer.current = setTimeout(() => { load(true); }, 150);
+    },
+  });
 
   // ── CRUD ────────────────────────────────────────────────
   const openCreate = () => {
@@ -296,17 +313,9 @@ export default function LoginsPage() {
                     <p className="text-xs text-muted-foreground/80 truncate font-mono mt-1">{item.url}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
-                    {/* Window icon — shown only when a session is running.  Click to view live. */}
-                    {active && (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setViewingLoginId(item.id)}
-                        title="Open live browser view"
-                      >
-                        <Monitor className="h-3.5 w-3.5" />
-                      </Button>
-                    )}
+                    {/* No persistent "view browser" icon — browser sessions
+                        are ephemeral.  Close tears them down and they spin
+                        back up the next time they're needed. */}
 
                     {/* Primary action: Log In (if needs_login) or Verify (otherwise) */}
                     {needsLogin ? (

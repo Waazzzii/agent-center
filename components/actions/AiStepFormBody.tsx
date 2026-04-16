@@ -99,86 +99,89 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
         <p className="text-sm text-muted-foreground italic">{form.description}</p>
       )}
 
-      <div className="space-y-1">
-        <Label>Prompt {!readOnly && <span className="text-destructive">*</span>}</Label>
-        <Textarea
-          rows={readOnly ? 6 : 8}
-          value={form.prompt}
-          onChange={(e) => setForm((f) => ({ ...f, prompt: e.target.value }))}
-          placeholder="Use {{variable}} to reference values from prior steps"
-          disabled={readOnly}
-          className="font-mono text-xs"
-        />
-      </div>
-
-      {/* Required Inputs (derived from {{vars}} in the prompt) */}
-      <InputsList inputs={inputs} availableVars={availableVars} />
-
-      {/* Outputs editor */}
-      <div className="space-y-2">
-        <div className="flex items-center justify-between">
-          <Label className="flex items-center gap-1">
-            <ArrowUpFromLine className="h-3.5 w-3.5" /> Outputs
-          </Label>
-          {!readOnly && (
-            <Button type="button" variant="ghost" size="sm" onClick={addOutput} className="h-7 text-xs">
-              <Plus className="h-3.5 w-3.5 mr-0.5" /> Add output
-            </Button>
-          )}
+      {readOnly ? (
+        // ── Read-only: collapse prompt + auto-appended block into one final view ──
+        <div className="space-y-1">
+          <Label>Final Prompt</Label>
+          <pre className="text-xs font-mono whitespace-pre-wrap bg-background rounded-md border p-2 max-h-64 overflow-auto">
+            {form.prompt}{buildOutputInstructionBlock(form.outputs)}
+          </pre>
+          <p className="text-[10px] text-muted-foreground">
+            Exactly what Claude receives — user prompt plus the auto-appended JSON instruction (if outputs are declared).
+          </p>
         </div>
-        {!readOnly && (
-          <p className="text-[11px] text-muted-foreground">
-            Declare the JSON keys this step should return.  The executor appends a JSON
-            instruction to the prompt automatically and parses the response into the
-            execution context — you don&apos;t need to write &quot;respond with JSON&quot; yourself.
-          </p>
-        )}
-        {form.outputs.length === 0 ? (
-          <p className="text-xs text-muted-foreground italic">
-            {readOnly ? 'No declared outputs.' : 'No declared outputs — response will be captured as free-form text.'}
-          </p>
-        ) : (
-          <div className="space-y-1.5">
-            {form.outputs.map((o, i) => (
-              <div key={i} className="flex items-start gap-2">
-                <Input
-                  placeholder="key"
-                  value={o.key}
-                  onChange={(e) => updateOutput(i, { key: e.target.value })}
-                  disabled={readOnly}
-                  className="w-40 text-xs font-mono"
-                />
-                <Input
-                  placeholder="Description of what goes in this key"
-                  value={o.description}
-                  onChange={(e) => updateOutput(i, { description: e.target.value })}
-                  disabled={readOnly}
-                  className="flex-1 text-xs"
-                />
-                {!readOnly && (
-                  <Button type="button" variant="ghost" size="sm" onClick={() => removeOutput(i)} className="h-8 text-destructive hover:text-destructive">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-              </div>
-            ))}
+      ) : (
+        // ── Editable: separate fields so users can configure each piece ──
+        <>
+          <div className="space-y-1">
+            <Label>Prompt <span className="text-destructive">*</span></Label>
+            <Textarea
+              rows={8}
+              value={form.prompt}
+              onChange={(e) => setForm((f) => ({ ...f, prompt: e.target.value }))}
+              placeholder="Use {{variable}} to reference values from prior steps"
+              className="font-mono text-xs"
+            />
           </div>
-        )}
 
-        {/* Live preview of the auto-appended JSON instruction.  Exactly what
-            the executor concatenates to the prompt at runtime, so users can
-            see what Claude will actually receive. */}
-        {form.outputs.some((o) => o.key.trim()) && (
-          <div className="space-y-1 pt-1">
-            <Label className="text-[11px] text-muted-foreground">
-              Auto-appended to prompt at runtime
-            </Label>
-            <pre className="text-[11px] font-mono whitespace-pre-wrap bg-background/60 rounded-md border border-dashed p-2 text-muted-foreground">
-              {buildOutputInstructionBlock(form.outputs).trimStart()}
-            </pre>
+          {/* Required Inputs (derived from {{vars}} in the prompt) */}
+          <InputsList inputs={inputs} availableVars={availableVars} />
+
+          {/* Outputs editor */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <Label className="flex items-center gap-1">
+                <ArrowUpFromLine className="h-3.5 w-3.5" /> Outputs
+              </Label>
+              <Button type="button" variant="ghost" size="sm" onClick={addOutput} className="h-7 text-xs">
+                <Plus className="h-3.5 w-3.5 mr-0.5" /> Add output
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Declare the JSON keys this step should return.  The executor appends a JSON
+              instruction to the prompt automatically and parses the response into the
+              execution context — you don&apos;t need to write &quot;respond with JSON&quot; yourself.
+            </p>
+            {form.outputs.length === 0 ? (
+              <p className="text-xs text-muted-foreground italic">No declared outputs — response will be captured as free-form text.</p>
+            ) : (
+              <div className="space-y-1.5">
+                {form.outputs.map((o, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <Input
+                      placeholder="key"
+                      value={o.key}
+                      onChange={(e) => updateOutput(i, { key: e.target.value })}
+                      className="w-40 text-xs font-mono"
+                    />
+                    <Input
+                      placeholder="Description of what goes in this key"
+                      value={o.description}
+                      onChange={(e) => updateOutput(i, { description: e.target.value })}
+                      className="flex-1 text-xs"
+                    />
+                    <Button type="button" variant="ghost" size="sm" onClick={() => removeOutput(i)} className="h-8 text-destructive hover:text-destructive">
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Live preview of the auto-appended JSON instruction. */}
+            {form.outputs.some((o) => o.key.trim()) && (
+              <div className="space-y-1 pt-1">
+                <Label className="text-[11px] text-muted-foreground">
+                  Auto-appended to prompt at runtime
+                </Label>
+                <pre className="text-[11px] font-mono whitespace-pre-wrap bg-background/60 rounded-md border border-dashed p-2 text-muted-foreground">
+                  {buildOutputInstructionBlock(form.outputs).trimStart()}
+                </pre>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </>
+      )}
 
       <div className="grid grid-cols-2 gap-3">
         <div className="space-y-1">

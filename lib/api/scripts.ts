@@ -286,8 +286,9 @@ export async function executeStepRunStep(
   orgId: string,
   runId: string,
   params?: Record<string, string>,
+  signal?: AbortSignal,
 ): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep }> {
-  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/execute`, params ? { params } : undefined);
+  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/execute`, params ? { params } : undefined, { signal });
   return res.data;
 }
 
