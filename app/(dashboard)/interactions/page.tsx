@@ -278,8 +278,8 @@ export default function InteractionsPage() {
               const starting  = !!startingLogin[loginId];
               rows.push(
                 <Card key={`login-group-${loginId}`} className="hover:shadow-sm transition-shadow">
-                  <CardContent className="p-4 flex items-start gap-4">
-                    <div className="p-2 rounded-md shrink-0 bg-amber-100 text-amber-600 dark:bg-amber-950/30 dark:text-amber-400">
+                  <CardContent className="p-3 flex items-center gap-3">
+                    <div className="p-1.5 rounded-md shrink-0 bg-amber-100 text-amber-600 dark:bg-amber-950/30 dark:text-amber-400">
                       <LogIn className="h-4 w-4" />
                     </div>
                     <div className="flex-1 min-w-0">
@@ -375,7 +375,7 @@ export default function InteractionsPage() {
               const isLogin = item.action_type === 'login';
               rows.push(
                 <Card key={item.id} className="hover:shadow-sm transition-shadow">
-                  <CardContent className="p-4 flex items-start gap-4">
+                  <CardContent className="p-3 flex items-center gap-3">
                     <div className={`p-2 rounded-md shrink-0 ${isLogin ? 'bg-amber-100 text-amber-600 dark:bg-amber-950/30 dark:text-amber-400' : 'bg-violet-100 text-violet-600 dark:bg-violet-950/30 dark:text-violet-400'}`}>
                       {isLogin ? <LogIn className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
                     </div>

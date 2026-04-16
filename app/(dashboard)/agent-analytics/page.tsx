@@ -140,7 +140,7 @@ export default function AnalyticsPage() {
   const isEmpty = !loading && (!data || toNum(data.summary?.total) === 0);
 
   return (
-    <div className="flex flex-col gap-4 p-6 max-w-[1400px] mx-auto">
+    <div className="flex flex-col gap-3 p-5 max-w-[1400px] mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
@@ -233,7 +233,7 @@ function HeadlineCard({ data }: { data: ExecutionAnalytics }) {
 
   return (
     <Card>
-      <CardContent className="p-6">
+      <CardContent className="p-4">
         <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
           <Stat label="Runs" value={total.toLocaleString()} delta={totalDelta} />
           <Stat label="Success" value={`${successPct.toFixed(1)}%`} delta={successDelta} />
@@ -300,7 +300,7 @@ function RunsOverTimeCard({ data, onBarClick }: {
 
   return (
     <Card>
-      <CardContent className="p-5">
+      <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold">Runs over time</h3>
@@ -350,7 +350,7 @@ function StatusMixCard({ data }: { data: ExecutionAnalytics }) {
 
   return (
     <Card>
-      <CardContent className="p-5">
+      <CardContent className="p-4">
         <div className="mb-3">
           <h3 className="text-sm font-semibold">Status mix</h3>
           <p className="text-xs text-muted-foreground">All runs in period</p>
@@ -382,7 +382,7 @@ function TopAgentsCard({ data, onRowClick }: {
   const rows = (data.perAgent ?? []).slice(0, 8);
   return (
     <Card>
-      <CardContent className="p-5">
+      <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold">Top agents</h3>
@@ -452,7 +452,7 @@ function FailureHotspotsCard({ data, onRowClick }: {
   const rows = (data.hotspots ?? []).slice(0, 8);
   return (
     <Card>
-      <CardContent className="p-5">
+      <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold flex items-center gap-1.5">
@@ -511,7 +511,7 @@ function ActionTypeBreakdownCard({ data }: { data: ExecutionAnalytics }) {
   const totalAll = rows.reduce((s, r) => s + toNum(r.total), 0);
   return (
     <Card>
-      <CardContent className="p-5">
+      <CardContent className="p-4">
         <div className="mb-3">
           <h3 className="text-sm font-semibold">Action type breakdown</h3>
           <p className="text-xs text-muted-foreground">Where time + reliability are spent</p>
@@ -555,7 +555,7 @@ function TriggerBreakdownCard({ data }: { data: ExecutionAnalytics }) {
   const colors = ['hsl(217 91% 60%)', 'hsl(262 83% 58%)', 'hsl(142 71% 45%)', 'hsl(30 80% 55%)', 'hsl(0 72% 51%)'];
   return (
     <Card>
-      <CardContent className="p-5">
+      <CardContent className="p-4">
         <div className="mb-3">
           <h3 className="text-sm font-semibold">Trigger breakdown</h3>
           <p className="text-xs text-muted-foreground">How runs are being kicked off</p>
@@ -601,7 +601,7 @@ function CostAndUsageCard({ data }: { data: ExecutionAnalytics }) {
 
   return (
     <Card>
-      <CardContent className="p-5">
+      <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
             <h3 className="text-sm font-semibold flex items-center gap-1.5">

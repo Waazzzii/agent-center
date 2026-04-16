@@ -210,7 +210,7 @@ function RunsTable({
         return (
           <div
             key={run.id}
-            className="cursor-pointer hover:bg-muted/40 transition-colors px-4 py-3"
+            className="cursor-pointer hover:bg-muted/40 transition-colors px-3 py-2"
             onClick={() => router.push(`/agent-history/${run.id}`)}
           >
             <div className="flex items-start gap-3">

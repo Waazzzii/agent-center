@@ -25,6 +25,7 @@ import {
   LogIn,
   MessageSquare,
   Sparkles,
+  Receipt,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -53,6 +54,7 @@ const MAIN_ICONS: Record<string, React.ElementType> = {
   '/agents':           Bot,
   '/agent-history':    History,
   '/agent-analytics':  BarChart3,
+  '/billing':          Receipt,
   '/interactions':     MessageSquare,
   '/approvals':        CheckCircle,
   '/skills':           Wand2,

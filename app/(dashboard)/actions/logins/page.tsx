@@ -285,7 +285,7 @@ export default function LoginsPage() {
           No logins yet. Create one to share auth sessions across agents.
         </CardContent></Card>
       ) : (
-        <div className="space-y-2">
+        <div className="space-y-1">
           {items.map((item) => {
             const active = activeSessions[item.id];
             const isStarting = !!starting[item.id];
@@ -293,24 +293,25 @@ export default function LoginsPage() {
 
             return (
               <Card key={item.id} className="hover:shadow-sm transition-shadow">
-                <CardContent className="p-4 flex items-start gap-4">
+                <CardContent className="p-3 flex items-center gap-3">
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1 flex-wrap">
-                      <span className="font-medium">{item.name}</span>
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="text-sm font-medium">{item.name}</span>
                       <StatusPill status={item.status} />
                       {active && (
-                        <Badge variant="outline" className="gap-1 border-blue-400 text-blue-600 dark:text-blue-400">
-                          <Loader2 className="h-3 w-3 animate-spin" />
+                        <Badge variant="outline" className="gap-1 text-[10px] h-5 border-blue-400 text-blue-600 dark:text-blue-400">
+                          <Loader2 className="h-2.5 w-2.5 animate-spin" />
                           {active.label}
                         </Badge>
                       )}
                     </div>
-                    <div className="flex items-center gap-3 text-[10px] text-muted-foreground">
-                      <span>Last logged in {formatRelative(item.last_logged_in_at)}</span>
-                      <span className="opacity-50">·</span>
-                      <span>Last checked {formatRelative(item.last_checked_at)}</span>
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
+                      <span className="font-mono truncate max-w-[200px]">{item.url}</span>
+                      <span className="opacity-40">·</span>
+                      <span>logged in {formatRelative(item.last_logged_in_at)}</span>
+                      <span className="opacity-40">·</span>
+                      <span>checked {formatRelative(item.last_checked_at)}</span>
                     </div>
-                    <p className="text-xs text-muted-foreground/80 truncate font-mono mt-1">{item.url}</p>
                   </div>
                   <div className="flex items-center gap-1 shrink-0">
                     {/* No persistent "view browser" icon — browser sessions

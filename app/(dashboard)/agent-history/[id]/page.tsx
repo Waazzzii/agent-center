@@ -34,6 +34,7 @@ import { cn } from '@/lib/utils';
 import { getExecutionChildren, getFullExecutionTree, type ExecutionChild, type FullTreeNode } from '@/lib/api/agents';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
 import { ExecutionTreePanel } from '@/components/execution/ExecutionTreePanel';
+import { LogViewer } from '@/components/execution/LogViewer';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -711,81 +712,51 @@ export default function ExecutionStepsPage() {
         !loadingActions && <p className="text-sm text-muted-foreground italic">No actions recorded for this execution.</p>
       )}
 
-      {/* Steps */}
+      {/* Steps — GCP Cloud Logging style */}
       {selectedActionId && (
         <>
-          <Card>
-            <CardHeader className="pb-2">
-              <div className="flex items-start justify-between gap-3 flex-wrap">
-                <CardTitle className="text-sm font-medium">
-                  AI Agent Steps
-                  {!loadingSteps && total > 0 && (
-                    <span className="ml-2 text-muted-foreground font-normal">({total.toLocaleString()})</span>
-                  )}
-                </CardTitle>
-                {/* Type filter */}
-                <div className="flex items-center gap-1 flex-wrap">
-                  {STEP_TYPES.map(({ value, label }) => (
-                    <button
-                      key={value}
-                      onClick={() => setSelectedType(value as StepType | 'all')}
-                      className={cn(
-                        'px-2 py-0.5 rounded text-xs border transition-colors',
-                        selectedType === value
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'bg-background text-muted-foreground border-border hover:border-foreground/30 hover:text-foreground'
-                      )}
-                    >
-                      {label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </CardHeader>
-
-            <div className="px-4 pb-3">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
-                <Input
-                  placeholder="Search content or tool name…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  className="pl-8 h-8 text-sm"
-                />
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="text-sm font-medium">
+                Steps
+                {!loadingSteps && total > 0 && (
+                  <span className="ml-1.5 text-muted-foreground font-normal">({total})</span>
+                )}
+              </h3>
+              <div className="flex items-center gap-1 flex-wrap">
+                {STEP_TYPES.map(({ value, label }) => (
+                  <button
+                    key={value}
+                    onClick={() => setSelectedType(value as StepType | 'all')}
+                    className={cn(
+                      'px-2 py-0.5 rounded text-[10px] border transition-colors',
+                      selectedType === value
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background text-muted-foreground border-border hover:border-foreground/30'
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
+            <LogViewer steps={filteredSteps} loading={loadingSteps} />
 
-            <CardContent className="px-4 pt-0">
-              {loadingSteps ? (
-                <div className="flex flex-col items-center justify-center py-10 gap-3 text-muted-foreground">
-                  <Loader2 className="h-5 w-5 animate-spin" /><span className="text-sm">Loading steps&hellip;</span>
+            {/* Pagination */}
+            {totalPages > 1 && !loadingSteps && (
+              <div className="flex items-center justify-between mt-2 text-xs text-muted-foreground">
+                <span>Page {page} of {totalPages} · {total} steps</span>
+                <div className="flex items-center gap-1">
+                  <Button variant="outline" size="sm" className="h-6 text-xs" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+                    <ChevronLeft className="h-3 w-3" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-6 text-xs" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+                    <ChevronRight className="h-3 w-3" />
+                  </Button>
                 </div>
-              ) : filteredSteps.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-10 gap-2 text-muted-foreground">
-                  <Terminal className="h-7 w-7 opacity-30" />
-                  <p className="text-sm">No steps found.</p>
-                  {(selectedType !== 'all' || search) && <p className="text-xs">Try removing filters.</p>}
-                </div>
-              ) : (
-                filteredSteps.map((step) => <StepItem key={step.id} step={step} />)
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Pagination */}
-          {totalPages > 1 && !loadingSteps && (
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">Page {page} of {totalPages} &middot; {total} step{total !== 1 ? 's' : ''}</p>
-              <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage((p) => p - 1)} className="gap-1.5">
-                  <ChevronLeft className="h-4 w-4" />Previous
-                </Button>
-                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)} className="gap-1.5">
-                  Next<ChevronRight className="h-4 w-4" />
-                </Button>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Sub-agent child runs (shown when a sub_agent action is selected) */}
           {actions.find((a) => a.id === selectedActionId)?.action_type === 'sub_agent' && (
