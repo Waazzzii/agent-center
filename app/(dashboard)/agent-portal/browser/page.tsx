@@ -41,7 +41,7 @@ export default function BrowserPage() {
     <div className="flex flex-col gap-4 h-full">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Live Browser</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Live Browser</h1>
           <p className="text-muted-foreground">Real-time view of the agent&apos;s browser session</p>
         </div>
         <Button variant="outline" size="sm" onClick={load} disabled={loading}>

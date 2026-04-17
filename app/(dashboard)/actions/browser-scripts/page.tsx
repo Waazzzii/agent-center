@@ -5,7 +5,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { CircleDot } from 'lucide-react';
+import { CircleDot, Video } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { ScriptsList } from '@/components/record/ScriptsList';
 import { RunScriptModal } from '@/components/record/RunScriptModal';
@@ -20,7 +20,7 @@ export default function RecordPage() {
   if (!permitted) return <NoPermissionContent />;
 
   return (
-    <div className="space-y-4">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
 
       {/* Record modal */}
       <RunScriptModal
@@ -34,8 +34,8 @@ export default function RecordPage() {
 
       {/* Header */}
       <div>
-        <h1 className="text-3xl font-bold">Browser Scripts</h1>
-        <p className="text-muted-foreground">Record browser interactions and save them as reusable scripts</p>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Video className="h-5 w-5 text-primary" /> Browser Scripts</h1>
+        <p className="text-sm text-muted-foreground mt-0.5">Record browser interactions and save them as reusable scripts</p>
       </div>
 
       {/* Record New Script bar */}

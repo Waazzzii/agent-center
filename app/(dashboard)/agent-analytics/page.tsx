@@ -140,11 +140,11 @@ export default function AnalyticsPage() {
   const isEmpty = !loading && (!data || toNum(data.summary?.total) === 0);
 
   return (
-    <div className="flex flex-col gap-3 p-5 max-w-[1400px] mx-auto">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Analytics</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Activity className="h-5 w-5 text-primary" /> Analytics</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Agent performance, cost, and reliability trends.
           </p>

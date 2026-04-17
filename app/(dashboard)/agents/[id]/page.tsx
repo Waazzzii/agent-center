@@ -1,7 +1,7 @@
 'use client';
 
-import { use, useEffect, useState, useCallback, useMemo } from 'react';
-import { useRouter } from 'next/navigation';
+import { use, useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import {
@@ -17,6 +17,7 @@ import { getSkills, type Skill } from '@/lib/api/skills';
 import { listScripts, type BrowserScript } from '@/lib/api/scripts';
 import { listAiSteps, type AiStep } from '@/lib/api/ai-steps';
 import { listLogins, type Login } from '@/lib/api/logins';
+import { useEventStream } from '@/lib/hooks/use-event-stream';
 import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
 import { AiStepPreview } from '@/components/actions/AiStepPreview';
 import { LoginPreview } from '@/components/actions/LoginPreview';
@@ -26,12 +27,9 @@ import { ApprovalPreview } from '@/components/actions/ApprovalPreview';
 import { InfoBlock } from '@/components/actions/InfoBlock';
 import {
   getAgentAccessGroups,
-  getAssignedAccessGroups,
-  getAgentGroupMembers,
-  assignAccessGroupToAgent,
-  unassignAccessGroupFromAgent,
+  getActionAccessGroups,
+  setActionAccessGroups,
   type AgentAccessGroup,
-  type AgentAccessGroupMember,
 } from '@/lib/api/agent-access-groups';
 import type { OrganizationConnector } from '@/types/api.types';
 import { Button } from '@/components/ui/button';
@@ -42,13 +40,14 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  ArrowLeft, Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
-  Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Search, Monitor,
-  LogIn, ShieldCheck, ExternalLink, GitBranch, Settings, Users, CircleDot,
+  ArrowLeft, Plus, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
+  Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Monitor,
+  LogIn, GitBranch, Settings, CircleDot,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -124,138 +123,6 @@ function nextFirings(expr: string, count = 3): string[] {
   return results;
 }
 
-// ─── Multi-select picker ──────────────────────────────────────
-
-interface PickerOption { id: string; label: string; subLabel?: string }
-
-function MultiSelectPicker({
-  label,
-  description,
-  addLabel,
-  options,
-  selectedIds,
-  onAdd,
-  onRemove,
-  pillClass,
-}: {
-  label: string;
-  description?: string;
-  addLabel: string;
-  options: PickerOption[];
-  selectedIds: string[];
-  onAdd: (id: string) => void;
-  onRemove: (id: string) => void;
-  pillClass?: string;
-}) {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState('');
-
-  const selected = options.filter((o) => selectedIds.includes(o.id));
-  const unselected = options.filter((o) => !selectedIds.includes(o.id));
-  const filtered = unselected.filter((o) =>
-    o.label.toLowerCase().includes(search.toLowerCase()) ||
-    (o.subLabel ?? '').toLowerCase().includes(search.toLowerCase())
-  );
-
-  const pillBase = 'inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium';
-
-  return (
-    <div className="space-y-1.5">
-      <Label>{label}</Label>
-      {description && <p className="text-xs text-muted-foreground">{description}</p>}
-
-      <div className="flex flex-wrap gap-1.5 items-center">
-        {selected.map((item) => (
-          <span key={item.id} className={cn(pillBase, pillClass ?? 'bg-secondary text-secondary-foreground border-border')}>
-            {item.label}
-            <button type="button" onClick={() => onRemove(item.id)} className="rounded-sm opacity-60 hover:opacity-100 transition-opacity">
-              <X className="h-3 w-3" />
-            </button>
-          </span>
-        ))}
-
-        {unselected.length > 0 && !open && (
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className={cn(pillBase, 'border-dashed text-muted-foreground hover:text-foreground hover:border-foreground/40 transition-colors cursor-pointer bg-transparent')}
-          >
-            <Plus className="h-3 w-3" />{addLabel}
-          </button>
-        )}
-
-        {options.length === 0 && (
-          <p className="text-xs text-muted-foreground italic">No {label.toLowerCase()} available.</p>
-        )}
-      </div>
-
-      {open && (
-        <div className="rounded-md border shadow-sm bg-background">
-          <div className="flex items-center border-b px-2 gap-1.5">
-            <Search className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-            <input
-              autoFocus
-              placeholder="Search…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Escape') { setOpen(false); setSearch(''); } }}
-              className="flex-1 bg-transparent py-2 text-xs outline-none placeholder:text-muted-foreground"
-            />
-            <button type="button" onClick={() => { setOpen(false); setSearch(''); }}>
-              <X className="h-3.5 w-3.5 text-muted-foreground hover:text-foreground" />
-            </button>
-          </div>
-          <div className="max-h-44 overflow-y-auto">
-            {filtered.length === 0 ? (
-              <p className="px-3 py-2.5 text-xs text-muted-foreground">No matches</p>
-            ) : (
-              filtered.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className="w-full text-left px-3 py-2 text-xs hover:bg-muted transition-colors flex items-baseline gap-1.5"
-                  onClick={() => {
-                    onAdd(item.id);
-                    setSearch('');
-                    if (filtered.length <= 1) { setOpen(false); }
-                  }}
-                >
-                  <span className="font-medium">{item.label}</span>
-                  {item.subLabel && <span className="text-muted-foreground truncate">{item.subLabel}</span>}
-                </button>
-              ))
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ─── User avatar ──────────────────────────────────────────────
-
-function UserAvatar({ firstName, lastName, email }: { firstName: string | null; lastName: string | null; email: string }) {
-  const initials = firstName && lastName
-    ? `${firstName[0]}${lastName[0]}`
-    : firstName
-    ? firstName[0]!
-    : email[0]!;
-  return (
-    <div className="h-8 w-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-xs font-semibold shrink-0 select-none">
-      {initials.toUpperCase()}
-    </div>
-  );
-}
-
-// Group badge colors (cycled by index)
-const GROUP_BADGE_COLORS = [
-  'bg-blue-50 border-blue-200 text-blue-700 dark:bg-blue-950/30 dark:border-blue-800 dark:text-blue-400',
-  'bg-violet-50 border-violet-200 text-violet-700 dark:bg-violet-950/30 dark:border-violet-800 dark:text-violet-400',
-  'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/30 dark:border-emerald-800 dark:text-emerald-400',
-  'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-950/30 dark:border-amber-800 dark:text-amber-400',
-  'bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-950/30 dark:border-rose-800 dark:text-rose-400',
-];
-
 // ─── Variable Chips ───────────────────────────────────────────
 
 /**
@@ -295,8 +162,12 @@ function VariableChips({
 export default function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: agentId } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { selectedOrgId } = useAdminViewStore();
   const { confirm } = useConfirmDialog();
+
+  // ?action=<id> — auto-open the edit dialog for a specific action on first load
+  const pendingActionId = useRef(searchParams.get('action'));
 
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [actions, setActions] = useState<AgentAction[]>([]);
@@ -321,6 +192,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     targetAgentId: '',
     maxConcurrent: 3,
     batchSize: 1,
+    accessGroupIds: [] as string[],
   });
   const [aiSteps, setAiSteps] = useState<AiStep[]>([]);
   const [logins, setLogins] = useState<Login[]>([]);
@@ -348,14 +220,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
 
-  // Access groups
-  const [assignedGroups, setAssignedGroups] = useState<AgentAccessGroup[]>([]);
+  // Access groups (used in action dialogs for approval group assignment)
   const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
-
-  // Approvers tab — group members loaded lazily
-  const [groupMembers, setGroupMembers] = useState<Record<string, AgentAccessGroupMember[]>>({});
-  const [membersLoading, setMembersLoading] = useState(false);
-  const [activeTab, setActiveTab] = useState('workflow');
 
   useEffect(() => {
     if (selectedOrgId && agentId) loadAll();
@@ -366,13 +232,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      let [agentData, actionsData, connData, hitlData, skillsData, assignedGroupsData, allGroupsData, scriptsData, aiStepsData, loginsData] = await Promise.all([
+      let [agentData, actionsData, connData, hitlData, skillsData, allGroupsData, scriptsData, aiStepsData, loginsData] = await Promise.all([
         getAgent(selectedOrgId, agentId),
         getActions(selectedOrgId, agentId),
         getConnectors(selectedOrgId),
         getApprovals(selectedOrgId),
         getSkills(selectedOrgId),
-        getAssignedAccessGroups(selectedOrgId, agentId),
         getAgentAccessGroups(selectedOrgId),
         listScripts(selectedOrgId),
         listAiSteps(selectedOrgId).catch(() => [] as AiStep[]),
@@ -398,7 +263,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setBrowserScripts(scriptsData.scripts ?? []);
       setAiSteps(aiStepsData);
       setLogins(loginsData);
-      setAssignedGroups(assignedGroupsData);
       setAllGroups(allGroupsData);
       setPendingHitlCount(hitlData.items.filter((h) => h.agent_id === agentId && h.status === 'awaiting_approval').length);
     } catch (err: any) {
@@ -417,35 +281,25 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     } catch { /* silent */ }
   };
 
-  // Load members for all assigned groups (used by Approvers tab)
-  const loadGroupMembers = useCallback(async (groups: AgentAccessGroup[]) => {
-    if (!selectedOrgId || groups.length === 0) { setGroupMembers({}); return; }
-    setMembersLoading(true);
-    try {
-      const results = await Promise.all(
-        groups.map(async (g) => ({ groupId: g.id, members: await getAgentGroupMembers(selectedOrgId, g.id) }))
-      );
-      const map: Record<string, AgentAccessGroupMember[]> = {};
-      for (const { groupId, members } of results) map[groupId] = members;
-      setGroupMembers(map);
-    } catch {
-      toast.error('Failed to load group members');
-    } finally {
-      setMembersLoading(false);
-    }
-  }, [selectedOrgId]);
-
-  // Trigger member load when switching to approvers tab
-  const handleTabChange = (tab: string) => {
-    setActiveTab(tab);
-    if (tab === 'approvers') loadGroupMembers(assignedGroups);
-  };
-
-  // Reload members after group assignment changes on the approvers tab
+  // Auto-open action dialog when ?action=<id> is present (e.g. deep-link from Access page)
   useEffect(() => {
-    if (activeTab === 'approvers') loadGroupMembers(assignedGroups);
+    if (!pendingActionId.current || loading || actions.length === 0) return;
+    const target = actions.find((a) => a.id === pendingActionId.current);
+    pendingActionId.current = null; // consume
+    if (target) openEditAction(target);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [assignedGroups]);
+  }, [loading, actions]);
+
+  // Realtime: silently refresh when executions or logins change for this org
+  const agentDetailRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEventStream({
+    topics: selectedOrgId ? [`org:${selectedOrgId}:executions`, `org:${selectedOrgId}:logins`] : [],
+    enabled: !!selectedOrgId,
+    onEvent: () => {
+      if (agentDetailRefresh.current) clearTimeout(agentDetailRefresh.current);
+      agentDetailRefresh.current = setTimeout(() => loadAll(), 500);
+    },
+  });
 
   // ── Actions ──
 
@@ -461,6 +315,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       targetAgentId: '',
       maxConcurrent: 3,
       batchSize: 1,
+      accessGroupIds: [],
     });
     if (type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -480,9 +335,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       targetAgentId: action.target_agent_id ?? '',
       maxConcurrent: action.max_concurrent ?? 3,
       batchSize: action.batch_size ?? 1,
+      accessGroupIds: [],
     });
     if (action.action_type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
+    }
+    // Load existing access groups for login/approval actions
+    if ((action.action_type === 'login' || action.action_type === 'approval') && selectedOrgId) {
+      getActionAccessGroups(selectedOrgId, action.id).then((groups) => {
+        setActionForm((f) => ({ ...f, accessGroupIds: groups.map((g) => g.id) }));
+      }).catch(() => {});
     }
     setActionDialogOpen(true);
   };
@@ -532,12 +394,21 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           approval_instructions: actionForm.approval_instructions.trim(),
         };
       }
+      let savedActionId: string;
       if (editingAction) {
         await updateAction(selectedOrgId, agentId, editingAction.id, payload);
+        savedActionId = editingAction.id;
         toast.success('Action updated');
       } else {
-        await createAction(selectedOrgId, agentId, payload);
+        const created = await createAction(selectedOrgId, agentId, payload);
+        savedActionId = created?.id;
         toast.success('Action added');
+      }
+      // Save access groups for login/approval actions
+      if (savedActionId && (actionForm.action_type === 'login' || actionForm.action_type === 'approval')) {
+        await setActionAccessGroups(selectedOrgId, savedActionId, actionForm.accessGroupIds).catch((err) =>
+          toast.error('Failed to save access groups: ' + (err.message ?? ''))
+        );
       }
       setActionDialogOpen(false);
       await loadAll();
@@ -637,23 +508,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const triggerLabel = { webhook: 'Webhook', cron: 'Cron Schedule', manual: 'Manual Only' };
   const trigger = triggers.find(t => t.trigger_type !== 'manual') ?? triggers.find(t => t.trigger_type === 'manual') ?? null;
 
-  // Build user → groups mapping for Approvers tab
-  const authorizedUsers = useMemo(() => {
-    const map = new Map<string, { user: AgentAccessGroupMember; groups: Array<{ group: AgentAccessGroup; colorClass: string }> }>();
-    assignedGroups.forEach((group, groupIdx) => {
-      const colorClass = GROUP_BADGE_COLORS[groupIdx % GROUP_BADGE_COLORS.length]!;
-      for (const member of (groupMembers[group.id] ?? [])) {
-        if (!map.has(member.id)) map.set(member.id, { user: member, groups: [] });
-        map.get(member.id)!.groups.push({ group, colorClass });
-      }
-    });
-    return Array.from(map.values()).sort((a, b) => {
-      const nameA = [a.user.first_name, a.user.last_name].filter(Boolean).join(' ') || a.user.email;
-      const nameB = [b.user.first_name, b.user.last_name].filter(Boolean).join(' ') || b.user.email;
-      return nameA.localeCompare(nameB);
-    });
-  }, [assignedGroups, groupMembers]);
-
   /** Append a template token to a form field (used by VariableChips). */
   const insertToken = (field: 'approval_instructions', token: string) => {
     setActionForm((f) => ({ ...f, [field]: `${f[field] ?? ''}${token}` }));
@@ -715,7 +569,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   }
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       {/* Header */}
       <div className="flex items-start gap-3">
         <Button variant="ghost" size="sm" onClick={() => router.push('/agents')} className="shrink-0 mt-0.5">
@@ -759,8 +613,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       </div>
 
       {/* ── Tabs ─────────────────────────────────────────────── */}
-      <Tabs defaultValue="workflow" onValueChange={handleTabChange}>
-        <TabsList className="grid w-full max-w-sm grid-cols-3">
+      <Tabs defaultValue="workflow">
+        <TabsList className="grid w-full max-w-xs grid-cols-2">
           <TabsTrigger value="workflow">
             <GitBranch className="h-4 w-4 mr-2" />
             Workflow
@@ -768,10 +622,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           <TabsTrigger value="settings">
             <Settings className="h-4 w-4 mr-2" />
             Settings
-          </TabsTrigger>
-          <TabsTrigger value="approvers">
-            <Users className="h-4 w-4 mr-2" />
-            Approvers
           </TabsTrigger>
         </TabsList>
 
@@ -1058,138 +908,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           </div>
         </TabsContent>
 
-        {/* ── Approvers Tab ─────────────────────────────────── */}
-        <TabsContent value="approvers" className="mt-4">
-          <div className="max-w-2xl space-y-4">
-
-            {/* Assigned groups card */}
-            <Card>
-              <CardContent className="pt-5 pb-4 px-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm font-medium flex items-center gap-1.5">
-                    <ShieldCheck className="h-4 w-4 text-muted-foreground" />
-                    Access Groups
-                  </p>
-                  <Link href="/access" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-                    Manage groups
-                    <ExternalLink className="h-3 w-3" />
-                  </Link>
-                </div>
-
-                {assignedGroups.length === 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    No access groups assigned. Add a group to control who can interact with login and approval steps.
-                  </p>
-                ) : (
-                  <div className="flex flex-wrap gap-1.5">
-                    {assignedGroups.map((group, idx) => {
-                      const colorClass = GROUP_BADGE_COLORS[idx % GROUP_BADGE_COLORS.length]!;
-                      return (
-                        <span
-                          key={group.id}
-                          className={cn('inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium', colorClass)}
-                        >
-                          <ShieldCheck className="h-3 w-3" />
-                          {group.name}
-                          <span className="opacity-60">{group.member_count} member{group.member_count !== 1 ? 's' : ''}</span>
-                          <button
-                            type="button"
-                            onClick={async () => {
-                              if (!selectedOrgId) return;
-                              try {
-                                await unassignAccessGroupFromAgent(selectedOrgId, agentId, group.id);
-                                setAssignedGroups((prev) => prev.filter((g) => g.id !== group.id));
-                              } catch { toast.error('Failed to remove group'); }
-                            }}
-                            className="rounded-sm opacity-50 hover:opacity-100 transition-opacity ml-0.5"
-                          >
-                            <X className="h-3 w-3" />
-                          </button>
-                        </span>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {/* Add group */}
-                {allGroups.filter((g) => !assignedGroups.some((a) => a.id === g.id)).length > 0 && (
-                  <div className={cn(assignedGroups.length > 0 && 'pt-1 border-t')}>
-                    <MultiSelectPicker
-                      label=""
-                      addLabel="Add Access Group"
-                      options={allGroups
-                        .filter((g) => !assignedGroups.some((a) => a.id === g.id))
-                        .map((g) => ({ id: g.id, label: g.name, subLabel: `${g.member_count} member${g.member_count !== 1 ? 's' : ''}` }))}
-                      selectedIds={[]}
-                      onAdd={async (groupId) => {
-                        if (!selectedOrgId) return;
-                        try {
-                          await assignAccessGroupToAgent(selectedOrgId, agentId, groupId);
-                          const group = allGroups.find((g) => g.id === groupId);
-                          if (group) setAssignedGroups((prev) => [...prev, group]);
-                        } catch { toast.error('Failed to assign group'); }
-                      }}
-                      onRemove={() => {}}
-                      pillClass="hidden"
-                    />
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-
-            {/* Authorized users */}
-            {assignedGroups.length > 0 && (
-              <Card>
-                <CardContent className="pt-5 pb-4 px-4">
-                  <p className="text-sm font-medium mb-3">
-                    {membersLoading
-                      ? 'Loading users…'
-                      : `${authorizedUsers.length} authorized user${authorizedUsers.length !== 1 ? 's' : ''}`}
-                  </p>
-
-                  {membersLoading ? (
-                    <div className="flex items-center justify-center py-8">
-                      <div className="h-6 w-6 animate-spin rounded-full border-2 border-primary border-t-transparent" />
-                    </div>
-                  ) : authorizedUsers.length === 0 ? (
-                    <p className="text-sm text-muted-foreground py-2">
-                      None of the assigned groups have members yet.
-                    </p>
-                  ) : (
-                    <div className="divide-y">
-                      {authorizedUsers.map(({ user, groups }) => {
-                        const displayName = [user.first_name, user.last_name].filter(Boolean).join(' ');
-                        return (
-                          <div key={user.id} className="flex items-center gap-3 py-2.5">
-                            <UserAvatar firstName={user.first_name} lastName={user.last_name} email={user.email} />
-                            <div className="flex-1 min-w-0">
-                              {displayName && (
-                                <p className="text-sm font-medium leading-tight">{displayName}</p>
-                              )}
-                              <p className={cn('text-xs text-muted-foreground', !displayName && 'text-sm font-medium text-foreground')}>
-                                {user.email}
-                              </p>
-                            </div>
-                            <div className="flex flex-wrap gap-1 justify-end">
-                              {groups.map(({ group, colorClass }) => (
-                                <span
-                                  key={group.id}
-                                  className={cn('inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium', colorClass)}
-                                >
-                                  {group.name}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </CardContent>
-              </Card>
-            )}
-          </div>
-        </TabsContent>
       </Tabs>
 
       {/* ── Action Dialog ─────────────────────────────────────── */}
@@ -1230,8 +948,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 </div>
                 <EntityPreviewNotice
                   entityLabel="AI step"
-                  editHref="/actions/ai-steps"
-                  editLabel="Actions → AI Steps"
+                  editHref={actionForm.aiStepId ? `/actions/ai-steps/${actionForm.aiStepId}` : '/actions/ai-steps'}
+                  editLabel="AI Steps"
                 />
                 {(() => {
                   const selected = aiSteps.find((s) => s.id === actionForm.aiStepId);
@@ -1251,8 +969,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               <>
                 <EntityPreviewNotice
                   entityLabel="login profile"
-                  editHref="/actions/logins"
-                  editLabel="Actions → Logins"
+                  editHref={actionForm.loginId ? `/actions/logins/${actionForm.loginId}` : '/actions/logins'}
+                  editLabel="Logins"
                 />
                 <div className="space-y-1">
                   <Label>Login Profile <span className="text-destructive">*</span></Label>
@@ -1285,6 +1003,17 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   instructions={actionForm.approval_instructions}
                   availableVars={availableVars}
                 />
+                {/* Access groups — who can approve */}
+                <div className="space-y-1">
+                  <Label>Approval Groups</Label>
+                  <p className="text-xs text-muted-foreground">Only members of selected groups can approve this step. Leave empty for anyone.</p>
+                  <MultiSelectTags
+                    options={allGroups.map((g) => ({ value: g.id, label: `${g.name} (${g.member_count})` }))}
+                    selected={actionForm.accessGroupIds}
+                    onChange={(ids) => setActionForm((f) => ({ ...f, accessGroupIds: ids }))}
+                    placeholder="Select access groups…"
+                  />
+                </div>
               </>
             )}
 
@@ -1293,7 +1022,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <EntityPreviewNotice
                   entityLabel="browser script"
                   editHref="/actions/browser-scripts"
-                  editLabel="Actions → Browser Scripts"
+                  editLabel="Browser Scripts"
                 />
                 <div className="space-y-1">
                   <Label>Script <span className="text-destructive">*</span></Label>

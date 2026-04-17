@@ -1,51 +1,32 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import {
-  listAiSteps,
-  createAiStep,
-  updateAiStep,
-  deleteAiStep,
-  type AiStep,
-} from '@/lib/api/ai-steps';
-import { getConnectors } from '@/lib/api/connectors';
-import { getSkills, type Skill } from '@/lib/api/skills';
+import { listAiSteps, deleteAiStep, type AiStep } from '@/lib/api/ai-steps';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Sparkles, Loader2 } from 'lucide-react';
+import { Plus, Trash2, Sparkles, Loader2 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
-import { AiStepDialog, type AiStepFormData } from '@/components/actions/AiStepDialog';
 
 export default function AiStepsPage() {
   const { selectedOrgId } = useAdminViewStore();
   const allowed = useRequirePermission('agent_center_user');
   const { confirm } = useConfirmDialog();
+  const router = useRouter();
 
   const [items, setItems] = useState<AiStep[]>([]);
   const [loading, setLoading] = useState(true);
-  const [connectors, setConnectors] = useState<{ id: string; label: string }[]>([]);
-  const [skills, setSkills] = useState<Skill[]>([]);
-
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<AiStep | null>(null);
-  const [saving, setSaving] = useState(false);
 
   const load = useCallback(async () => {
     if (!selectedOrgId) return;
     setLoading(true);
     try {
-      const [rows, conns, skillsData] = await Promise.all([
-        listAiSteps(selectedOrgId),
-        getConnectors(selectedOrgId).catch(() => ({ connectors: [] as any[] })),
-        getSkills(selectedOrgId, { limit: 100 }).catch(() => ({ items: [] as Skill[] })),
-      ]);
-      setItems(rows);
-      setConnectors((conns.connectors ?? []).filter((c: any) => c.agent_enabled).map((c: any) => ({ id: c.id, label: c.connector_name ?? c.id })));
-      setSkills(skillsData.items ?? []);
+      setItems(await listAiSteps(selectedOrgId));
     } catch {
       toast.error('Failed to load AI steps');
     } finally {
@@ -54,41 +35,6 @@ export default function AiStepsPage() {
   }, [selectedOrgId]);
 
   useEffect(() => { load(); }, [load]);
-
-  const openCreate = () => { setEditing(null); setDialogOpen(true); };
-  const openEdit = (item: AiStep) => { setEditing(item); setDialogOpen(true); };
-
-  const handleSave = async (data: AiStepFormData) => {
-    if (!selectedOrgId) return;
-    setSaving(true);
-    try {
-      const payload = {
-        name: data.name.trim(),
-        description: data.description.trim() || null,
-        prompt: data.prompt,
-        model: data.model,
-        connector_ids: data.connector_ids,
-        outputs: data.outputs.filter((o) => o.key.trim()).map((o) => ({
-          key: o.key.trim(),
-          description: o.description.trim(),
-        })),
-        skill_ids: data.skill_ids,
-      };
-      if (editing) {
-        await updateAiStep(selectedOrgId, editing.id, payload);
-        toast.success('AI step updated');
-      } else {
-        await createAiStep(selectedOrgId, payload);
-        toast.success('AI step created');
-      }
-      setDialogOpen(false);
-      await load();
-    } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to save AI step');
-    } finally {
-      setSaving(false);
-    }
-  };
 
   const handleDelete = async (item: AiStep) => {
     if (!selectedOrgId) return;
@@ -111,7 +57,7 @@ export default function AiStepsPage() {
   if (!allowed) return <NoPermissionContent />;
 
   return (
-    <div className="flex flex-col gap-4 p-6 max-w-5xl mx-auto">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
@@ -119,7 +65,7 @@ export default function AiStepsPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">Reusable AI prompts that agent workflows can reference.</p>
         </div>
-        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> New AI Step</Button>
+        <Button onClick={() => router.push('/actions/ai-steps/create')}><Plus className="h-4 w-4 mr-1" /> New AI Step</Button>
       </div>
 
       {loading ? (
@@ -131,47 +77,47 @@ export default function AiStepsPage() {
           No AI steps yet. Create one to reuse prompts across agent workflows.
         </CardContent></Card>
       ) : (
-        <div className="space-y-2">
-          {items.map((item) => (
-            <Card key={item.id} className="hover:shadow-sm transition-shadow">
-              <CardContent className="p-4 flex items-start gap-4">
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="font-medium">{item.name}</span>
-                    <span className="text-[10px] font-mono text-muted-foreground">{item.model}</span>
-                    {item.connector_ids.length > 0 && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                        {item.connector_ids.length} connector{item.connector_ids.length !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                    {(item.skill_ids?.length ?? 0) > 0 && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
-                        {item.skill_ids!.length} skill{item.skill_ids!.length !== 1 ? 's' : ''}
-                      </span>
-                    )}
-                  </div>
-                  {item.description && <p className="text-xs text-muted-foreground mb-1.5">{item.description}</p>}
-                  <p className="text-xs font-mono line-clamp-2 text-muted-foreground/80">{item.prompt}</p>
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  <Button variant="ghost" size="sm" onClick={() => openEdit(item)}><Pencil className="h-4 w-4" /></Button>
-                  <Button variant="ghost" size="sm" onClick={() => handleDelete(item)} className="text-destructive hover:text-destructive"><Trash2 className="h-4 w-4" /></Button>
-                </div>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
+        <Card>
+          <div className="overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-xs text-muted-foreground">
+                <tr>
+                  <th className="text-left font-medium px-4 py-2">Name</th>
+                  <th className="text-left font-medium px-4 py-2 w-32">Model</th>
+                  <th className="text-left font-medium px-4 py-2">Description</th>
+                  <th className="w-16" />
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id} className="border-t hover:bg-muted/30 cursor-pointer transition-colors"
+                      onClick={() => router.push(`/actions/ai-steps/${item.id}`)}>
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{item.name}</span>
+                        {item.connector_ids.length > 0 && (
+                          <Badge variant="outline" className="text-[9px] h-4">{item.connector_ids.length} connector{item.connector_ids.length !== 1 ? 's' : ''}</Badge>
+                        )}
+                        {(item.outputs?.length ?? 0) > 0 && (
+                          <Badge variant="outline" className="text-[9px] h-4">{item.outputs.length} output{item.outputs.length !== 1 ? 's' : ''}</Badge>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs font-mono text-muted-foreground">{item.model?.replace('claude-', '')}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground truncate max-w-[300px]">{item.description || item.prompt?.slice(0, 80)}</td>
+                    <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
+                      <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive/50 hover:text-destructive"
+                        onClick={() => handleDelete(item)}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
-
-      <AiStepDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        step={editing}
-        connectors={connectors}
-        skills={skills}
-        saving={saving}
-        onSave={handleSave}
-      />
     </div>
   );
 }

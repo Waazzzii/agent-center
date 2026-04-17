@@ -189,7 +189,7 @@ export default function AiAgentPage() {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-3xl font-bold">AI Agent</h1>
+        <h1 className="text-2xl font-bold tracking-tight">AI Agent</h1>
         <p className="text-muted-foreground">Manage AI Agent settings for {selectedOrgName}</p>
       </div>
 

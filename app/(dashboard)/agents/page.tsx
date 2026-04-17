@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
@@ -11,8 +11,9 @@ import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Play, RefreshCw } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, RefreshCw, Bot } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
+import { useEventStream } from '@/lib/hooks/use-event-stream';
 
 export default function AgentsPage() {
   const router = useRouter();
@@ -29,18 +30,29 @@ export default function AgentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId]);
 
-  const loadAgents = async () => {
+  const loadAgents = async (silent = false) => {
     if (!selectedOrgId) return;
     try {
-      setLoading(true);
+      if (!silent) setLoading(true);
       const data = await getAgents(selectedOrgId);
       setAgents(data.agents);
     } catch (err: any) {
-      toast.error(err.message || 'Failed to load agents');
+      if (!silent) toast.error(err.message || 'Failed to load agents');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
+
+  // Realtime: refresh agents list when executions change (run started/completed)
+  const agentRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEventStream({
+    topics: selectedOrgId ? [`org:${selectedOrgId}:executions`] : [],
+    enabled: !!selectedOrgId,
+    onEvent: () => {
+      if (agentRefreshRef.current) clearTimeout(agentRefreshRef.current);
+      agentRefreshRef.current = setTimeout(() => loadAgents(true), 200);
+    },
+  });
 
   const handleRun = async (agentId: string, name: string) => {
     if (!selectedOrgId) return;
@@ -85,11 +97,11 @@ export default function AgentsPage() {
   if (!permitted) return <NoPermissionContent />;
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Agentic Workflows</h1>
-          <p className="text-muted-foreground">Automated workflows powered by LLMs and your connected systems</p>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Bot className="h-5 w-5 text-primary" /> Agents</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Automated workflows powered by LLMs and your connected systems</p>
         </div>
         <Button disabled={!selectedOrgId} onClick={() => router.push('/agents/create')}>
           <Plus className="mr-2 h-4 w-4" />
@@ -100,13 +112,13 @@ export default function AgentsPage() {
       {!selectedOrgId ? (
         <Card>
           <CardContent className="py-12 text-center">
-            <p className="text-muted-foreground">Select an organization to manage agents.</p>
+            <p className="text-sm text-muted-foreground mt-0.5">Select an organization to manage agents.</p>
           </CardContent>
         </Card>
       ) : (
         <Card>
           <CardHeader>
-            <CardTitle>Agentic Workflows</CardTitle>
+            <CardTitle>Agents</CardTitle>
             <CardDescription>{agents.length} workflow{agents.length !== 1 ? 's' : ''}</CardDescription>
           </CardHeader>
           <CardContent>

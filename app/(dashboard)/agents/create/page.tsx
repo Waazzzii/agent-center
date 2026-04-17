@@ -41,7 +41,7 @@ export default function CreateAgentPage() {
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
-        <h1 className="text-3xl font-bold">New Agent</h1>
+        <h1 className="text-2xl font-bold tracking-tight">New Agent</h1>
       </div>
 
       <Card>

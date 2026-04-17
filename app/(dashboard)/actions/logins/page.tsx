@@ -1,12 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   listLogins,
-  createLogin,
-  updateLogin,
   deleteLogin,
   verifyLogin,
   startLogin,
@@ -16,18 +15,14 @@ import { getBrowserRunStatus } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import {
-  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
-} from '@/components/ui/dialog';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  Plus, Pencil, Trash2, LogIn, Loader2, CheckCircle2, AlertCircle, HelpCircle,
+  Plus, Trash2, LogIn, Loader2, CheckCircle2, AlertCircle, HelpCircle,
   ShieldCheck,
 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
-import { LoginFormBody } from '@/components/actions/LoginFormBody';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
 import {
   listActiveVerifySessions,
@@ -55,7 +50,6 @@ function formatRelative(iso: string | null): string {
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
 
-// Active sessions that are still in terminal state should be cleared.
 const TERMINAL = new Set(['completed', 'failed', 'aborted']);
 
 // ─── Page ───────────────────────────────────────────────────
@@ -64,23 +58,18 @@ export default function LoginsPage() {
   const { selectedOrgId } = useAdminViewStore();
   const allowed = useRequirePermission('agent_center_user');
   const { confirm } = useConfirmDialog();
+  const router = useRouter();
 
   const [items, setItems] = useState<Login[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<Login | null>(null);
-  const [form, setForm] = useState({ name: '', url: '', verify_text: '' });
-  const [saving, setSaving] = useState(false);
-
   // Per-login "starting" state (during the initial POST call)
   const [starting, setStarting] = useState<Record<string, boolean>>({});
 
-  // Active sessions from localStorage, keyed by login id.  Populated on mount
-  // and kept in sync via subscribeActiveVerifySessions.
+  // Active sessions from localStorage, keyed by login id
   const [activeSessions, setActiveSessions] = useState<Record<string, ActiveVerifySession>>({});
 
-  // Which login's session (if any) is currently open in the HITL dialog
+  // Which login's session is currently open in the HITL dialog
   const [viewingLoginId, setViewingLoginId] = useState<string | null>(null);
 
   // ── Load active sessions from localStorage on mount + subscribe ──
@@ -95,8 +84,6 @@ export default function LoginsPage() {
   }, []);
 
   // ── Background poll: watch any active sessions for completion ──
-  // When a verify/login completes on the backend, reflect it in the UI by
-  // clearing the active session and reloading the logins list.
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     const activeIds = Object.keys(activeSessions);
@@ -116,7 +103,6 @@ export default function LoginsPage() {
             changed = true;
           }
         } catch {
-          // If the run is 404 (purged), clear it so the UI unfreezes
           clearActiveVerifySession(entityId);
           changed = true;
         }
@@ -125,16 +111,12 @@ export default function LoginsPage() {
         await load();
       }
     };
-    // Start immediately, then every 4s
     void tick();
     pollRef.current = setInterval(tick, 4000);
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [Object.keys(activeSessions).join(','), selectedOrgId]);
 
-  // `silent` = true for SSE-triggered refreshes — updates the list without
-  // flashing the loading spinner.  The initial page load and manual refresh
-  // use `silent = false` so the user sees a proper loading state.
   const load = useCallback(async (silent = false) => {
     if (!selectedOrgId) return;
     if (!silent) setLoading(true);
@@ -149,9 +131,7 @@ export default function LoginsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Realtime: silently reload when any login profile in this org changes.
-  // Coalesces rapid-fire events (e.g. verify + mark_logged_in arriving
-  // within ms) into a single reload.  No loading spinner — just swap data.
+  // ── Realtime: silently reload when any login in this org changes
   const loginRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEventStream({
     topics: selectedOrgId ? [`org:${selectedOrgId}:logins`] : [],
@@ -162,38 +142,6 @@ export default function LoginsPage() {
     },
   });
 
-  // ── CRUD ────────────────────────────────────────────────
-  const openCreate = () => {
-    setEditing(null);
-    setForm({ name: '', url: '', verify_text: '' });
-    setDialogOpen(true);
-  };
-  const openEdit = (item: Login) => {
-    setEditing(item);
-    setForm({ name: item.name, url: item.url, verify_text: item.verify_text });
-    setDialogOpen(true);
-  };
-  const handleSave = async () => {
-    if (!selectedOrgId) return;
-    if (!form.name.trim() || !form.url.trim() || !form.verify_text.trim()) return;
-    setSaving(true);
-    try {
-      if (editing) {
-        await updateLogin(selectedOrgId, editing.id, form);
-        toast.success('Login updated');
-      } else {
-        await createLogin(selectedOrgId, form);
-        toast.success('Login created');
-      }
-      setDialogOpen(false);
-      await load();
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e.response?.data?.error || 'Failed to save');
-    } finally {
-      setSaving(false);
-    }
-  };
   const handleDelete = async (item: Login) => {
     if (!selectedOrgId) return;
     const ok = await confirm({
@@ -247,7 +195,6 @@ export default function LoginsPage() {
         label: `Log in: ${item.name}`,
         mode: 'interactive',
       });
-      // For manual login, immediately open the browser view so the user can interact
       setViewingLoginId(item.id);
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
@@ -259,11 +206,10 @@ export default function LoginsPage() {
 
   if (!allowed) return <NoPermissionContent />;
 
-  // Currently-open session (if any) for the dialog
   const activeForDialog = viewingLoginId ? activeSessions[viewingLoginId] : null;
 
   return (
-    <div className="flex flex-col gap-4 p-6 max-w-5xl mx-auto">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
@@ -273,7 +219,7 @@ export default function LoginsPage() {
             Reusable login profiles.  One session per login, shared across every agent that uses it.
           </p>
         </div>
-        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-1" /> New Login</Button>
+        <Button onClick={() => router.push('/actions/logins/create')}><Plus className="h-4 w-4 mr-1" /> New Login</Button>
       </div>
 
       {loading ? (
@@ -285,91 +231,61 @@ export default function LoginsPage() {
           No logins yet. Create one to share auth sessions across agents.
         </CardContent></Card>
       ) : (
-        <div className="space-y-1">
-          {items.map((item) => {
-            const active = activeSessions[item.id];
-            const isStarting = !!starting[item.id];
-            const needsLogin = item.status === 'needs_login';
+        <Card>
+          <div className="overflow-hidden">
+            <table className="w-full text-sm">
+              <thead className="bg-muted/40 text-xs text-muted-foreground">
+                <tr>
+                  <th className="text-left font-medium px-4 py-2">Name</th>
+                  <th className="text-left font-medium px-4 py-2">URL</th>
+                  <th className="text-left font-medium px-4 py-2 w-28">Status</th>
+                  <th className="text-left font-medium px-4 py-2 w-28">Last Checked</th>
+                  <th className="w-32" />
+                </tr>
+              </thead>
+              <tbody>
+                {items.map((item) => {
+                  const active = activeSessions[item.id];
+                  const isStarting = !!starting[item.id];
+                  const needsLogin = item.status === 'needs_login';
 
-            return (
-              <Card key={item.id} className="hover:shadow-sm transition-shadow">
-                <CardContent className="p-3 flex items-center gap-3">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-sm font-medium">{item.name}</span>
-                      <StatusPill status={item.status} />
-                      {active && (
-                        <Badge variant="outline" className="gap-1 text-[10px] h-5 border-blue-400 text-blue-600 dark:text-blue-400">
-                          <Loader2 className="h-2.5 w-2.5 animate-spin" />
-                          {active.label}
-                        </Badge>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground mt-0.5">
-                      <span className="font-mono truncate max-w-[200px]">{item.url}</span>
-                      <span className="opacity-40">·</span>
-                      <span>logged in {formatRelative(item.last_logged_in_at)}</span>
-                      <span className="opacity-40">·</span>
-                      <span>checked {formatRelative(item.last_checked_at)}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1 shrink-0">
-                    {/* No persistent "view browser" icon — browser sessions
-                        are ephemeral.  Close tears them down and they spin
-                        back up the next time they're needed. */}
-
-                    {/* Primary action: Log In (if needs_login) or Verify (otherwise) */}
-                    {needsLogin ? (
-                      <Button
-                        size="sm"
-                        onClick={() => handleLogin(item)}
-                        disabled={isStarting || !!active}
-                        className="bg-amber-600 hover:bg-amber-700 text-white"
-                      >
-                        {isStarting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <LogIn className="h-3.5 w-3.5" />}
-                        <span className="ml-1">Log In</span>
-                      </Button>
-                    ) : (
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => handleVerify(item)}
-                        disabled={isStarting || !!active}
-                      >
-                        {isStarting || active ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldCheck className="h-3.5 w-3.5" />}
-                        <span className="ml-1">{active ? 'Verifying…' : 'Verify'}</span>
-                      </Button>
-                    )}
-
-                    <Button variant="ghost" size="sm" onClick={() => openEdit(item)} disabled={!!active}><Pencil className="h-4 w-4" /></Button>
-                    <Button variant="ghost" size="sm" onClick={() => handleDelete(item)} className="text-destructive hover:text-destructive" disabled={!!active}><Trash2 className="h-4 w-4" /></Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                  return (
+                    <tr key={item.id} className="border-t hover:bg-muted/30 cursor-pointer transition-colors"
+                        onClick={() => router.push(`/actions/logins/${item.id}`)}>
+                      <td className="px-4 py-2.5 font-medium">{item.name}</td>
+                      <td className="px-4 py-2.5 text-xs font-mono text-muted-foreground truncate max-w-[200px]">{item.url}</td>
+                      <td className="px-4 py-2.5"><StatusPill status={item.status} /></td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(item.last_checked_at)}</td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
+                          {needsLogin ? (
+                            <Button size="sm" onClick={() => handleLogin(item)} disabled={isStarting || !!active}
+                              className="bg-amber-600 hover:bg-amber-700 text-white h-7 text-xs">
+                              {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
+                              <span className="ml-1">Log In</span>
+                            </Button>
+                          ) : (
+                            <Button variant="outline" size="sm" onClick={() => handleVerify(item)} disabled={isStarting || !!active} className="h-7 text-xs">
+                              {isStarting || active ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+                              <span className="ml-1">{active ? 'Verifying...' : 'Verify'}</span>
+                            </Button>
+                          )}
+                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive/50 hover:text-destructive"
+                            onClick={() => handleDelete(item)} disabled={!!active}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </Card>
       )}
 
-      {/* Create / Edit dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{editing ? 'Edit Login' : 'New Login'}</DialogTitle>
-          </DialogHeader>
-          <LoginFormBody form={form} setForm={setForm} />
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim() || !form.verify_text.trim()}>
-              {saving ? 'Saving…' : editing ? 'Save' : 'Create'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Live browser view.
-          - Verify runs: observe mode — user can close (session keeps running) or Abort to kill.
-          - Manual login: interactive mode — close disabled, only Done or Abort exit the flow. */}
+      {/* Live browser view */}
       {activeForDialog && (
         <BrowserHITLDialog
           open={!!viewingLoginId}

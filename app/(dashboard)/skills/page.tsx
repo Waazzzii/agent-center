@@ -10,7 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, Pencil, Trash2, ChevronLeft, ChevronRight, Wand2 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 
 const PAGE_SIZE = 20;
@@ -134,11 +134,11 @@ export default function SkillsPage() {
   if (!permitted) return <NoPermissionContent />;
 
   return (
-    <div className="space-y-6">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Skills</h1>
-          <p className="text-muted-foreground">Reusable prompt instructions for agent steps</p>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Wand2 className="h-5 w-5 text-primary" /> Skills</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Reusable prompt instructions for agent steps</p>
         </div>
         <Button size="sm" disabled={!selectedOrgId} onClick={() => router.push('/skills/create')}>
           <Plus className="mr-2 h-4 w-4" />
@@ -149,7 +149,7 @@ export default function SkillsPage() {
       {!selectedOrgId ? (
         <Card>
           <CardContent className="py-12 text-center">
-            <p className="text-muted-foreground">Select an organization to manage skills.</p>
+            <p className="text-sm text-muted-foreground mt-0.5">Select an organization to manage skills.</p>
           </CardContent>
         </Card>
       ) : (

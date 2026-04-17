@@ -166,7 +166,7 @@ export default function BillingPage() {
   const runsPages = Math.max(1, Math.ceil(runsTotal / 15));
 
   return (
-    <div className="flex flex-col gap-4 p-6 max-w-[1400px] mx-auto">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>

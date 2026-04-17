@@ -207,7 +207,7 @@ export default function InteractionsPage() {
   if (!allowed) return <NoPermissionContent />;
 
   return (
-    <div className="flex flex-col gap-4 p-6 max-w-5xl mx-auto">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">

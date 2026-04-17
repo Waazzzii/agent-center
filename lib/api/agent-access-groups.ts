@@ -10,6 +10,8 @@ export interface AgentAccessGroup {
   organization_id: string;
   name: string;
   created_at: string;
+  login_count?: number;
+  approval_count?: number;
   member_count: number;
 }
 
@@ -70,19 +72,47 @@ export async function getAgentOrgUsers(orgId: string) {
   return res.data.users;
 }
 
-// ── Agent assignments ─────────────────────────────────────────────────────────
+// ── Group usage (which logins + approvals use this group) ────────────────────
 
-export async function getAssignedAccessGroups(orgId: string, agentId: string) {
+export interface GroupUsageLogin { id: string; name: string; url: string; status: string; }
+export interface GroupUsageApproval { id: string; action_name: string; agent_name: string; agent_id: string; }
+
+export async function getGroupUsage(orgId: string, groupId: string): Promise<{ logins: GroupUsageLogin[]; approvals: GroupUsageApproval[] }> {
+  const res = await agentClient.get<{ logins: GroupUsageLogin[]; approvals: GroupUsageApproval[] }>(
+    `/api/admin/${orgId}/access-groups/${groupId}/usage`
+  );
+  return res.data;
+}
+
+// ── Action-level group assignments ───────────────────────────────────────────
+
+export async function getActionAccessGroups(orgId: string, actionId: string) {
   const res = await agentClient.get<{ groups: AgentAccessGroup[] }>(
-    `/api/admin/${orgId}/agents/${agentId}/access-groups`
+    `/api/admin/${orgId}/actions/${actionId}/access-groups`
   );
   return res.data.groups;
 }
 
-export async function assignAccessGroupToAgent(orgId: string, agentId: string, groupId: string) {
-  await agentClient.post(`/api/admin/${orgId}/agents/${agentId}/access-groups`, { group_id: groupId });
+export async function setActionAccessGroups(orgId: string, actionId: string, groupIds: string[]) {
+  await agentClient.put(`/api/admin/${orgId}/actions/${actionId}/access-groups`, { group_ids: groupIds });
 }
 
-export async function unassignAccessGroupFromAgent(orgId: string, agentId: string, groupId: string) {
-  await agentClient.delete(`/api/admin/${orgId}/agents/${agentId}/access-groups/${groupId}`);
+// ── Login-level group assignments (centralized per login profile) ────────────
+
+export async function getLoginAccessGroups(orgId: string, loginId: string) {
+  const res = await agentClient.get<{ groups: AgentAccessGroup[] }>(
+    `/api/admin/${orgId}/logins/${loginId}/access-groups`
+  );
+  return res.data.groups;
 }
+
+export async function setLoginAccessGroups(orgId: string, loginId: string, groupIds: string[]) {
+  await agentClient.put(`/api/admin/${orgId}/logins/${loginId}/access-groups`, { group_ids: groupIds });
+}
+
+// Legacy — kept for backwards compat during migration, can be removed later
+export async function getAssignedAccessGroups(orgId: string, agentId: string) {
+  return [] as AgentAccessGroup[];
+}
+export async function assignAccessGroupToAgent(_orgId: string, _agentId: string, _groupId: string) {}
+export async function unassignAccessGroupFromAgent(_orgId: string, _agentId: string, _groupId: string) {}

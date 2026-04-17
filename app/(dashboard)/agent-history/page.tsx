@@ -191,164 +191,110 @@ function RunsTable({
 }) {
   const router = useRouter();
   return (
-    <div className="divide-y">
-      {runs.map((run) => {
-        const actions = run.action_logs ?? [];
-        const displayStatus = run.display_status ?? run.status;
-        const isRunning     = run.status === 'executing' || run.status === 'provisioning';
-        const isAwaiting    = run.status === 'awaiting_approval';
-        const durationMs =
-          run.completed_at
-            ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
-            : isRunning || isAwaiting
-              ? Date.now() - new Date(run.started_at).getTime()
-              : null;
-        const costUsd = typeof run.cost_usd === 'string' ? parseFloat(run.cost_usd) : (run.cost_usd ?? 0);
-        const tokensTotal = (run.tokens_input ?? 0) + (run.tokens_output ?? 0);
-        const childCount = run.child_count ?? 0;
+    <div>
+      {/* Column headers */}
+      <div className="hidden md:grid grid-cols-[1fr_140px_80px_80px_70px_100px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 border-b">
+        <span>Agent</span>
+        <span>Status</span>
+        <span>Trigger</span>
+        <span className="text-right">Duration</span>
+        <span className="text-right">Tokens</span>
+        <span className="text-right">Cost</span>
+        <span />
+      </div>
 
-        return (
-          <div
-            key={run.id}
-            className="cursor-pointer hover:bg-muted/40 transition-colors px-3 py-2"
-            onClick={() => router.push(`/agent-history/${run.id}`)}
-          >
-            <div className="flex items-start gap-3">
-              {/* Leading status glyph */}
-              <div className="pt-1 shrink-0">
-                <StatusGlyph status={displayStatus} />
-              </div>
+      {/* Rows */}
+      <div className="divide-y divide-border/40">
+        {runs.map((run) => {
+          const actions = run.action_logs ?? [];
+          const displayStatus = run.display_status ?? run.status;
+          const isRunning     = run.status === 'executing' || run.status === 'provisioning';
+          const isAwaiting    = run.status === 'awaiting_approval';
+          const durationMs =
+            run.completed_at
+              ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
+              : isRunning || isAwaiting ? Date.now() - new Date(run.started_at).getTime() : null;
+          const costUsd = typeof run.cost_usd === 'string' ? parseFloat(run.cost_usd) : (run.cost_usd ?? 0);
+          const tokensTotal = (run.tokens_input ?? 0) + (run.tokens_output ?? 0);
+          const childCount = run.child_count ?? 0;
+          const completedSteps = actions.filter((a) => a.status === 'completed' || a.status === 'approved').length;
 
-              <div className="flex-1 min-w-0">
-                {/* Row 1: name + badges */}
-                <div className="flex items-center gap-2 flex-wrap">
-                  {run.depth > 0 && <GitBranch className="h-3.5 w-3.5 text-indigo-500 shrink-0" />}
-                  <span className={cn(
-                    'font-medium text-sm',
-                    run.depth > 0 && 'text-indigo-700 dark:text-indigo-400'
-                  )}>
-                    {run.agent_name}
-                  </span>
-                  {run.item_index != null && (
-                    <span className="text-[10px] font-mono text-muted-foreground">#{run.item_index}</span>
-                  )}
-                  <TriggerBadge type={run.trigger_type} />
+          return (
+            <div key={run.id} className="cursor-pointer hover:bg-muted/30 transition-colors"
+                 onClick={() => router.push(`/agent-history/${run.id}`)}>
+
+              {/* Desktop: column layout */}
+              <div className="hidden md:grid grid-cols-[1fr_140px_80px_80px_70px_100px_60px] gap-2 items-center px-3 py-2">
+                {/* Agent */}
+                <div className="flex items-center gap-2 min-w-0">
+                  <StatusGlyph status={displayStatus} />
+                  {run.depth > 0 && <GitBranch className="h-3 w-3 text-indigo-500 shrink-0" />}
+                  <span className={cn('text-sm font-medium truncate', run.depth > 0 && 'text-indigo-600 dark:text-indigo-400')}>{run.agent_name}</span>
                   {childCount > 0 && (
-                    <Badge variant="outline" className="gap-1 text-[10px] h-5 border-indigo-300 text-indigo-600 dark:text-indigo-400">
-                      <GitBranch className="h-2.5 w-2.5" />
-                      {childCount} sub-agent{childCount === 1 ? '' : 's'}
-                    </Badge>
+                    <span className="text-[9px] text-indigo-500 shrink-0">{childCount} sub</span>
                   )}
-                  <StatusBadge status={displayStatus} />
-                  {run.has_active_browser && (
-                    <Badge variant="outline" className="gap-1 text-[10px] h-5 border-blue-300 text-blue-600 dark:text-blue-400">
-                      <Monitor className="h-2.5 w-2.5" />
-                      browser
-                    </Badge>
-                  )}
+                  {run.has_active_browser && <Monitor className="h-3 w-3 text-blue-500 shrink-0" />}
                 </div>
-
-                {/* Row 2: progress dots */}
-                {actions.length > 0 && (
-                  <div className="flex items-center gap-0.5 mt-2">
-                    {actions.map((a) => (
-                      <span
-                        key={a.id}
-                        className={cn(
-                          'h-1.5 rounded-full transition-all',
-                          a.status === 'completed' || a.status === 'approved' ? 'bg-emerald-500 w-5' :
-                          a.status === 'failed'    ? 'bg-red-500 w-5' :
-                          a.status === 'aborted'   ? 'bg-red-400 w-5' :
-                          a.status === 'awaiting_approval' ? 'bg-amber-500 w-5 animate-pulse' :
-                          a.status === 'executing' ? 'bg-blue-500 w-5 animate-pulse' :
-                          a.status === 'denied'    ? 'bg-red-600 w-5' :
-                          'bg-muted w-3'
-                        )}
-                        title={`${a.action_name ?? a.action_type} · ${a.status}`}
-                      />
-                    ))}
-                    <span className="text-[10px] text-muted-foreground ml-2 tabular-nums">
-                      {actions.filter((a) => a.status === 'completed' || a.status === 'approved').length}/{actions.length}
-                    </span>
-                  </div>
-                )}
-
-                {/* Row 3: meta */}
-                <div className="flex items-center gap-3 mt-1.5 text-xs text-muted-foreground flex-wrap">
-                  <span>{formatDate(run.started_at)}</span>
-                  {durationMs != null && (
-                    <>
-                      <span>·</span>
-                      <span className="tabular-nums">{formatDuration(durationMs)}{isRunning || isAwaiting ? ' so far' : ''}</span>
-                    </>
+                {/* Status */}
+                <StatusBadge status={displayStatus} />
+                {/* Trigger */}
+                <TriggerBadge type={run.trigger_type} />
+                {/* Duration */}
+                <span className="text-xs text-muted-foreground tabular-nums text-right">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
+                {/* Tokens */}
+                <span className="text-xs text-muted-foreground tabular-nums text-right">
+                  {tokensTotal > 0 ? (tokensTotal >= 1000 ? `${(tokensTotal / 1000).toFixed(1)}K` : tokensTotal) : '—'}
+                </span>
+                {/* Cost */}
+                <span className="text-xs tabular-nums text-right text-emerald-700 dark:text-emerald-400">
+                  {costUsd > 0 ? (costUsd < 0.01 ? '< $0.01' : `$${costUsd.toFixed(2)}`) : '—'}
+                </span>
+                {/* Actions */}
+                <div className="flex items-center justify-end gap-0.5">
+                  {onAbort && (ABORTABLE_STATUSES as readonly string[]).includes(run.status) && (
+                    <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive/50 hover:text-destructive"
+                      disabled={abortingRunId === run.id}
+                      onClick={(e) => { e.stopPropagation(); onAbort(run); }}>
+                      {abortingRunId === run.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
+                    </Button>
                   )}
-                  {tokensTotal > 0 && (
-                    <>
-                      <span>·</span>
-                      <span className="tabular-nums">
-                        {tokensTotal >= 1000 ? `${(tokensTotal / 1000).toFixed(1)}K` : tokensTotal} tokens
-                      </span>
-                    </>
-                  )}
-                  {costUsd > 0 && (
-                    <>
-                      <span>·</span>
-                      <span className="tabular-nums text-emerald-700 dark:text-emerald-400">
-                        {costUsd < 0.01 ? '< $0.01' : `$${costUsd.toFixed(2)}`}
-                      </span>
-                    </>
-                  )}
-                  <span className="font-mono opacity-60">·  {run.id.slice(-6).toUpperCase()}</span>
                 </div>
               </div>
 
-              {/* Actions */}
-              <div className="flex items-center gap-0.5 shrink-0">
-                {isAwaiting && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-amber-500 hover:text-amber-600 hover:bg-amber-50 dark:hover:bg-amber-950/40"
-                    title="Go to Interactions"
-                    asChild
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <Link href={`/interactions`}>
-                      <ArrowUpRight className="h-3.5 w-3.5" />
-                    </Link>
-                  </Button>
-                )}
-                {run.has_active_browser && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-muted-foreground hover:text-foreground"
-                    title="Open live browser view"
-                    onClick={(e) => { e.stopPropagation(); onOpenBrowser(run); }}
-                  >
-                    <Monitor className="h-3.5 w-3.5" />
-                  </Button>
-                )}
-                {onAbort && (ABORTABLE_STATUSES as readonly string[]).includes(run.status) && (
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 text-destructive/70 hover:text-destructive hover:bg-destructive/10"
-                    title={run.status === 'queued' ? 'Remove from queue' : 'Abort run'}
-                    disabled={abortingRunId === run.id}
-                    onClick={(e) => { e.stopPropagation(); onAbort(run); }}
-                  >
-                    {abortingRunId === run.id
-                      ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                      : <XCircle className="h-3.5 w-3.5" />
-                    }
-                  </Button>
-                )}
+              {/* Progress bar below the row */}
+              {(run.total_actions ?? actions.length) > 0 && (
+                <div className="flex items-center gap-0.5 px-3 pb-1.5 -mt-0.5">
+                  {actions.map((a) => (
+                    <span key={a.id} className={cn(
+                      'h-1 rounded-full w-4',
+                      a.status === 'completed' || a.status === 'approved' ? 'bg-emerald-500' :
+                      a.status === 'failed' ? 'bg-red-500' :
+                      a.status === 'executing' ? 'bg-blue-500 animate-pulse' :
+                      a.status === 'awaiting_approval' ? 'bg-amber-500 animate-pulse' :
+                      'bg-muted'
+                    )} title={`${a.action_name ?? a.action_type} · ${a.status}`} />
+                  ))}
+                  {/* Remaining steps not yet started */}
+                  {Array.from({ length: Math.max(0, (run.total_actions ?? actions.length) - actions.length) }).map((_, i) => (
+                    <span key={`pending-${i}`} className="h-1 w-4 rounded-full bg-muted/50" />
+                  ))}
+                  <span className="text-[9px] text-muted-foreground/40 ml-1 tabular-nums">{completedSteps}/{run.total_actions ?? actions.length}</span>
+                </div>
+              )}
+
+              {/* Mobile: stacked */}
+              <div className="md:hidden px-3 py-2 space-y-1">
+                <div className="flex items-center gap-2">
+                  <StatusGlyph status={displayStatus} />
+                  <span className="font-medium text-sm truncate">{run.agent_name}</span>
+                  <StatusBadge status={displayStatus} />
+                </div>
+                <div className="text-xs text-muted-foreground">{formatDate(run.started_at)} · {durationMs != null ? formatDuration(durationMs) : '—'}</div>
               </div>
             </div>
-          </div>
-        );
-      })}
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -608,17 +554,29 @@ export default function AgentExecutionsPage() {
   // Card-based feed — no grid header needed (info is inline per card).
 
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
+      {/* Header + pagination */}
+      <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold">Agent Executions</h1>
-          <p className="text-muted-foreground">Live and historical runs for all agents</p>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><History className="h-5 w-5 text-primary" /> Executions</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Live and historical agent runs</p>
         </div>
-        <Button variant="outline" onClick={handleRefresh} disabled={loading || !selectedOrgId}>
-          <RefreshCw className={cn('mr-2 h-4 w-4', loading && 'animate-spin')} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          {totalPages > 1 && (
+            <div className="flex items-center gap-1 text-xs text-muted-foreground">
+              <span className="tabular-nums">{(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}</span>
+              <Button variant="outline" size="icon" className="h-7 w-7" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="outline" size="icon" className="h-7 w-7" disabled={page >= totalPages} onClick={() => goToPage(page + 1)}>
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          )}
+          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading || !selectedOrgId}>
+            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+          </Button>
+        </div>
       </div>
 
       {!selectedOrgId ? (
@@ -959,60 +917,6 @@ export default function AgentExecutionsPage() {
                     onAbort={handleAbort}
                     abortingRunId={abortingRunId}
                   />
-
-                  {/* Pagination */}
-                  {totalPages > 1 && (
-                    <div className="flex items-center justify-between border-t px-4 py-3">
-                      <span className="text-xs text-muted-foreground">
-                        Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total.toLocaleString()}
-                      </span>
-                      <div className="flex items-center gap-1">
-                        <Button
-                          variant="outline" size="sm"
-                          disabled={page <= 1}
-                          onClick={() => goToPage(page - 1)}
-                        >
-                          <ChevronLeft className="h-4 w-4" />
-                        </Button>
-                        {Array.from({ length: Math.min(totalPages, 7) }, (_, i) => {
-                          let pg: number;
-                          if (totalPages <= 7) {
-                            pg = i + 1;
-                          } else if (page <= 4) {
-                            pg = i + 1;
-                            if (i === 6) pg = totalPages;
-                            if (i === 5) pg = -1;
-                          } else if (page >= totalPages - 3) {
-                            pg = i === 0 ? 1 : i === 1 ? -1 : totalPages - (6 - i);
-                          } else {
-                            const map = [1, -1, page - 1, page, page + 1, -2, totalPages];
-                            pg = map[i]!;
-                          }
-                          if (pg < 0) return (
-                            <span key={`ellipsis-${i}`} className="px-1 text-muted-foreground text-sm">…</span>
-                          );
-                          return (
-                            <Button
-                              key={pg}
-                              variant={pg === page ? 'default' : 'outline'}
-                              size="sm"
-                              className="w-8 h-8 p-0 text-xs"
-                              onClick={() => goToPage(pg)}
-                            >
-                              {pg}
-                            </Button>
-                          );
-                        })}
-                        <Button
-                          variant="outline" size="sm"
-                          disabled={page >= totalPages}
-                          onClick={() => goToPage(page + 1)}
-                        >
-                          <ChevronRight className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </div>
-                  )}
                 </>
               )}
             </CardContent>

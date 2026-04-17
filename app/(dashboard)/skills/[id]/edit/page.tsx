@@ -87,7 +87,7 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
-        <h1 className="text-3xl font-bold">{skill?.name ?? 'Edit Skill'}</h1>
+        <h1 className="text-2xl font-bold tracking-tight">{skill?.name ?? 'Edit Skill'}</h1>
       </div>
 
       <Tabs defaultValue="settings">

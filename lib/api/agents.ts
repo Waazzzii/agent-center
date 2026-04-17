@@ -250,6 +250,8 @@ export interface ExecutionRun {
   completed_at: string | null;
   metadata: Record<string, unknown>;
   action_logs: ExecutionAction[];
+  /** Total number of actions defined in the agent's workflow (not just logged ones). */
+  total_actions?: number;
   /** Sub-agent tree tracking */
   parent_execution_id: string | null;
   depth: number;
@@ -432,6 +434,9 @@ export interface FullTreeNode {
   batch_item_index?: number | null;
   // Children
   children?: FullTreeNode[];
+  // Ancestor breadcrumb (only on root node) — from top-level agent down to this execution's parent
+  // type='execution' for agent nodes, type='action' for the sub_agent action that spawned a child
+  ancestors?: { id: string; label: string; item_index?: number | null; depth?: number; type?: string; parent_id?: string }[];
 }
 
 export async function getFullExecutionTree(orgId: string, executionId: string): Promise<FullTreeNode> {

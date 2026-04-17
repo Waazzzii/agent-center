@@ -42,7 +42,7 @@ export default function CreateSkillPage() {
           <ArrowLeft className="mr-2 h-4 w-4" />
           Back
         </Button>
-        <h1 className="text-3xl font-bold">New Skill</h1>
+        <h1 className="text-2xl font-bold tracking-tight">New Skill</h1>
       </div>
 
       <Card>

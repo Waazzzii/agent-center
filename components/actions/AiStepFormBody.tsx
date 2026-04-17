@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select';
 import { Plus, Trash2, ArrowUpFromLine } from 'lucide-react';
 import { InputsList, parseVars } from './InputsList';
+import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 
 export interface ConnectorOption { id: string; label: string; }
 
@@ -202,44 +203,26 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
       {connectors.length > 0 && (
         <div className="space-y-1">
           <Label>Connectors (MCP tools)</Label>
-          <div className="flex flex-wrap gap-1.5">
-            {connectors.map((c) => {
-              const active = form.connector_ids.includes(c.id);
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  disabled={readOnly}
-                  onClick={() => toggleConnector(c.id)}
-                  className={`text-xs px-2 py-0.5 rounded border transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${active ? 'bg-primary text-primary-foreground border-primary' : 'bg-background border-border hover:border-foreground/30'}`}
-                >
-                  {c.label}
-                </button>
-              );
-            })}
-          </div>
+          <MultiSelectTags
+            options={connectors.map((c) => ({ value: c.id, label: c.label }))}
+            selected={form.connector_ids}
+            onChange={(ids) => setForm((f) => ({ ...f, connector_ids: ids }))}
+            placeholder="Select connectors…"
+            disabled={readOnly}
+          />
         </div>
       )}
 
       {skills.length > 0 && (
         <div className="space-y-1">
           <Label>Skills</Label>
-          <div className="flex flex-wrap gap-1.5">
-            {skills.map((s) => {
-              const active = form.skill_ids.includes(s.id);
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  disabled={readOnly}
-                  onClick={() => toggleSkill(s.id)}
-                  className={`text-xs px-2 py-0.5 rounded border transition-colors disabled:cursor-not-allowed disabled:opacity-70 ${active ? 'bg-primary text-primary-foreground border-primary' : 'bg-background border-border hover:border-foreground/30'}`}
-                >
-                  {s.name}
-                </button>
-              );
-            })}
-          </div>
+          <MultiSelectTags
+            options={skills.map((s) => ({ value: s.id, label: s.name }))}
+            selected={form.skill_ids}
+            onChange={(ids) => setForm((f) => ({ ...f, skill_ids: ids }))}
+            placeholder="Select skills…"
+            disabled={readOnly}
+          />
         </div>
       )}
     </div>
