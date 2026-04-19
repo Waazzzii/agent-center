@@ -3,9 +3,11 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "next-themes";
 import { TokenRefreshProvider } from "@/components/auth/TokenRefreshProvider";
+import { SessionProvider } from "@/components/auth/SessionProvider";
 import { getAgentCenterBranding } from "@/lib/branding";
-import { headers } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { BrandingProvider } from "@/components/branding/BrandingProvider";
+import { COOKIE_NAME, getSessionFromToken } from "@/lib/auth";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -45,6 +47,9 @@ export default async function RootLayout({
 }>) {
   const incomingHeaders = await headers();
   const host = incomingHeaders.get("host") ?? "";
+  const cookieStore = await cookies();
+  const token = cookieStore.get(COOKIE_NAME)?.value;
+  const session = token ? await getSessionFromToken(token, host) : null;
 
   const branding = await getAgentCenterBranding(host);
 
@@ -71,8 +76,10 @@ export default async function RootLayout({
       >
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <BrandingProvider hasLogo={!!branding.logo_storage_path} logoVersion={logoVersion}>
-            <TokenRefreshProvider />
-            {children}
+            <SessionProvider session={session}>
+              <TokenRefreshProvider />
+              {children}
+            </SessionProvider>
             <Toaster
               position="bottom-right"
               richColors

@@ -30,7 +30,6 @@ import {
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/ui.store';
-import { logout } from '@/lib/auth/oauth';
 import { orgMainNavItems as mainItems } from '@/lib/nav';
 import { useBranding } from '@/components/branding/BrandingProvider';
 
@@ -126,7 +125,12 @@ export function ViewModeSidebar() {
 
   const handleLogout = async () => {
     clearAuth();
-    await logout();
+    // POST to server signout so httpOnly cookies are actually cleared.
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/auth/signout';
+    document.body.appendChild(form);
+    form.submit();
   };
 
   const visibleNavItems = orgMainNavItems.filter((item) => {

@@ -3,8 +3,8 @@
  *
  * Platform-agnostic — how to read the expiry and how to perform the refresh
  * are injected via TokenRefreshOptions. This keeps the core logic identical
- * across wazzi-kb (cookie-based tokens) and wazzi-frontend (localStorage-based
- * tokens) with no duplication.
+ * across all products (admin-center, agent-center, wazzi-frontend, wazzi-kb),
+ * which all use the same httpOnly-cookie + server-side refresh-route pattern.
  *
  * Multi-tab safety via navigator.locks:
  *   - Only one tab performs the network refresh at a time.

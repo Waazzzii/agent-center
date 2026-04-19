@@ -43,7 +43,6 @@ interface Options {
   enabled?: boolean;
 }
 
-const AGENT_API_URL = process.env.NEXT_PUBLIC_AGENT_API_URL || 'http://localhost:8080';
 const MAX_BACKOFF_MS = 30_000;
 
 export function useEventStream({ topics, onEvent, enabled = true }: Options) {
@@ -67,18 +66,13 @@ export function useEventStream({ topics, onEvent, enabled = true }: Options) {
       if (disposed) return;
       if (document.visibilityState === 'hidden') return; // wait for visible
 
-      const token = localStorage.getItem('access_token');
-      if (!token) {
-        // No token yet — try again shortly.  Avoid spamming.
-        reconnectTimer = setTimeout(open, 2000);
-        return;
-      }
-
-      const url = new URL(`${AGENT_API_URL}/events/stream`);
+      // Same-origin path — the /api/agent BFF catchall injects the cookie-
+      // derived bearer token before forwarding to agent-backend, and streams
+      // the SSE response back. No access token in the URL.
+      const url = new URL('/api/agent/events/stream', window.location.origin);
       url.searchParams.set('topics', topics.join(','));
-      url.searchParams.set('token', token);
 
-      es = new EventSource(url.toString());
+      es = new EventSource(url.toString(), { withCredentials: true });
 
       es.addEventListener('hello', () => {
         backoffMs = 1000; // reset backoff on successful handshake

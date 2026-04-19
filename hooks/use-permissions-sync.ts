@@ -21,7 +21,8 @@ import type { ProductUser } from "@/types/api.types";
 
 const BASE_RETRY_MS = 2_000;
 const MAX_RETRY_MS = 60_000;
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "";
+// Same-origin BFF — catchall injects bearer and streams SSE through.
+const API_URL = "/api/backend";
 
 export function usePermissionsSync() {
   const admin = useAuthStore((s) => s.admin);

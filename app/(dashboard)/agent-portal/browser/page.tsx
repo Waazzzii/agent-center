@@ -15,7 +15,7 @@ export default function BrowserPage() {
 
   const agentBackendUrl =
     typeof window !== 'undefined'
-      ? process.env.NEXT_PUBLIC_AGENT_API_URL ?? 'http://localhost:8080'
+      ? process.env.NEXT_PUBLIC_AGENT_API_URL ?? 'http://localhost:4001'
       : '';
 
   const load = async () => {

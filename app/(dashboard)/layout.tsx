@@ -1,41 +1,42 @@
 'use client';
 
 import { useEffect } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { ViewModeSidebar } from '@/components/layout/ViewModeSidebar';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 import { usePermissionsSync } from '@/hooks/use-permissions-sync';
-import { redirectToAuth } from '@/lib/auth/oauth';
 
 export default function DashboardLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const router = useRouter();
-  const { admin } = useAuthStore();
+  // Middleware guarantees a session cookie; SessionProvider hydrates the store.
+  // If admin is somehow null here, the signout route clears cookies and the
+  // next middleware pass will bounce to /auth/login.
+  const { admin, hydrated } = useAuthStore();
   const { selectedOrgId, switchToOrgAdminView } = useAdminViewStore();
 
   usePermissionsSync();
 
   useEffect(() => {
+    // Wait for SessionProvider to hydrate before treating a null admin as
+    // an invalidated session — otherwise we race the provider's effect.
+    if (!hydrated) return;
+
     if (!admin) {
-      if (typeof window !== 'undefined') {
-        sessionStorage.setItem('post_login_redirect', window.location.pathname + window.location.search);
-      }
-      redirectToAuth();
+      // Session invalidated mid-use — drop cookies and let middleware redirect.
+      window.location.replace('/auth/signout');
       return;
     }
 
-    // Set org context from the user's token if not already set
     if (!selectedOrgId && admin.organization_id) {
       switchToOrgAdminView(admin.organization_id, admin.organization_id);
     }
-  }, [admin, selectedOrgId, router, switchToOrgAdminView]);
+  }, [admin, hydrated, selectedOrgId, switchToOrgAdminView]);
 
-  if (!admin) {
+  if (!hydrated || !admin) {
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
