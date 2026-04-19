@@ -42,8 +42,7 @@ import {
 import { cn } from '@/lib/utils';
 import { BottomPanel } from './panels';
 import { ProvisioningNotice } from '@/components/hitl/ProvisioningNotice';
-
-const agentApiUrl = process.env.NEXT_PUBLIC_AGENT_API_URL ?? '';
+import { AGENT_BACKEND_URL as agentApiUrl } from '@/lib/config';
 
 interface RunScriptModalProps {
   script: BrowserScript | null;

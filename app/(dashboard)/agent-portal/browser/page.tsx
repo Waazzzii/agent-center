@@ -6,6 +6,7 @@ import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { Monitor, Loader2, WifiOff, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { AGENT_BACKEND_URL } from '@/lib/config';
 
 export default function BrowserPage() {
   const permitted = useRequirePermission('agent_center_user');
@@ -13,10 +14,7 @@ export default function BrowserPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
-  const agentBackendUrl =
-    typeof window !== 'undefined'
-      ? process.env.NEXT_PUBLIC_AGENT_API_URL ?? 'http://localhost:4001'
-      : '';
+  const agentBackendUrl = typeof window !== 'undefined' ? AGENT_BACKEND_URL : '';
 
   const load = async () => {
     setLoading(true);
