@@ -6,7 +6,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { getSkills, deleteSkill, getSkillUsages, type Skill, type SkillUsage } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
@@ -126,7 +126,7 @@ export default function SkillsPage() {
   if (loading && selectedOrgId) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand border-t-transparent" />
       </div>
     );
   }
@@ -135,12 +135,12 @@ export default function SkillsPage() {
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Wand2 className="h-5 w-5 text-primary" /> Skills</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Wand2 className="h-5 w-5 text-brand" /> Skills</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Reusable prompt instructions for agent steps</p>
         </div>
-        <Button size="sm" disabled={!selectedOrgId} onClick={() => router.push('/skills/create')}>
+        <Button disabled={!selectedOrgId} onClick={() => router.push('/skills/create')}>
           <Plus className="mr-2 h-4 w-4" />
           New Skill
         </Button>
@@ -153,12 +153,8 @@ export default function SkillsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle>Skills</CardTitle>
-            <CardDescription>{total} skill{total !== 1 ? 's' : ''}</CardDescription>
-          </CardHeader>
-          <CardContent>
+        <Card className="overflow-hidden py-0">
+          <CardContent className="p-0">
             <ResponsiveTable
               data={skills}
               getRowKey={(s) => s.id}

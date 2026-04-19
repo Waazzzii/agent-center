@@ -35,6 +35,8 @@ export interface AgentAction {
   /** sub_agent tuning */
   max_concurrent?: number | null;
   batch_size?: number | null;
+  /** browser_script retry — 0 = no retries, max 3 */
+  max_retries?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -239,7 +241,6 @@ export interface ExecutionRun {
   /** Aggregates rolled up from action_logs, so the feed doesn't need extra queries. */
   tokens_input?: number;
   tokens_output?: number;
-  cost_usd?: number | string;  // NUMERIC serializes as string from pg
   child_count?: number;
   trigger_type: 'webhook' | 'cron' | 'manual' | 'sub_agent';
   trigger_id: string | null;
@@ -270,7 +271,6 @@ export interface ExecutionAction {
   error_message: string | null;
   tokens_input?: number | null;
   tokens_output?: number | null;
-  cost_usd?: number | string | null;
   model?: string | null;
 }
 
@@ -427,7 +427,6 @@ export interface FullTreeNode {
   action_type?: string;
   tokens_input?: number | null;
   tokens_output?: number | null;
-  cost_usd?: number | string | null;
   model?: string | null;
   output?: string | null;
   batch_item_count?: number;
@@ -502,12 +501,16 @@ export interface TriggerTypeCount {
   count: number;
 }
 
-export interface CostStats {
+/**
+ * Token-usage stats for an organization over a date range.
+ * Renamed from CostStats — we no longer report per-run dollar cost here;
+ * real billing lives on the Billing & Usage page (Anthropic Cost API).
+ */
+export interface TokenStats {
   tokens_input: number | string;
   tokens_output: number | string;
   tokens_cache_read: number | string;
   tokens_cache_write: number | string;
-  cost_usd: number | string;
   ai_steps: number | string;
 }
 
@@ -518,7 +521,7 @@ export interface ActionTypeStats {
   failed: number | string;
   paused: number | string;
   avg_duration_s: number | null;
-  cost_usd: number | string;
+  total_tokens: number | string;
 }
 
 export interface FailureHotspot {
@@ -545,13 +548,16 @@ export interface ExecutionAnalytics {
   batchItems: BatchItemStats;
   recentFailures: RecentFailure[];
   triggerTypes: TriggerTypeCount[];
-  cost: CostStats;
+  // Token usage estimates — replaces the old `cost` block, matches the
+  // backend's renamed getTokenStats. Surface in the UI as estimates, not
+  // invoiced amounts.
+  tokens: TokenStats;
   actionTypes: ActionTypeStats[];
   hotspots: FailureHotspot[];
   live: LiveSnapshot;
   previous: {
     summary: AnalyticsSummary;
-    cost: CostStats;
+    tokens: TokenStats;
     from: string;
     to: string;
   } | null;

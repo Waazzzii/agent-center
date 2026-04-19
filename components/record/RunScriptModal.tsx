@@ -10,8 +10,8 @@ import {
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import {
-  CheckCircle2, ChevronRight, ChevronsRight, Play, AlertCircle, AlertTriangle, Loader2,
-  CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, GripVertical,
+  CheckCircle2, ChevronRight, ChevronsRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
+  CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, GripVertical, PanelRightClose, PanelRightOpen,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -169,6 +169,9 @@ export function RunScriptModal({
   const pendingNavRef    = useRef<string | null>(null);
   // Always-current: does exiting require a warning? Read by the capture-phase click guard.
   const needsExitWarnRef = useRef(false);
+
+  // ── Steps panel collapse ──────────────────────────────────────
+  const [stepsCollapsed, setStepsCollapsed] = useState(false);
 
   // ── Current step editor resize ────────────────────────────────
   const [stepEditorHeight, setStepEditorHeight] = useState(200);
@@ -1399,11 +1402,11 @@ export function RunScriptModal({
               <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500" />
             </span>
           ) : isExecuting ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
+            <Loader2 className="h-3.5 w-3.5 animate-spin text-brand shrink-0" />
           ) : (
             <span className="relative flex h-2 w-2 shrink-0">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-60" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-primary" />
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-brand opacity-60" />
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-brand" />
             </span>
           )}
 
@@ -1494,14 +1497,14 @@ export function RunScriptModal({
               <div className="flex rounded-md border overflow-hidden shrink-0">
                 <button
                   className={cn('px-2.5 py-1 text-xs transition-colors',
-                    !autoMode ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                    !autoMode ? 'bg-brand text-brand-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
                   )}
                   onClick={() => setAutoMode(false)}
                   disabled={isExecuting || isRecording}
                 >Step</button>
                 <button
                   className={cn('px-2.5 py-1 text-xs transition-colors border-l',
-                    autoMode ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
+                    autoMode ? 'bg-brand text-brand-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
                   )}
                   onClick={() => setAutoMode(true)}
                   disabled={isExecuting || isRecording}
@@ -1625,8 +1628,18 @@ export function RunScriptModal({
           )}
         </div>
 
-        {/* Right panel */}
-        <div className="flex flex-col overflow-hidden bg-background w-[480px] shrink-0 border-l">
+        {/* Right panel — collapsible */}
+        <div className={`relative flex shrink-0 transition-[width] duration-200 ease-in-out ${stepsCollapsed ? 'w-0' : 'w-[480px]'}`}>
+          {/* Collapse/expand tab on left edge */}
+          <button
+            onClick={() => setStepsCollapsed((c) => !c)}
+            className="absolute -left-6 top-1/2 -translate-y-1/2 z-10 flex items-center justify-center w-6 h-12 rounded-l-md border border-r-0 bg-background text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shadow-sm"
+            title={stepsCollapsed ? 'Show steps' : 'Hide steps'}
+          >
+            {stepsCollapsed ? <PanelRightOpen className="h-3.5 w-3.5" /> : <PanelRightClose className="h-3.5 w-3.5" />}
+          </button>
+
+          <div className={`flex flex-col overflow-hidden bg-background w-[480px] shrink-0 border-l transition-opacity duration-150 ${stepsCollapsed ? 'opacity-0 pointer-events-none' : 'opacity-100'}`}>
 
           {/* ── Unified step list (record + test + review) ── */}
           {(
@@ -1708,10 +1721,10 @@ export function RunScriptModal({
                         className={cn(
                           'py-1.5 flex items-center gap-1.5 group relative',
                           isRecording ? 'px-3' : 'px-1.5 cursor-pointer',
-                          isCurrent  ? 'bg-primary/10 font-medium' : 'text-muted-foreground',
+                          isCurrent  ? 'bg-brand/10 font-medium' : 'text-muted-foreground',
                           isNew && 'bg-green-500/5',
                           isHovered && !isCurrent && 'bg-muted/40',
-                          !isRecording && dropStepIdx === i && dragStepIdx !== i && 'border-t-2 border-primary',
+                          !isRecording && dropStepIdx === i && dragStepIdx !== i && 'border-t-2 border-brand',
                         )}
                         draggable={!isExecuting && !isRecording}
                         onDragStart={isRecording ? undefined : () => setDragStepIdx(i)}
@@ -1760,7 +1773,7 @@ export function RunScriptModal({
                           )}
                         </div>
                         {isCurrent && !isHovered ? (
-                          <ChevronRight className="h-3 w-3 shrink-0 text-primary" />
+                          <ChevronRight className="h-3 w-3 shrink-0 text-brand" />
                         ) : null}
                       </div>
                       {/* Recording insertion point — shown after the current step */}
@@ -1840,6 +1853,7 @@ export function RunScriptModal({
               })()}
             </>
           )}
+          </div>
         </div>
       </div>
     </div>,

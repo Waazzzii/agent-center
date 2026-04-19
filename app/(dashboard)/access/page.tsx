@@ -186,7 +186,7 @@ export default function AccessPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-primary" /> Access
+            <ShieldCheck className="h-5 w-5 text-brand" /> Access
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Manage groups of users who can interact with login and approval steps.
@@ -195,7 +195,7 @@ export default function AccessPage() {
       </div>
 
       {/* Create group */}
-      <Card>
+      <Card className="py-0">
         <CardContent className="p-3">
           <div className="flex items-center gap-2">
             <Input
@@ -221,8 +221,7 @@ export default function AccessPage() {
           No access groups yet. Create one above to control who can approve or log in during agent runs.
         </CardContent></Card>
       ) : (
-        <Card>
-          <div className="overflow-hidden rounded-lg border-0">
+        <Card className="overflow-hidden py-0">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-xs text-muted-foreground">
                 <tr>
@@ -249,12 +248,12 @@ export default function AccessPage() {
                     </td>
                     <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       {(group.login_count ?? 0) > 0 ? (
-                        <button onClick={() => openUsage(group, 'logins')} className="text-xs tabular-nums text-primary hover:underline">{group.login_count}</button>
+                        <button onClick={() => openUsage(group, 'logins')} className="text-xs tabular-nums text-brand hover:underline">{group.login_count}</button>
                       ) : <span className="text-xs text-muted-foreground/40">0</span>}
                     </td>
                     <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       {(group.approval_count ?? 0) > 0 ? (
-                        <button onClick={() => openUsage(group, 'approvals')} className="text-xs tabular-nums text-primary hover:underline">{group.approval_count}</button>
+                        <button onClick={() => openUsage(group, 'approvals')} className="text-xs tabular-nums text-brand hover:underline">{group.approval_count}</button>
                       ) : <span className="text-xs text-muted-foreground/40">0</span>}
                     </td>
                     <td className="px-4 py-3 text-right text-muted-foreground text-xs">
@@ -270,7 +269,6 @@ export default function AccessPage() {
                 ))}
               </tbody>
             </table>
-          </div>
         </Card>
       )}
 
@@ -279,7 +277,7 @@ export default function AccessPage() {
         <DialogContent className="max-w-lg h-[70vh] flex flex-col">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <UserPlus className="h-4 w-4 text-primary" />
+              <UserPlus className="h-4 w-4 text-brand" />
               {editingGroup?.name} — Members
             </DialogTitle>
           </DialogHeader>
@@ -311,14 +309,14 @@ export default function AccessPage() {
                     onClick={() => toggleUser(user.id)}
                     className={cn(
                       'w-full flex items-center gap-3 rounded-md px-3 py-2 text-left transition-colors',
-                      isMember ? 'bg-primary/5 border border-primary/20' : 'hover:bg-muted/40 border border-transparent',
+                      isMember ? 'bg-brand/5 border border-brand/20' : 'hover:bg-muted/40 border border-transparent',
                     )}
                   >
                     <div className={cn(
                       'w-5 h-5 rounded border flex items-center justify-center shrink-0',
-                      isMember ? 'bg-primary border-primary' : 'border-border',
+                      isMember ? 'bg-brand border-brand' : 'border-border',
                     )}>
-                      {isMember && <Check className="h-3 w-3 text-primary-foreground" />}
+                      {isMember && <Check className="h-3 w-3 text-brand-foreground" />}
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium truncate">{name || user.email}</div>
@@ -338,7 +336,7 @@ export default function AccessPage() {
             <div className="flex items-center justify-between w-full">
               <span className="text-xs text-muted-foreground">
                 {pendingIds.size} member{pendingIds.size !== 1 ? 's' : ''} selected
-                {hasChanges && <span className="text-primary ml-1">· unsaved changes</span>}
+                {hasChanges && <span className="text-brand ml-1">· unsaved changes</span>}
               </span>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => setEditingGroup(null)}>Cancel</Button>
@@ -357,7 +355,7 @@ export default function AccessPage() {
         <DialogContent className="max-w-md">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              {usageType === 'logins' ? <LogIn className="h-4 w-4 text-primary" /> : <PauseCircle className="h-4 w-4 text-primary" />}
+              {usageType === 'logins' ? <LogIn className="h-4 w-4 text-brand" /> : <PauseCircle className="h-4 w-4 text-brand" />}
               {usageGroup?.name} — {usageType === 'logins' ? 'Logins' : 'Approvals'}
             </DialogTitle>
           </DialogHeader>

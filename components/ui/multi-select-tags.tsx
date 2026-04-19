@@ -61,7 +61,7 @@ export function MultiSelectTags({ options, selected, onChange, placeholder = 'Se
         onKeyDown={(e) => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen((p) => !p); } }}
         className={cn(
           'w-full min-h-[32px] flex items-center flex-wrap gap-1 rounded-md border px-2 py-1 text-left text-sm transition-colors cursor-pointer',
-          open ? 'border-primary ring-1 ring-primary/20' : 'border-input hover:border-foreground/30',
+          open ? 'border-brand ring-1 ring-brand/20' : 'border-input hover:border-foreground/30',
           disabled && 'opacity-50 cursor-not-allowed',
         )}
       >
@@ -69,7 +69,7 @@ export function MultiSelectTags({ options, selected, onChange, placeholder = 'Se
           <span className="text-muted-foreground text-xs">{placeholder}</span>
         ) : (
           selectedOptions.map((opt) => (
-            <span key={opt.value} className="inline-flex items-center gap-0.5 bg-primary/10 text-primary rounded px-1.5 py-0.5 text-[11px] font-medium">
+            <span key={opt.value} className="inline-flex items-center gap-0.5 bg-brand-soft text-brand-soft-fg rounded px-1.5 py-0.5 text-[11px] font-medium">
               {opt.label}
               <span
                 role="button"
@@ -103,7 +103,7 @@ export function MultiSelectTags({ options, selected, onChange, placeholder = 'Se
                 >
                   <div className={cn(
                     'w-4 h-4 rounded border flex items-center justify-center shrink-0',
-                    isSelected ? 'bg-primary border-primary' : 'border-border',
+                    isSelected ? 'bg-brand border-brand' : 'border-border',
                   )}>
                     {isSelected && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
                   </div>

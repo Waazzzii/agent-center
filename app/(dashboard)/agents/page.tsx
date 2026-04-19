@@ -6,7 +6,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { getAgents, deleteAgent, runAgent, type Agent } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -89,7 +89,7 @@ export default function AgentsPage() {
   if (loading && selectedOrgId) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand border-t-transparent" />
       </div>
     );
   }
@@ -98,9 +98,9 @@ export default function AgentsPage() {
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Bot className="h-5 w-5 text-primary" /> Agents</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Bot className="h-5 w-5 text-brand" /> Agents</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Automated workflows powered by LLMs and your connected systems</p>
         </div>
         <Button disabled={!selectedOrgId} onClick={() => router.push('/agents/create')}>
@@ -116,12 +116,8 @@ export default function AgentsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card>
-          <CardHeader>
-            <CardTitle>Agents</CardTitle>
-            <CardDescription>{agents.length} workflow{agents.length !== 1 ? 's' : ''}</CardDescription>
-          </CardHeader>
-          <CardContent>
+        <Card className="overflow-hidden py-0">
+          <CardContent className="p-0">
             <ResponsiveTable
               data={agents}
               getRowKey={(a) => a.id}
@@ -146,8 +142,8 @@ export default function AgentsPage() {
                   key: 'status',
                   label: 'Status',
                   render: (a) => a.is_active
-                    ? <Badge variant="default">Active</Badge>
-                    : <Badge variant="secondary">Inactive</Badge>,
+                    ? <Badge variant="success">Active</Badge>
+                    : <Badge variant="neutral">Inactive</Badge>,
                 },
                 {
                   key: 'created',
@@ -162,7 +158,7 @@ export default function AgentsPage() {
                       <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
                         {runningId === a.id
                           ? <RefreshCw className="h-4 w-4 animate-spin" />
-                          : <Play className="h-4 w-4 text-green-600" />}
+                          : <Play className="h-4 w-4 text-success" />}
                       </Button>
                       <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }}>
                         <Pencil className="h-4 w-4" />
@@ -175,7 +171,7 @@ export default function AgentsPage() {
                   render: (a) => (
                     <>
                       <Button variant="outline" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }} className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l">
-                        {runningId === a.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 text-green-600" />}
+                        {runningId === a.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 text-success" />}
                       </Button>
                       <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} className="flex-1 rounded-none border-r-0 border-t-0 border-l">
                         <Pencil className="h-4 w-4" />

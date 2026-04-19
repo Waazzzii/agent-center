@@ -36,9 +36,9 @@ import {
 // ─── Helpers ────────────────────────────────────────────────
 
 function StatusPill({ status }: { status: Login['status'] }) {
-  if (status === 'valid') return <Badge variant="outline" className="gap-1 border-green-500 text-green-600 dark:text-green-400"><CheckCircle2 className="h-3 w-3" />Logged In</Badge>;
-  if (status === 'needs_login') return <Badge variant="outline" className="gap-1 border-amber-500 text-amber-600 dark:text-amber-400"><AlertCircle className="h-3 w-3" />Not Logged In</Badge>;
-  return <Badge variant="outline" className="gap-1 border-slate-400 text-slate-500"><HelpCircle className="h-3 w-3" />Not Yet Checked</Badge>;
+  if (status === 'valid') return <Badge variant="success" className="gap-1"><CheckCircle2 className="h-3 w-3" />Logged In</Badge>;
+  if (status === 'needs_login') return <Badge variant="warning" className="gap-1"><AlertCircle className="h-3 w-3" />Not Logged In</Badge>;
+  return <Badge variant="neutral" className="gap-1"><HelpCircle className="h-3 w-3" />Not Yet Checked</Badge>;
 }
 
 function formatRelative(iso: string | null): string {
@@ -213,7 +213,7 @@ export default function LoginsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <LogIn className="h-5 w-5 text-primary" /> Logins
+            <LogIn className="h-5 w-5 text-brand" /> Logins
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Reusable login profiles.  One session per login, shared across every agent that uses it.
@@ -231,8 +231,7 @@ export default function LoginsPage() {
           No logins yet. Create one to share auth sessions across agents.
         </CardContent></Card>
       ) : (
-        <Card>
-          <div className="overflow-hidden">
+        <Card className="overflow-hidden py-0">
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-xs text-muted-foreground">
                 <tr>
@@ -260,17 +259,17 @@ export default function LoginsPage() {
                         <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
                           {needsLogin ? (
                             <Button size="sm" onClick={() => handleLogin(item)} disabled={isStarting || !!active}
-                              className="bg-amber-600 hover:bg-amber-700 text-white h-7 text-xs">
+                              className="bg-warning hover:bg-warning/90 text-white text-xs">
                               {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
                               <span className="ml-1">Log In</span>
                             </Button>
                           ) : (
-                            <Button variant="outline" size="sm" onClick={() => handleVerify(item)} disabled={isStarting || !!active} className="h-7 text-xs">
+                            <Button variant="outline" size="sm" onClick={() => handleVerify(item)} disabled={isStarting || !!active} className="text-xs">
                               {isStarting || active ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
                               <span className="ml-1">{active ? 'Verifying...' : 'Verify'}</span>
                             </Button>
                           )}
-                          <Button variant="ghost" size="icon" className="h-7 w-7 text-destructive/50 hover:text-destructive"
+                          <Button variant="ghost" size="icon-sm" className="text-destructive/50 hover:text-destructive"
                             onClick={() => handleDelete(item)} disabled={!!active}>
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
@@ -281,7 +280,6 @@ export default function LoginsPage() {
                 })}
               </tbody>
             </table>
-          </div>
         </Card>
       )}
 

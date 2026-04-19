@@ -70,7 +70,7 @@ export function AiStepDialog({
         {readOnly && (
           <InfoBlock>
             This is read-only.  To make changes,{' '}
-            <Link href="/actions/ai-steps" className="text-primary hover:underline font-medium">edit it in AI Steps →</Link>
+            <Link href="/actions/ai-steps" className="text-brand hover:underline font-medium">edit it in AI Steps →</Link>
           </InfoBlock>
         )}
 

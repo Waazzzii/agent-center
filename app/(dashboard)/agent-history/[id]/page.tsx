@@ -64,10 +64,6 @@ function fmtDur(ms: number | null | undefined): string {
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
-function fmtUSD(v: number | string | null | undefined): string {
-  const n = parseFloat(String(v ?? 0)) || 0;
-  if (!n) return '—'; return n < 0.01 ? '< $0.01' : `$${n.toFixed(4)}`;
-}
 function fmtTokens(n: number | null | undefined): string {
   if (!n) return '—';
   return n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(1)}K` : `${(n / 1_000_000).toFixed(2)}M`;
@@ -80,8 +76,8 @@ const ST: Record<string, { dot: string; cls: string; label: string }> = {
   aborted:   { dot: 'bg-red-400', cls: 'border-red-400 text-red-500', label: 'Aborted' },
   denied:    { dot: 'bg-red-400', cls: 'border-red-400 text-red-500', label: 'Denied' },
   executing: { dot: 'bg-blue-500 animate-pulse', cls: 'border-blue-400 text-blue-600 dark:text-blue-400', label: 'Running' },
-  awaiting_approval: { dot: 'bg-violet-500 animate-pulse', cls: 'border-violet-400 text-violet-600', label: 'Awaiting' },
-  provisioning: { dot: 'bg-amber-500 animate-pulse', cls: 'border-amber-400 text-amber-600', label: 'Starting' },
+  awaiting_approval: { dot: 'bg-brand animate-pulse', cls: 'border-brand/40 text-brand', label: 'Awaiting' },
+  provisioning: { dot: 'bg-warning animate-pulse', cls: 'border-warning/40 text-warning', label: 'Starting' },
   queued: { dot: 'bg-slate-400', cls: 'border-slate-300 text-slate-500', label: 'Queued' },
 };
 const AT: Record<string, string> = { agent: 'AI Step', login: 'Login', approval: 'Approval', browser_script: 'Script', sub_agent: 'Sub Agents' };
@@ -161,10 +157,8 @@ function SummaryCards({ node }: { node: FullTreeNode }) {
   const isExec = node.type === 'execution';
   const children = node.children ?? [];
 
-  // For executions: aggregate from children
-  const cost = isExec
-    ? children.reduce((s, a) => s + (parseFloat(String(a.cost_usd ?? 0)) || 0), 0)
-    : parseFloat(String(node.cost_usd ?? 0)) || 0;
+  // Per-run cost is no longer shown here — dollars live on Billing & Usage
+  // (aggregated from Anthropic's Cost API). Here we show token usage only.
   const tokensIn = isExec
     ? children.reduce((s, a) => s + (a.tokens_input ?? 0), 0)
     : node.tokens_input ?? 0;
@@ -176,7 +170,7 @@ function SummaryCards({ node }: { node: FullTreeNode }) {
     : undefined;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
       <SummaryCard label="Status"><SBadge status={node.status} /></SummaryCard>
       <SummaryCard label="Duration" value={fmtDur(node.duration_ms)} />
       {isExec && (
@@ -189,7 +183,6 @@ function SummaryCards({ node }: { node: FullTreeNode }) {
       )}
       {!isExec && node.model && <SummaryCard label="Model" value={node.model.replace('claude-', '')} mono />}
       <SummaryCard label="Tokens" value={tokensIn + tokensOut > 0 ? `${fmtTokens(tokensIn)} / ${fmtTokens(tokensOut)}` : '—'} />
-      <SummaryCard label="Cost" value={fmtUSD(cost)} accent />
     </div>
   );
 }
@@ -222,7 +215,6 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
       {actions.map((action, i) => {
         const Icon = action.action_type === 'sub_agent' ? GitBranch : ICONS[action.action_type ?? ''] ?? Zap;
         const isSub = action.action_type === 'sub_agent';
-        const cost = parseFloat(String(action.cost_usd ?? 0)) || 0;
         const childExecs = action.children?.filter((c) => c.type === 'execution') ?? [];
 
         return (
@@ -254,7 +246,6 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
                 <span>{AT[action.action_type ?? ''] ?? action.action_type}</span>
                 <span className="tabular-nums">{fmtDur(action.duration_ms)}</span>
                 {(action.tokens_input ?? 0) > 0 && <span className="tabular-nums">{fmtTokens(action.tokens_input)} / {fmtTokens(action.tokens_output)}</span>}
-                {cost > 0 && <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">{fmtUSD(cost)}</span>}
                 {isSub && childExecs.length > 0 && <span className="text-blue-600 dark:text-blue-400">{childExecs.length} run{childExecs.length !== 1 ? 's' : ''}</span>}
               </div>
             </div>
@@ -334,7 +325,6 @@ function SubAgentModal({ open, onOpenChange, childNodes }: {
           ) : sorted.map((child: FullTreeNode, i: number) => {
             const childActions = child.children ?? [];
             const done = childActions.filter((a: FullTreeNode) => a.status === 'completed' || a.status === 'approved').length;
-            const cost = childActions.reduce((s: number, a: FullTreeNode) => s + (parseFloat(String(a.cost_usd ?? 0)) || 0), 0);
             const isFailed = child.status === 'failed' || child.status === 'aborted';
 
             return (
@@ -363,7 +353,6 @@ function SubAgentModal({ open, onOpenChange, childNodes }: {
                   <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-foreground">
                     <span className="tabular-nums">{fmtDur(child.duration_ms)}</span>
                     <span>{done}/{childActions.length} actions</span>
-                    {cost > 0 && <span className="text-emerald-600 dark:text-emerald-400 tabular-nums">{fmtUSD(cost)}</span>}
                     <div className="flex items-center gap-0.5 ml-1">
                       {childActions.map((a: FullTreeNode) => <span key={a.id} className={cn('h-1 w-2 rounded-full', ST[a.status]?.dot ?? 'bg-slate-300')} />)}
                     </div>
@@ -383,15 +372,15 @@ function SubAgentModal({ open, onOpenChange, childNodes }: {
 function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgId: string; executionId: string }) {
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
-  const isAi = action.action_type === 'agent';
+  const hasLogs = action.action_type === 'agent' || action.action_type === 'browser_script';
 
   const loadSteps = useCallback(() => {
-    if (!isAi || !orgId) { setSteps([]); return; }
+    if (!hasLogs || !orgId) { setSteps([]); return; }
     setLoadingSteps(true);
     agentClient.get(`/api/admin/${orgId}/executions/${executionId}/steps`, { params: { action_log_id: action.id, limit: 200 } })
       .then(({ data }) => setSteps(data.steps ?? []))
       .catch(() => {}).finally(() => setLoadingSteps(false));
-  }, [action.id, isAi, orgId, executionId]);
+  }, [action.id, hasLogs, orgId, executionId]);
 
   useEffect(() => { loadSteps(); }, [loadSteps]);
 
@@ -399,7 +388,7 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
   const stepsRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEventStream({
     topics: executionId ? [`run:${executionId}`] : [],
-    enabled: !!executionId && isAi,
+    enabled: !!executionId && hasLogs,
     onEvent: () => {
       if (stepsRefresh.current) clearTimeout(stepsRefresh.current);
       stepsRefresh.current = setTimeout(() => loadSteps(), 500);
@@ -415,11 +404,11 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
         </div>
       )}
 
-      {/* AI steps: full log viewer */}
-      {isAi && <LogViewer steps={steps} loading={loadingSteps} />}
+      {/* AI steps + browser scripts: full log viewer */}
+      {hasLogs && <LogViewer steps={steps} loading={loadingSteps} />}
 
-      {/* Non-AI: show result */}
-      {!isAi && action.output && (
+      {/* Other action types: show result */}
+      {!hasLogs && action.output && (
         <div className="rounded-lg border border-border/50 overflow-hidden">
           <div className="flex items-center justify-between px-4 py-2 bg-muted/20 border-b border-border/30">
             <span className="text-xs font-medium text-muted-foreground">Result</span>
@@ -434,7 +423,23 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
         </div>
       )}
 
-      {!isAi && !action.output && !action.error_message && (
+      {/* Show output below log viewer for browser scripts (output is the batch result JSON) */}
+      {action.action_type === 'browser_script' && action.output && (
+        <div className="rounded-lg border border-border/50 overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2 bg-muted/20 border-b border-border/30">
+            <span className="text-xs font-medium text-muted-foreground">Output</span>
+            <button className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+              onClick={() => { navigator.clipboard.writeText(action.output ?? ''); toast.success('Copied'); }}>
+              <Copy className="h-3 w-3" /> Copy
+            </button>
+          </div>
+          <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-auto">
+            {(() => { try { return JSON.stringify(JSON.parse(action.output!), null, 2); } catch { return action.output; } })()}
+          </pre>
+        </div>
+      )}
+
+      {!hasLogs && !action.output && !action.error_message && (
         <p className="text-sm text-muted-foreground italic py-4">
           {action.status === 'completed' || action.status === 'approved' ? 'Completed successfully.' :
            action.status === 'awaiting_approval' ? 'Waiting for review...' :

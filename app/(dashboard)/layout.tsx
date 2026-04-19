@@ -7,6 +7,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { ViewModeSidebar } from '@/components/layout/ViewModeSidebar';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
 import { usePermissionsSync } from '@/hooks/use-permissions-sync';
+import { redirectToAuth } from '@/lib/auth/oauth';
 
 export default function DashboardLayout({
   children,
@@ -22,9 +23,9 @@ export default function DashboardLayout({
   useEffect(() => {
     if (!admin) {
       if (typeof window !== 'undefined') {
-        localStorage.setItem('post_login_redirect', window.location.pathname + window.location.search);
+        sessionStorage.setItem('post_login_redirect', window.location.pathname + window.location.search);
       }
-      router.replace('/login');
+      redirectToAuth();
       return;
     }
 
@@ -38,7 +39,7 @@ export default function DashboardLayout({
     return (
       <div className="flex h-screen items-center justify-center">
         <div className="text-center">
-          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-brand border-t-transparent"></div>
           <p className="text-muted-foreground">Loading...</p>
         </div>
       </div>
@@ -50,8 +51,8 @@ export default function DashboardLayout({
       <div className="flex h-screen overflow-hidden">
         <ViewModeSidebar />
         <div className="flex-1 flex flex-col overflow-hidden md:ml-64">
-          <main className="flex-1 overflow-y-auto bg-background p-4 md:p-6">
-            <div className="mx-auto w-full max-w-6xl h-full">
+          <main className="flex-1 overflow-y-auto bg-background">
+            <div className="mx-auto w-full h-full">
               {children}
             </div>
           </main>

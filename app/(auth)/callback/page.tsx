@@ -2,7 +2,7 @@
 
 import { Suspense, useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
-import { exchangeCodeForTokens } from '@/lib/auth/oauth';
+import { exchangeCodeForTokens, redirectToAuth } from '@/lib/auth/oauth';
 import { useAuthStore } from '@/stores/auth.store';
 import { useUIStore } from '@/stores/ui.store';
 import apiClient from '@/lib/api/client';
@@ -55,8 +55,8 @@ function CallbackContent() {
         setAuth(admin, accessToken, refreshToken);
 
         // Honour any stored post-login destination (e.g. deep-linked from another center)
-        const intendedPath = localStorage.getItem('post_login_redirect');
-        localStorage.removeItem('post_login_redirect');
+        const intendedPath = sessionStorage.getItem('post_login_redirect');
+        sessionStorage.removeItem('post_login_redirect');
         if (intendedPath && intendedPath !== '/login') {
           router.push(intendedPath);
         } else {
@@ -78,8 +78,8 @@ function CallbackContent() {
           <h2 className="mb-2 text-xl font-semibold text-destructive">Authentication Error</h2>
           <p className="mb-4 text-sm text-muted-foreground">{error}</p>
           <button
-            onClick={() => router.push('/login')}
-            className="text-primary underline hover:no-underline"
+            onClick={() => redirectToAuth()}
+            className="text-brand hover:no-underline"
           >
             Return to login
           </button>
@@ -91,7 +91,7 @@ function CallbackContent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background p-4">
       <div className="w-full max-w-md text-center space-y-4">
-        <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+        <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-brand border-t-transparent"></div>
         <div>
           <h2 className="text-xl font-semibold mb-2">Securely Logging You In</h2>
           <p className="text-sm text-muted-foreground">
@@ -109,7 +109,7 @@ export default function CallbackPage() {
       fallback={
         <div className="flex min-h-screen items-center justify-center bg-background">
           <div className="text-center">
-            <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+            <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-brand border-t-transparent"></div>
             <p className="text-muted-foreground">Loading...</p>
           </div>
         </div>

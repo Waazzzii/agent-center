@@ -131,7 +131,7 @@ export default function EditAiStepPage() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" /> {step.name}
+              <Sparkles className="h-5 w-5 text-brand" /> {step.name}
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">Edit AI step configuration</p>
           </div>

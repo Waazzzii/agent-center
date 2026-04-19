@@ -75,13 +75,13 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
   if (loading) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand border-t-transparent" />
       </div>
     );
   }
 
   return (
-    <div className="space-y-6 max-w-2xl">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="sm" onClick={() => router.push('/skills')}>
           <ArrowLeft className="mr-2 h-4 w-4" />
@@ -139,42 +139,37 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
         </TabsContent>
 
         <TabsContent value="assignments" className="mt-4">
-          <Card>
-            <CardContent className="pt-6">
-              {usages.length === 0 ? (
-                <p className="text-sm text-muted-foreground">This skill hasn't been assigned to any agent steps yet.</p>
-              ) : (
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b">
-                      <th className="text-left py-2 pr-4 font-medium text-muted-foreground">Agent</th>
-                      <th className="text-left py-2 font-medium text-muted-foreground">Step</th>
-                      <th className="w-8" />
+          {usages.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-sm text-muted-foreground">
+                This skill hasn't been assigned to any agent steps yet.
+              </CardContent>
+            </Card>
+          ) : (
+            <Card className="overflow-hidden py-0">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/40 text-xs text-muted-foreground">
+                  <tr>
+                    <th className="text-left font-medium px-4 py-2">AI Step</th>
+                    <th className="text-left font-medium px-4 py-2">Agent</th>
+                    <th className="w-10" />
+                  </tr>
+                </thead>
+                <tbody>
+                  {usages.map((u) => (
+                    <tr key={u.action_id} className="border-t hover:bg-muted/30 transition-colors group cursor-pointer"
+                        onClick={() => router.push(`/actions/ai-steps/${u.ai_step_id}`)}>
+                      <td className="px-4 py-2.5 font-medium">{u.ai_step_name}</td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{u.agent_name} &middot; {u.action_name}</td>
+                      <td className="px-4 py-2.5">
+                        <ExternalLink className="h-3.5 w-3.5 text-muted-foreground/30 group-hover:text-muted-foreground" />
+                      </td>
                     </tr>
-                  </thead>
-                  <tbody className="divide-y">
-                    {usages.map((u) => (
-                      <tr key={u.action_id} className="group">
-                        <td className="py-2.5 pr-4 font-medium">{u.agent_name}</td>
-                        <td className="py-2.5 text-muted-foreground">{u.action_name}</td>
-                        <td className="py-2.5">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity"
-                            title="Go to agent"
-                            onClick={() => router.push(`/agents/${u.agent_id}`)}
-                          >
-                            <ExternalLink className="h-3.5 w-3.5" />
-                          </Button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </CardContent>
-          </Card>
+                  ))}
+                </tbody>
+              </table>
+            </Card>
+          )}
         </TabsContent>
       </Tabs>
     </div>

@@ -9,15 +9,20 @@ const badgeVariants = cva(
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground [a&]:hover:bg-primary/90",
-        secondary:
-          "bg-secondary text-secondary-foreground [a&]:hover:bg-secondary/90",
-        destructive:
-          "bg-destructive text-white [a&]:hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/60",
-        outline:
-          "border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
-        ghost: "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
-        link: "text-primary underline-offset-4 [a&]:hover:underline",
+        default:  "bg-brand text-brand-fg [a&]:hover:bg-brand/90",
+        secondary: "bg-secondary text-secondary-foreground [a&]:hover:bg-secondary/90",
+        destructive: "bg-destructive text-white [a&]:hover:bg-destructive/90 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40",
+        outline:  "border-border text-foreground [a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+        ghost:    "[a&]:hover:bg-accent [a&]:hover:text-accent-foreground",
+        link:     "text-brand underline-offset-4 [a&]:hover:underline",
+        // DS semantic variants
+        brand:   "bg-brand-soft text-brand-soft-fg border-brand/20",
+        success: "bg-success-soft text-success border-success/20",
+        warning: "bg-warning-soft text-warning border-warning/20",
+        danger:  "bg-danger-soft text-danger border-danger/20",
+        info:    "bg-info-soft text-info border-info/20",
+        neutral: "bg-surface-2 text-muted-foreground border-border",
+        admin:   "bg-admin-soft text-admin-soft-fg border-admin/20",
       },
     },
     defaultVariants: {

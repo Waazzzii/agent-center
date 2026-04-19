@@ -30,11 +30,11 @@ export function EntityPreviewNotice({
   bodyOverride?: string;
 }) {
   return (
-    <div className="flex items-start gap-2 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-muted-foreground">
-      <Info className="h-3.5 w-3.5 text-primary shrink-0 mt-0.5" />
+    <div className="flex items-start gap-2 rounded-md border border-brand/20 bg-brand-soft px-3 py-2 text-xs text-muted-foreground">
+      <Info className="h-3.5 w-3.5 text-brand shrink-0 mt-0.5" />
       <div className="flex-1">
         {bodyOverride ?? `This is a reusable ${entityLabel}. The preview below is read-only.`}{' '}
-        <Link href={editHref} className="inline-flex items-center gap-0.5 text-primary hover:underline font-medium">
+        <Link href={editHref} className="inline-flex items-center gap-0.5 text-brand hover:underline font-medium">
           {bodyOverride ? `Edit in ${editLabel}` : `edit in ${editLabel}`}
           <ExternalLink className="h-3 w-3" />
         </Link>

@@ -1,20 +1,18 @@
 /**
- * OAuth PKCE Flow
- * Handles OAuth 2.0 Authorization Code flow with PKCE
+ * OAuth client helpers for agent-center.
+ *
+ * Sign-in / sign-up / reset UI is rendered by auth.wazzi.io. This product:
+ *   - redirects to auth.wazzi.io for every auth entry point
+ *   - receives users back at /callback with a fresh auth code
+ *   - exchanges + refreshes tokens locally (tokens never cross origins)
  */
 
-/**
- * Generate a random code verifier (43-128 characters)
- */
 function generateCodeVerifier(): string {
   const array = new Uint8Array(32);
   crypto.getRandomValues(array);
   return base64URLEncode(array);
 }
 
-/**
- * Generate code challenge from verifier using SHA-256
- */
 async function generateCodeChallenge(verifier: string): Promise<string> {
   const encoder = new TextEncoder();
   const data = encoder.encode(verifier);
@@ -22,49 +20,60 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
   return base64URLEncode(new Uint8Array(hash));
 }
 
-/**
- * Base64 URL encode (without padding)
- */
 function base64URLEncode(buffer: Uint8Array): string {
   const base64 = btoa(String.fromCharCode(...buffer));
-  return base64
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
+  return base64.replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function getClientId(): string {
+  return process.env.NEXT_PUBLIC_CLIENT_ID || 'agent-center';
+}
+
+function getRedirectUri(): string {
+  return (
+    process.env.NEXT_PUBLIC_REDIRECT_URI ||
+    `${window.location.origin}/callback`
+  );
+}
+
+function getAuthUrl(): string {
+  return process.env.NEXT_PUBLIC_AUTH_URL || 'https://auth.wazzi.io';
 }
 
 /**
- * Initiate OAuth login flow
- * Redirects to backend OAuth authorization endpoint
+ * Bounce the browser to the centralized auth UI.
  */
-export async function initiateLogin(): Promise<void> {
+export async function redirectToAuth(
+  target: 'login' | 'signup' = 'login',
+  opts: { email?: string } = {},
+): Promise<void> {
   const codeVerifier = generateCodeVerifier();
   const codeChallenge = await generateCodeChallenge(codeVerifier);
-  const state = generateCodeVerifier(); // Generate random state
+  const state = generateCodeVerifier();
 
-  // Store verifier and state for later use in callback
   sessionStorage.setItem('pkce_verifier', codeVerifier);
   sessionStorage.setItem('oauth_state', state);
 
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:4000';
-  const clientId = process.env.NEXT_PUBLIC_CLIENT_ID || 'admin-console';
-  const redirectUri = process.env.NEXT_PUBLIC_REDIRECT_URI || `${window.location.origin}/callback`;
-
   const params = new URLSearchParams({
-    client_id: clientId,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    scope: 'openid email profile',
+    client_id: getClientId(),
+    redirect_uri: getRedirectUri(),
     code_challenge: codeChallenge,
     code_challenge_method: 'S256',
-    state: state,
+    state,
+    scope: 'openid email profile',
   });
+  if (opts.email) params.set('email', opts.email);
 
-  window.location.href = `${apiUrl}/authorize?${params}`;
+  window.location.href = `${getAuthUrl()}/${target}?${params.toString()}`;
 }
 
 /**
- * Exchange authorization code for tokens
+ * Back-compat alias so existing callers (e.g. login button) keep working.
+ */
+export const initiateLogin = () => redirectToAuth('login');
+
+/**
+ * Exchange authorization code for tokens. Called by /callback.
  */
 export async function exchangeCodeForTokens(code: string): Promise<{
   accessToken: string;
@@ -72,30 +81,23 @@ export async function exchangeCodeForTokens(code: string): Promise<{
   expiresIn: number;
 }> {
   const codeVerifier = sessionStorage.getItem('pkce_verifier');
-
   if (!codeVerifier) {
     throw new Error('No code verifier found in session');
   }
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || '';
-  const clientId = process.env.NEXT_PUBLIC_CLIENT_ID || '';
-  const redirectUri = process.env.NEXT_PUBLIC_REDIRECT_URI || `${window.location.origin}/callback`;
-
   const tokenUrl = `${apiUrl}/oauth/token`;
-  const params = {
-    grant_type: 'authorization_code',
-    code,
-    redirect_uri: redirectUri,
-    client_id: clientId,
-    code_verifier: codeVerifier,
-  };
 
   const response = await fetch(tokenUrl, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
-    body: new URLSearchParams(params),
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: getRedirectUri(),
+      client_id: getClientId(),
+      code_verifier: codeVerifier,
+    }),
   });
 
   if (!response.ok) {
@@ -103,23 +105,15 @@ export async function exchangeCodeForTokens(code: string): Promise<{
     try {
       const error = await response.json();
       errorMessage = error.message || error.error_description || error.error || errorMessage;
-      // Include additional details if available
-      if (error.error) {
-        errorMessage += ` - ${error.error}`;
-      }
-      if (error.error_description) {
-        errorMessage += `: ${error.error_description}`;
-      }
-    } catch (e) {
-      // Response wasn't JSON
+      if (error.error) errorMessage += ` - ${error.error}`;
+      if (error.error_description) errorMessage += `: ${error.error_description}`;
+    } catch {
       errorMessage += ' - Invalid response format';
     }
     throw new Error(errorMessage);
   }
 
   const data = await response.json();
-
-  // Clear verifier from session
   sessionStorage.removeItem('pkce_verifier');
 
   return {
@@ -130,7 +124,7 @@ export async function exchangeCodeForTokens(code: string): Promise<{
 }
 
 /**
- * Refresh access token using refresh token
+ * Refresh access token using refresh token.
  */
 export async function refreshAccessToken(
   refreshToken: string,
@@ -141,17 +135,14 @@ export async function refreshAccessToken(
   expiresIn: number;
 }> {
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-  const clientId = process.env.NEXT_PUBLIC_CLIENT_ID || 'admin-console';
 
   const response = await fetch(`${apiUrl}/oauth/token`, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/x-www-form-urlencoded',
-    },
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({
       grant_type: 'refresh_token',
       refresh_token: refreshToken,
-      client_id: clientId,
+      client_id: getClientId(),
     }),
     signal,
   });
@@ -161,7 +152,6 @@ export async function refreshAccessToken(
   }
 
   const data = await response.json();
-
   return {
     accessToken: data.access_token,
     refreshToken: data.refresh_token || refreshToken,
@@ -170,13 +160,10 @@ export async function refreshAccessToken(
 }
 
 /**
- * Logout - revoke tokens
+ * Logout — clear tokens and bounce to the centralized auth UI.
  */
 export async function logout(): Promise<void> {
-  // Clear local storage
   localStorage.removeItem('access_token');
   localStorage.removeItem('refresh_token');
-
-  // Redirect to login
-  window.location.href = '/login';
+  await redirectToAuth('login');
 }

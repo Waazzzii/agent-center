@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
@@ -60,35 +61,30 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
 
   return (
     <>
-      <div className="rounded-lg border bg-card">
-        {/* Header row */}
-        <div className="flex items-center justify-between px-4 py-3 border-b">
-          <div>
-            <p className="text-sm font-semibold">Saved Scripts</p>
-            <p className="text-xs text-muted-foreground">{scripts.length} script{scripts.length !== 1 ? 's' : ''}</p>
-          </div>
-        </div>
+      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+        Saved Scripts ({scripts.length})
+      </p>
 
-        {loading ? (
-          <div className="flex h-32 items-center justify-center">
-            <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
-          </div>
-        ) : scripts.length === 0 ? (
-          <p className="py-10 text-center text-sm text-muted-foreground">
-            No scripts saved yet. Click Record above to create one.
-          </p>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b">
-                  <th className="px-4 pb-2 pt-3 text-left font-medium text-muted-foreground pr-4">Name</th>
-                  <th className="pb-2 pt-3 text-left font-medium text-muted-foreground pr-4">Parameters</th>
-                  <th className="pb-2 pt-3 text-left font-medium text-muted-foreground pr-4">Steps</th>
-                  <th className="pb-2 pt-3 text-left font-medium text-muted-foreground pr-4">Created</th>
-                  <th className="pb-2 pt-3 pr-4 text-right font-medium text-muted-foreground">Actions</th>
-                </tr>
-              </thead>
+      {loading ? (
+        <div className="flex h-32 items-center justify-center">
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-brand border-t-transparent" />
+        </div>
+      ) : scripts.length === 0 ? (
+        <Card><p className="py-10 text-center text-sm text-muted-foreground">
+          No scripts saved yet. Click Record above to create one.
+        </p></Card>
+      ) : (
+        <Card className="overflow-hidden py-0">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs text-muted-foreground">
+              <tr>
+                <th className="text-left font-medium px-4 py-2">Name</th>
+                <th className="text-left font-medium px-4 py-2">Parameters</th>
+                <th className="text-left font-medium px-4 py-2">Steps</th>
+                <th className="text-left font-medium px-4 py-2">Created</th>
+                <th className="text-right font-medium px-4 py-2 w-20" />
+              </tr>
+            </thead>
               <tbody>
                 {scripts.map((script) => (
                   <tr
@@ -96,7 +92,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                     className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
                     onClick={() => setRunModalScript(script)}
                   >
-                    <td className="px-4 py-3 pr-4">
+                    <td className="px-4 py-2.5">
                       <div>
                         <span className="font-medium">{script.name}</span>
                         {script.description && (
@@ -106,7 +102,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                         )}
                       </div>
                     </td>
-                    <td className="py-3 pr-4">
+                    <td className="px-4 py-2.5">
                       {Object.keys(script.parameters ?? {}).length === 0 ? (
                         <span className="text-muted-foreground">—</span>
                       ) : (
@@ -119,7 +115,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                         </div>
                       )}
                     </td>
-                    <td className="py-3 pr-4">
+                    <td className="px-4 py-2.5">
                       <span className="text-muted-foreground">
                         {script.steps.length} step{script.steps.length !== 1 ? 's' : ''}
                       </span>
@@ -153,9 +149,8 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                 ))}
               </tbody>
             </table>
-          </div>
-        )}
-      </div>
+        </Card>
+      )}
 
       <RunScriptModal
         script={runModalScript}

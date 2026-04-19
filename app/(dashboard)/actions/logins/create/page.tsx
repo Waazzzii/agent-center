@@ -68,7 +68,7 @@ export default function CreateLoginPage() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <LogIn className="h-5 w-5 text-primary" /> New Login
+              <LogIn className="h-5 w-5 text-brand" /> New Login
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">Create a reusable login profile for agent workflows</p>
           </div>

@@ -5,7 +5,7 @@
  */
 
 import axios, { type AxiosError } from 'axios';
-import { refreshAccessToken } from '../auth/oauth';
+import { refreshAccessToken, redirectToAuth } from '../auth/oauth';
 
 function clearAuthAndRedirect(): void {
   localStorage.removeItem('access_token');
@@ -13,7 +13,7 @@ function clearAuthAndRedirect(): void {
   localStorage.removeItem('auth-storage');
   sessionStorage.clear();
   if (typeof window !== 'undefined') {
-    window.location.replace('/login');
+    void redirectToAuth();
   }
 }
 

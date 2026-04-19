@@ -153,21 +153,21 @@ function AuthorizeContent() {
               This application will be able to:
             </p>
             <div className="flex items-start gap-3">
-              <Database className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
+              <Database className="h-5 w-5 text-brand mt-0.5 flex-shrink-0" />
               <div>
                 <p className="text-sm font-medium">Access your data</p>
                 <p className="text-xs text-muted-foreground">Read and search content from your organization</p>
               </div>
             </div>
             <div className="flex items-start gap-3">
-              <Zap className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
+              <Zap className="h-5 w-5 text-brand mt-0.5 flex-shrink-0" />
               <div>
                 <p className="text-sm font-medium">Perform operations</p>
                 <p className="text-xs text-muted-foreground">Execute authorized actions on your behalf</p>
               </div>
             </div>
             <div className="flex items-start gap-3">
-              <Shield className="h-5 w-5 text-primary mt-0.5 flex-shrink-0" />
+              <Shield className="h-5 w-5 text-brand mt-0.5 flex-shrink-0" />
               <div>
                 <p className="text-sm font-medium">Secure connection</p>
                 <p className="text-xs text-muted-foreground">OAuth 2.0 with PKCE for maximum security</p>
@@ -218,7 +218,7 @@ export default function McpAuthorizePage() {
       fallback={
         <div className="flex min-h-screen items-center justify-center bg-background">
           <div className="text-center">
-            <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+            <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-brand border-t-transparent"></div>
             <p className="text-muted-foreground">Loading...</p>
           </div>
         </div>

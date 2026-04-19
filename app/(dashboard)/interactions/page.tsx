@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
@@ -17,8 +17,9 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  RefreshCw, CheckCircle2, XCircle, Eye, Loader2, MessageSquare, LogIn, PauseCircle, Users,
+  CheckCircle2, XCircle, Eye, Loader2, MessageSquare, LogIn, PauseCircle, Users,
 } from 'lucide-react';
+import { cn } from '@/lib/utils';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import {
@@ -31,7 +32,6 @@ import {
 import { useEventStream } from '@/lib/hooks/use-event-stream';
 
 const PAGE_SIZE = 20;
-
 type FilterType = 'all' | 'approval' | 'login';
 
 function formatRelative(iso: string): string {
@@ -52,15 +52,10 @@ export default function InteractionsPage() {
   const [viewItem, setViewItem] = useState<AgentApprovalItem | null>(null);
   const [deciding, setDeciding] = useState<Record<string, boolean>>({});
 
-  // Active login session keyed by login_id — when set, the group renders
-  // "Logging in…" and the BrowserHITLDialog is open in interactive mode.
   const [activeLoginSessions, setActiveLoginSessions] = useState<Record<string, ActiveVerifySession>>({});
   const [viewingLoginId, setViewingLoginId] = useState<string | null>(null);
-  // Per-login-group "starting" state during the POST to /login
   const [startingLogin, setStartingLogin] = useState<Record<string, boolean>>({});
 
-  // Sync the active-session store with local state so other pages (Logins)
-  // sharing the same login session stay in sync.
   useEffect(() => {
     const refresh = () => {
       const map: Record<string, ActiveVerifySession> = {};
@@ -93,13 +88,11 @@ export default function InteractionsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Background fallback poll — silent so it doesn't flash.
   useEffect(() => {
     const iv = setInterval(() => { load(true); }, 60_000);
     return () => clearInterval(iv);
   }, [load]);
 
-  // ── Realtime: silently refresh on any interactions event ──
   const interactionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEventStream({
     topics: selectedOrgId ? [`org:${selectedOrgId}:interactions`] : [],
@@ -140,13 +133,6 @@ export default function InteractionsPage() {
     }
   };
 
-  /**
-   * Open Browser for a login group.  Instead of trying to attach to the paused
-   * agent's (released) browser, we kick off a standalone manual login using
-   * the EXACT same endpoint as the Logins page.  That flow allocates its own
-   * browser, navigates to the login URL, and on "Done" saves the session and
-   * auto-resumes every paused sibling run waiting on this login_id.
-   */
   const handleOpenBrowser = async (loginId: string, loginName: string) => {
     if (!selectedOrgId) return;
     setStartingLogin((s) => ({ ...s, [loginId]: true }));
@@ -168,10 +154,6 @@ export default function InteractionsPage() {
     }
   };
 
-  // Poll for active login-session completion.  When the user clicks "Done"
-  // in the HITL dialog, the backend's completeLoginManual auto-resumes every
-  // paused sibling run on that login.  Those siblings re-verify and flip out
-  // of 'awaiting_approval', so we refresh the list to reflect the change.
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   useEffect(() => {
     const activeIds = Object.keys(activeLoginSessions);
@@ -187,14 +169,8 @@ export default function InteractionsPage() {
         if (!s) continue;
         try {
           const status = await getBrowserRunStatus(s.logId);
-          if (TERMINAL.has(status.status)) {
-            clearActiveVerifySession(entityId);
-            changed = true;
-          }
-        } catch {
-          clearActiveVerifySession(entityId);
-          changed = true;
-        }
+          if (TERMINAL.has(status.status)) { clearActiveVerifySession(entityId); changed = true; }
+        } catch { clearActiveVerifySession(entityId); changed = true; }
       }
       if (changed) await load(true);
     };
@@ -206,31 +182,50 @@ export default function InteractionsPage() {
 
   if (!allowed) return <NoPermissionContent />;
 
+  // Group logins by login_id
+  const approvals = items.filter((i) => i.action_type !== 'login');
+  const logins = items.filter((i) => i.action_type === 'login');
+  const loginGroups = new Map<string, AgentApprovalItem[]>();
+  const ungroupedLogins: AgentApprovalItem[] = [];
+  for (const i of logins) {
+    if (!i.login_id) { ungroupedLogins.push(i); continue; }
+    const arr = loginGroups.get(i.login_id) ?? [];
+    arr.push(i);
+    loginGroups.set(i.login_id, arr);
+  }
+  for (const arr of loginGroups.values()) arr.sort((a, b) => a.started_at.localeCompare(b.started_at));
+
+  // Build unified rows
+  type Row = { type: 'login-group'; loginId: string; group: AgentApprovalItem[] }
+    | { type: 'item'; item: AgentApprovalItem };
+  const rows: Row[] = [];
+  for (const [loginId, group] of loginGroups) rows.push({ type: 'login-group', loginId, group });
+  for (const item of [...ungroupedLogins, ...approvals]) rows.push({ type: 'item', item });
+
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <MessageSquare className="h-5 w-5 text-primary" /> Interactions
+            <MessageSquare className="h-5 w-5 text-brand" /> Interactions
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Agent runs waiting for human review or login — one place for all human touch points.
+            Agent runs waiting for human review or login.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {(['all', 'approval', 'login'] as FilterType[]).map((f) => (
-            <Button
+            <button
               key={f}
-              variant={filter === f ? 'default' : 'outline'}
-              size="sm"
               onClick={() => setFilter(f)}
+              className={cn(
+                'px-3 py-1.5 rounded-md text-xs font-medium transition-colors',
+                filter === f ? 'bg-brand text-brand-fg' : 'text-muted-foreground hover:bg-muted',
+              )}
             >
               {f === 'all' ? 'All' : f === 'approval' ? 'Approvals' : 'Logins'}
-            </Button>
+            </button>
           ))}
-          <Button variant="outline" size="sm" onClick={() => load()} disabled={loading}>
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-          </Button>
         </div>
       </div>
 
@@ -238,182 +233,104 @@ export default function InteractionsPage() {
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
-      ) : items.length === 0 ? (
-        <Card>
-          <CardContent className="py-10 text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
-            <CheckCircle2 className="h-4 w-4 text-green-500" /> No interactions waiting
-          </CardContent>
-        </Card>
+      ) : rows.length === 0 ? (
+        <Card><CardContent className="py-10 text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
+          <CheckCircle2 className="h-4 w-4 text-success" /> No interactions waiting
+        </CardContent></Card>
       ) : (
-        <div className="space-y-2">
-          {(() => {
-            // Group login items by login_id so N concurrent HITLs for the SAME
-            // login profile collapse into one row.  Approvals (and any stray
-            // logins without a login_id) render one-per-row as before.
-            const approvals = items.filter((i) => i.action_type !== 'login');
-            const logins    = items.filter((i) => i.action_type === 'login');
-
-            const loginGroups = new Map<string, AgentApprovalItem[]>();
-            const ungroupedLogins: AgentApprovalItem[] = [];
-            for (const i of logins) {
-              if (!i.login_id) { ungroupedLogins.push(i); continue; }
-              const arr = loginGroups.get(i.login_id) ?? [];
-              arr.push(i);
-              loginGroups.set(i.login_id, arr);
-            }
-            // Sort each group by started_at ASC (oldest first) so the header
-            // shows the longest-waiting time and the first-paused run is the
-            // one that gets the "Open Browser" click.
-            for (const arr of loginGroups.values()) {
-              arr.sort((a, b) => a.started_at.localeCompare(b.started_at));
-            }
-
-            const rows: ReactNode[] = [];
-
-            // Render grouped login cards
-            for (const [loginId, group] of loginGroups) {
-              const primary   = group[0];
-              const count     = group.length;
-              const active    = activeLoginSessions[loginId];
-              const starting  = !!startingLogin[loginId];
-              rows.push(
-                <Card key={`login-group-${loginId}`} className="hover:shadow-sm transition-shadow">
-                  <CardContent className="p-3 flex items-center gap-3">
-                    <div className="p-1.5 rounded-md shrink-0 bg-amber-100 text-amber-600 dark:bg-amber-950/30 dark:text-amber-400">
-                      <LogIn className="h-4 w-4" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <Badge variant="outline" className="border-amber-400 text-amber-600 dark:text-amber-400">
-                          Login Required
+        <Card className="overflow-hidden py-0">
+          <table className="w-full text-sm">
+            <thead className="bg-muted/40 text-xs text-muted-foreground">
+              <tr>
+                <th className="text-left font-medium px-4 py-2">Type</th>
+                <th className="text-left font-medium px-4 py-2">Agent</th>
+                <th className="text-left font-medium px-4 py-2">Step</th>
+                <th className="text-left font-medium px-4 py-2 w-24">Waiting</th>
+                <th className="w-36" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row) => {
+                if (row.type === 'login-group') {
+                  const { loginId, group } = row;
+                  const primary = group[0]!;
+                  const count = group.length;
+                  const active = activeLoginSessions[loginId];
+                  const starting = !!startingLogin[loginId];
+                  return (
+                    <tr key={`lg-${loginId}`} className="border-t hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-2.5">
+                        <Badge variant="warning" className="gap-1">
+                          <LogIn className="h-3 w-3" /> Login
                         </Badge>
-                        <span className="font-medium text-sm">{primary.login_name ?? 'Login'}</span>
+                      </td>
+                      <td className="px-4 py-2.5">
+                        <div className="font-medium">{primary.login_name ?? 'Login'}</div>
                         {count > 1 && (
-                          <Badge variant="secondary" className="gap-1 text-[10px]">
-                            <Users className="h-3 w-3" />
-                            {count} runs blocked
-                          </Badge>
+                          <div className="text-[10px] text-muted-foreground flex items-center gap-1 mt-0.5">
+                            <Users className="h-3 w-3" /> {count} runs blocked
+                          </div>
                         )}
-                        {active && (
-                          <Badge variant="outline" className="gap-1 border-blue-400 text-blue-600 dark:text-blue-400 text-[10px]">
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                            Logging in…
-                          </Badge>
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                        {count === 1
+                          ? <>{primary.agent_name} &middot; {primary.action_name}</>
+                          : group.map((g) => g.agent_name).filter((v, i, a) => a.indexOf(v) === i).join(', ')
+                        }
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(primary.started_at)}</td>
+                      <td className="px-4 py-2.5 text-right">
+                        {active ? (
+                          <Button size="sm" disabled className="bg-warning/60 text-white disabled:opacity-100 text-xs">
+                            <Loader2 className="h-3 w-3 animate-spin mr-1" /> Logging in...
+                          </Button>
+                        ) : (
+                          <Button size="sm" onClick={() => handleOpenBrowser(loginId, primary.login_name ?? 'Login')}
+                            disabled={starting} className="bg-warning hover:bg-warning/90 text-white text-xs">
+                            {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
+                            <span className="ml-1">Log In</span>
+                          </Button>
                         )}
-                        <span className="text-xs text-muted-foreground ml-auto shrink-0">
-                          {formatRelative(primary.started_at)}
-                        </span>
-                      </div>
-                      {count === 1 && !active ? (
-                        <p className="text-xs text-muted-foreground">
-                          <span className="font-medium">{primary.agent_name}</span>
-                          <span className="mx-1">·</span>
-                          {primary.action_name}
-                        </p>
-                      ) : (
-                        <div className="text-xs text-muted-foreground space-y-0.5 mt-1">
-                          {!active && count > 1 && (
-                            <p className="italic text-[11px] mb-1">
-                              Logging in once will auto-resume all {count} runs below.
-                            </p>
-                          )}
-                          {active && (
-                            <p className="italic text-[11px] mb-1 text-blue-600 dark:text-blue-400">
-                              Once you finish, every run below will re-verify automatically.
-                            </p>
-                          )}
-                          {group.map((g) => (
-                            <div key={g.id} className="flex items-center gap-2 pl-2 border-l border-muted">
-                              {active ? (
-                                <Loader2 className="h-2.5 w-2.5 animate-spin text-blue-500 shrink-0" />
-                              ) : null}
-                              <span className="font-medium">{g.agent_name}</span>
-                              <span className="opacity-60">·</span>
-                              <span>{g.action_name}</span>
-                              <span className="opacity-60">·</span>
-                              <span className="text-[10px]">
-                                {active ? 'waiting to re-verify' : formatRelative(g.started_at)}
-                              </span>
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
-                      {active ? (
-                        // In-flight: show progress inline.  The dialog is modal
-                        // so the user exits via Close (aborts → button returns
-                        // to "Log In") or Done (succeeds → group disappears
-                        // as siblings auto-resume).  No re-open affordance.
-                        <Button
-                          size="sm"
-                          disabled
-                          className="bg-amber-600/60 text-white disabled:opacity-100"
-                        >
-                          <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />
-                          Logging in…
-                        </Button>
-                      ) : (
-                        <Button
-                          size="sm"
-                          onClick={() => handleOpenBrowser(loginId, primary.login_name ?? 'Login')}
-                          disabled={starting}
-                          className="bg-amber-600 hover:bg-amber-700 text-white"
-                        >
-                          {starting ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <LogIn className="h-3.5 w-3.5 mr-1" />}
-                          Log In
-                        </Button>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            }
+                      </td>
+                    </tr>
+                  );
+                }
 
-            // Render ungrouped logins (no login_id — legacy / edge case) + approvals as standalone rows
-            for (const item of [...ungroupedLogins, ...approvals]) {
-              const isLogin = item.action_type === 'login';
-              rows.push(
-                <Card key={item.id} className="hover:shadow-sm transition-shadow">
-                  <CardContent className="p-3 flex items-center gap-3">
-                    <div className={`p-2 rounded-md shrink-0 ${isLogin ? 'bg-amber-100 text-amber-600 dark:bg-amber-950/30 dark:text-amber-400' : 'bg-violet-100 text-violet-600 dark:bg-violet-950/30 dark:text-violet-400'}`}>
-                      {isLogin ? <LogIn className="h-4 w-4" /> : <PauseCircle className="h-4 w-4" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1 flex-wrap">
-                        <Badge variant="outline" className={isLogin ? 'border-amber-400 text-amber-600 dark:text-amber-400' : 'border-violet-400 text-violet-600 dark:text-violet-400'}>
-                          {isLogin ? 'Login Required' : 'Approval Required'}
-                        </Badge>
-                        <span className="font-medium text-sm">{item.agent_name}</span>
-                        <span className="text-xs text-muted-foreground">{item.action_name}</span>
-                        <span className="text-xs text-muted-foreground ml-auto shrink-0">{formatRelative(item.started_at)}</span>
-                      </div>
+                const { item } = row;
+                const isLogin = item.action_type === 'login';
+                return (
+                  <tr key={item.id} className="border-t hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => !isLogin && setViewItem(item)}>
+                    <td className="px-4 py-2.5">
+                      <Badge variant={isLogin ? 'warning' : 'brand'} className="gap-1">
+                        {isLogin ? <><LogIn className="h-3 w-3" /> Login</> : <><PauseCircle className="h-3 w-3" /> Approval</>}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-2.5 font-medium">{item.agent_name}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                      {item.action_name}
                       {item.approval_instructions && !isLogin && (
-                        <p className="text-xs text-muted-foreground line-clamp-2">{item.approval_instructions}</p>
+                        <div className="truncate max-w-[200px] mt-0.5 opacity-60">{item.approval_instructions}</div>
                       )}
-                    </div>
-                    <div className="flex items-center gap-1 shrink-0">
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(item.started_at)}</td>
+                    <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                       {isLogin ? (
-                        // Legacy fallback — login row without a login_id.  Show
-                        // a disabled button; the workflow should be fixed to
-                        // use a proper login profile.
-                        <Button size="sm" disabled title="Login action missing login_id">
-                          <LogIn className="h-3.5 w-3.5 mr-1" /> Log In
+                        <Button size="sm" disabled className="text-xs">
+                          <LogIn className="h-3 w-3 mr-1" /> Log In
                         </Button>
                       ) : (
-                        <Button size="sm" variant="outline" onClick={() => setViewItem(item)}>
-                          <Eye className="h-3.5 w-3.5 mr-1" /> Review
+                        <Button size="sm" variant="outline" onClick={() => setViewItem(item)} className="text-xs">
+                          <Eye className="h-3 w-3 mr-1" /> Review
                         </Button>
                       )}
-                    </div>
-                  </CardContent>
-                </Card>
-              );
-            }
-
-            return rows;
-          })()}
-        </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </Card>
       )}
 
       {/* Approval review modal */}
@@ -449,7 +366,7 @@ export default function InteractionsPage() {
           <DialogFooter>
             {viewItem && (
               <>
-                <Button variant="outline" onClick={() => handleDeny(viewItem)} disabled={!!deciding[viewItem.id]} className="text-red-600 hover:text-red-700 border-red-300 hover:bg-red-50">
+                <Button variant="destructive" onClick={() => handleDeny(viewItem)} disabled={!!deciding[viewItem.id]}>
                   <XCircle className="h-4 w-4 mr-1" /> Deny
                 </Button>
                 <Button onClick={() => handleApprove(viewItem)} disabled={!!deciding[viewItem.id]}>
@@ -467,9 +384,6 @@ export default function InteractionsPage() {
           onOpenChange={(open) => {
             if (!open) {
               setViewingLoginId(null);
-              // Refresh list now + a couple more times shortly after to catch
-              // sibling runs flipping out of awaiting_approval after auto-
-              // resume re-verifies them.
               load();
               setTimeout(load, 1500);
               setTimeout(load, 4000);

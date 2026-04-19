@@ -114,57 +114,57 @@ function ExecutingDots() {
 
 function StatusBadge({ status }: { status: string }) {
   if (status === 'completed') return (
-    <Badge variant="outline" className="gap-1.5 border-green-500 text-green-600 dark:text-green-400">
+    <Badge variant="success" className="gap-1.5">
       <CheckCircle2 className="h-3 w-3" />Completed
     </Badge>
   );
   if (status === 'failed') return (
-    <Badge variant="outline" className="gap-1.5 border-red-400 text-red-600 dark:text-red-400">
+    <Badge variant="danger" className="gap-1.5">
       <XCircle className="h-3 w-3" />Failed
     </Badge>
   );
   if (status === 'aborted') return (
-    <Badge variant="outline" className="gap-1.5 border-red-400 text-red-600 dark:text-red-400">
+    <Badge variant="danger" className="gap-1.5">
       <XCircle className="h-3 w-3" />Aborted
     </Badge>
   );
   if (status === 'executing') return (
-    <Badge variant="outline" className="gap-2 border-blue-300 text-blue-600 dark:text-blue-400">
+    <Badge variant="info" className="gap-2">
       <ExecutingDots />Executing
     </Badge>
   );
   if (status === 'awaiting_approval') return (
-    <Badge variant="outline" className="gap-1.5 border-violet-400 text-violet-600 dark:text-violet-400">
+    <Badge variant="brand" className="gap-1.5">
       <PauseCircle className="h-3 w-3" />Awaiting Approval
     </Badge>
   );
   if (status === 'awaiting_login') return (
-    <Badge variant="outline" className="gap-1.5 border-amber-400 text-amber-600 dark:text-amber-400">
+    <Badge variant="warning" className="gap-1.5">
       <Monitor className="h-3 w-3" />Awaiting Login
     </Badge>
   );
   if (status === 'provisioning') return (
-    <Badge variant="outline" className="gap-1.5 border-orange-400 text-orange-600 dark:text-orange-400">
+    <Badge variant="warning" className="gap-1.5">
       <Loader2 className="h-3 w-3 animate-spin" />Starting
     </Badge>
   );
   if (status === 'queued') return (
-    <Badge variant="outline" className="gap-1.5 border-amber-400 text-amber-600 dark:text-amber-400">
+    <Badge variant="warning" className="gap-1.5">
       <Clock className="h-3 w-3" />Queued
     </Badge>
   );
-  return <Badge variant="secondary">{status}</Badge>;
+  return <Badge variant="neutral">{status}</Badge>;
 }
 
 function TriggerBadge({ type }: { type: string }) {
-  const map: Record<string, { icon: React.ReactNode; label: string; cls: string }> = {
-    webhook: { icon: <Webhook className="h-3 w-3" />, label: 'Webhook', cls: 'border-violet-300 text-violet-700 bg-violet-50 dark:bg-violet-950/40 dark:text-violet-400' },
-    cron:    { icon: <Clock className="h-3 w-3" />,   label: 'Cron',    cls: 'border-cyan-300 text-cyan-700 bg-cyan-50 dark:bg-cyan-950/40 dark:text-cyan-400' },
-    manual:  { icon: <Play className="h-3 w-3" />,    label: 'Manual',  cls: 'border-slate-300 text-slate-600 bg-slate-50 dark:bg-slate-900/40 dark:text-slate-400' },
+  const map: Record<string, { icon: React.ReactNode; label: string; variant: 'brand' | 'info' | 'neutral' }> = {
+    webhook: { icon: <Webhook className="h-3 w-3" />, label: 'Webhook', variant: 'brand' },
+    cron:    { icon: <Clock className="h-3 w-3" />,   label: 'Cron',    variant: 'info' },
+    manual:  { icon: <Play className="h-3 w-3" />,    label: 'Manual',  variant: 'neutral' },
   };
-  const def = map[type] ?? { icon: null, label: type, cls: '' };
+  const def = map[type] ?? { icon: null, label: type, variant: 'neutral' as const };
   return (
-    <Badge variant="outline" className={cn('gap-1 text-xs', def.cls)}>
+    <Badge variant={def.variant} className="gap-1 text-xs">
       {def.icon}{def.label}
     </Badge>
   );
@@ -193,13 +193,13 @@ function RunsTable({
   return (
     <div>
       {/* Column headers */}
-      <div className="hidden md:grid grid-cols-[1fr_140px_80px_80px_70px_100px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 border-b">
+      <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_80px_70px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 border-b">
         <span>Agent</span>
+        <span>Progress</span>
         <span>Status</span>
         <span>Trigger</span>
         <span className="text-right">Duration</span>
         <span className="text-right">Tokens</span>
-        <span className="text-right">Cost</span>
         <span />
       </div>
 
@@ -214,7 +214,9 @@ function RunsTable({
             run.completed_at
               ? new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
               : isRunning || isAwaiting ? Date.now() - new Date(run.started_at).getTime() : null;
-          const costUsd = typeof run.cost_usd === 'string' ? parseFloat(run.cost_usd) : (run.cost_usd ?? 0);
+          // Per-run cost no longer surfaced in the history table — billing
+          // lives on the Billing & Usage page, aggregated from the Anthropic
+          // Cost API. Tokens stay as an in-context usage estimate.
           const tokensTotal = (run.tokens_input ?? 0) + (run.tokens_output ?? 0);
           const childCount = run.child_count ?? 0;
           const completedSteps = actions.filter((a) => a.status === 'completed' || a.status === 'approved').length;
@@ -224,16 +226,33 @@ function RunsTable({
                  onClick={() => router.push(`/agent-history/${run.id}`)}>
 
               {/* Desktop: column layout */}
-              <div className="hidden md:grid grid-cols-[1fr_140px_80px_80px_70px_100px_60px] gap-2 items-center px-3 py-2">
+              <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_80px_70px_60px] gap-2 items-center px-3 py-2">
                 {/* Agent */}
                 <div className="flex items-center gap-2 min-w-0">
                   <StatusGlyph status={displayStatus} />
-                  {run.depth > 0 && <GitBranch className="h-3 w-3 text-indigo-500 shrink-0" />}
-                  <span className={cn('text-sm font-medium truncate', run.depth > 0 && 'text-indigo-600 dark:text-indigo-400')}>{run.agent_name}</span>
+                  {run.depth > 0 && <GitBranch className="h-3 w-3 text-brand shrink-0" />}
+                  <span className={cn('text-sm font-medium truncate', run.depth > 0 && 'text-brand')}>{run.agent_name}</span>
                   {childCount > 0 && (
-                    <span className="text-[9px] text-indigo-500 shrink-0">{childCount} sub</span>
+                    <span className="text-[9px] text-brand shrink-0">{childCount} sub</span>
                   )}
-                  {run.has_active_browser && <Monitor className="h-3 w-3 text-blue-500 shrink-0" />}
+                  {run.has_active_browser && <Monitor className="h-3 w-3 text-info shrink-0" />}
+                </div>
+                {/* Progress */}
+                <div className="flex items-center gap-0.5">
+                  {actions.map((a) => (
+                    <span key={a.id} className={cn(
+                      'h-1.5 rounded-full w-3',
+                      a.status === 'completed' || a.status === 'approved' ? 'bg-success' :
+                      a.status === 'failed' ? 'bg-danger' :
+                      a.status === 'executing' ? 'bg-info animate-pulse' :
+                      a.status === 'awaiting_approval' ? 'bg-warning animate-pulse' :
+                      'bg-muted'
+                    )} title={`${a.action_name ?? a.action_type} · ${a.status}`} />
+                  ))}
+                  {Array.from({ length: Math.max(0, (run.total_actions ?? actions.length) - actions.length) }).map((_, i) => (
+                    <span key={`p-${i}`} className="h-1.5 w-3 rounded-full bg-muted/50" />
+                  ))}
+                  <span className="text-[9px] text-muted-foreground/50 ml-1 tabular-nums">{completedSteps}/{run.total_actions ?? actions.length}</span>
                 </div>
                 {/* Status */}
                 <StatusBadge status={displayStatus} />
@@ -245,14 +264,10 @@ function RunsTable({
                 <span className="text-xs text-muted-foreground tabular-nums text-right">
                   {tokensTotal > 0 ? (tokensTotal >= 1000 ? `${(tokensTotal / 1000).toFixed(1)}K` : tokensTotal) : '—'}
                 </span>
-                {/* Cost */}
-                <span className="text-xs tabular-nums text-right text-emerald-700 dark:text-emerald-400">
-                  {costUsd > 0 ? (costUsd < 0.01 ? '< $0.01' : `$${costUsd.toFixed(2)}`) : '—'}
-                </span>
                 {/* Actions */}
                 <div className="flex items-center justify-end gap-0.5">
                   {onAbort && (ABORTABLE_STATUSES as readonly string[]).includes(run.status) && (
-                    <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive/50 hover:text-destructive"
+                    <Button variant="ghost" size="icon-xs" className="text-destructive/50 hover:text-destructive"
                       disabled={abortingRunId === run.id}
                       onClick={(e) => { e.stopPropagation(); onAbort(run); }}>
                       {abortingRunId === run.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
@@ -260,27 +275,6 @@ function RunsTable({
                   )}
                 </div>
               </div>
-
-              {/* Progress bar below the row */}
-              {(run.total_actions ?? actions.length) > 0 && (
-                <div className="flex items-center gap-0.5 px-3 pb-1.5 -mt-0.5">
-                  {actions.map((a) => (
-                    <span key={a.id} className={cn(
-                      'h-1 rounded-full w-4',
-                      a.status === 'completed' || a.status === 'approved' ? 'bg-emerald-500' :
-                      a.status === 'failed' ? 'bg-red-500' :
-                      a.status === 'executing' ? 'bg-blue-500 animate-pulse' :
-                      a.status === 'awaiting_approval' ? 'bg-amber-500 animate-pulse' :
-                      'bg-muted'
-                    )} title={`${a.action_name ?? a.action_type} · ${a.status}`} />
-                  ))}
-                  {/* Remaining steps not yet started */}
-                  {Array.from({ length: Math.max(0, (run.total_actions ?? actions.length) - actions.length) }).map((_, i) => (
-                    <span key={`pending-${i}`} className="h-1 w-4 rounded-full bg-muted/50" />
-                  ))}
-                  <span className="text-[9px] text-muted-foreground/40 ml-1 tabular-nums">{completedSteps}/{run.total_actions ?? actions.length}</span>
-                </div>
-              )}
 
               {/* Mobile: stacked */}
               <div className="md:hidden px-3 py-2 space-y-1">
@@ -304,14 +298,14 @@ function RunsTable({
  */
 function StatusGlyph({ status }: { status: string }) {
   const map: Record<string, { color: string; pulse: boolean; char: string }> = {
-    executing:         { color: 'bg-blue-500',    pulse: true,  char: '●' },
-    provisioning:      { color: 'bg-slate-400',   pulse: true,  char: '●' },
-    queued:            { color: 'bg-slate-300',   pulse: false, char: '●' },
-    awaiting_approval: { color: 'bg-violet-500',  pulse: true,  char: '●' },
-    awaiting_login:    { color: 'bg-amber-500',   pulse: true,  char: '●' },
-    completed:         { color: 'bg-emerald-500', pulse: false, char: '●' },
-    failed:            { color: 'bg-red-500',     pulse: false, char: '●' },
-    aborted:           { color: 'bg-red-400',     pulse: false, char: '●' },
+    executing:         { color: 'bg-info',      pulse: true,  char: '●' },
+    provisioning:      { color: 'bg-text-dim',  pulse: true,  char: '●' },
+    queued:            { color: 'bg-text-dim',  pulse: false, char: '●' },
+    awaiting_approval: { color: 'bg-brand',     pulse: true,  char: '●' },
+    awaiting_login:    { color: 'bg-warning',   pulse: true,  char: '●' },
+    completed:         { color: 'bg-success',   pulse: false, char: '●' },
+    failed:            { color: 'bg-danger',    pulse: false, char: '●' },
+    aborted:           { color: 'bg-danger',    pulse: false, char: '●' },
   };
   const s = map[status] ?? map.executing;
   return (
@@ -558,17 +552,17 @@ export default function AgentExecutionsPage() {
       {/* Header + pagination */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><History className="h-5 w-5 text-primary" /> Executions</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><History className="h-5 w-5 text-brand" /> Executions</h1>
           <p className="text-sm text-muted-foreground mt-0.5">Live and historical agent runs</p>
         </div>
         <div className="flex items-center gap-2">
           {totalPages > 1 && (
             <div className="flex items-center gap-1 text-xs text-muted-foreground">
               <span className="tabular-nums">{(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}</span>
-              <Button variant="outline" size="icon" className="h-7 w-7" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
+              <Button variant="outline" size="icon-sm" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
                 <ChevronLeft className="h-3.5 w-3.5" />
               </Button>
-              <Button variant="outline" size="icon" className="h-7 w-7" disabled={page >= totalPages} onClick={() => goToPage(page + 1)}>
+              <Button variant="outline" size="icon-sm" disabled={page >= totalPages} onClick={() => goToPage(page + 1)}>
                 <ChevronRight className="h-3.5 w-3.5" />
               </Button>
             </div>
@@ -590,42 +584,42 @@ export default function AgentExecutionsPage() {
           {/* Summary Cards */}
           <div className="grid grid-cols-3 gap-4">
             <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('active', statusFilters) && 'ring-2 ring-blue-400/60 bg-blue-50/40 dark:bg-blue-950/20')}
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('active', statusFilters) && 'ring-2 ring-info/40 bg-info-soft')}
               onClick={() => applyGroupFilter('active')}
             >
               <CardContent className="py-3 px-4">
                 <div className="flex items-center gap-2.5">
-                  <Zap className="h-4 w-4 text-blue-500 shrink-0" />
+                  <Zap className="h-4 w-4 text-info shrink-0" />
                   <span className="text-sm font-medium">Active Runs</span>
-                  <Badge variant="outline" className="ml-auto gap-1.5 border-blue-300 text-blue-600 dark:text-blue-400 text-xs">
+                  <Badge variant="info" className="ml-auto gap-1.5 text-xs">
                     {summaryActive > 0 ? <><ExecutingDots />{summaryActive}</> : summaryActive}
                   </Badge>
                 </div>
               </CardContent>
             </Card>
             <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('queued', statusFilters) && 'ring-2 ring-amber-400/60 bg-amber-50/40 dark:bg-amber-950/20')}
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('queued', statusFilters) && 'ring-2 ring-warning/40 bg-warning-soft')}
               onClick={() => applyGroupFilter('queued')}
             >
               <CardContent className="py-3 px-4">
                 <div className="flex items-center gap-2.5">
-                  <Clock className="h-4 w-4 text-amber-500 shrink-0" />
+                  <Clock className="h-4 w-4 text-warning shrink-0" />
                   <span className="text-sm font-medium">Queued</span>
-                  <Badge variant="outline" className="ml-auto border-amber-300 text-amber-600 dark:text-amber-400 text-xs">
+                  <Badge variant="warning" className="ml-auto text-xs">
                     {summaryQueued}
                   </Badge>
                 </div>
               </CardContent>
             </Card>
             <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('completed', statusFilters) && 'ring-2 ring-green-400/60 bg-green-50/40 dark:bg-green-950/20')}
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('completed', statusFilters) && 'ring-2 ring-success/40 bg-success-soft')}
               onClick={() => applyGroupFilter('completed')}
             >
               <CardContent className="py-3 px-4">
                 <div className="flex items-center gap-2.5">
-                  <CheckCircle2 className="h-4 w-4 text-green-500 shrink-0" />
+                  <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
                   <span className="text-sm font-medium">Completed</span>
-                  <Badge variant="outline" className="ml-auto border-green-300 text-green-600 dark:text-green-400 text-xs">
+                  <Badge variant="success" className="ml-auto text-xs">
                     {summaryCompleted.toLocaleString()}
                   </Badge>
                 </div>
@@ -645,12 +639,12 @@ export default function AgentExecutionsPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className={cn('h-8 gap-1.5 text-xs border-dashed', statusFilters.length > 0 && 'border-solid border-primary/40 text-foreground')}
+                      className={cn('gap-1.5 text-xs border-dashed', statusFilters.length > 0 && 'border-solid border-brand/40 text-foreground')}
                     >
                       <Filter className="h-3 w-3" />
                       Status
                       {statusFilters.length > 0 && (
-                        <Badge variant="secondary" className="ml-0.5 h-4 min-w-4 px-1 text-xs">{statusFilters.length}</Badge>
+                        <Badge variant="brand" className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">{statusFilters.length}</Badge>
                       )}
                     </Button>
                   </DropdownMenuTrigger>
@@ -687,12 +681,12 @@ export default function AgentExecutionsPage() {
                     <Button
                       variant="outline"
                       size="sm"
-                      className={cn('h-8 gap-1.5 text-xs border-dashed', triggerFilter && 'border-solid border-primary/40 text-foreground')}
+                      className={cn('gap-1.5 text-xs border-dashed', triggerFilter && 'border-solid border-brand/40 text-foreground')}
                     >
                       <Webhook className="h-3 w-3" />
                       Trigger
                       {triggerFilter && (
-                        <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-xs">1</Badge>
+                        <Badge variant="brand" className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">1</Badge>
                       )}
                     </Button>
                   </DropdownMenuTrigger>
@@ -722,12 +716,12 @@ export default function AgentExecutionsPage() {
                       <Button
                         variant="outline"
                         size="sm"
-                        className={cn('h-8 gap-1.5 text-xs border-dashed', agentFilter && 'border-solid border-primary/40 text-foreground')}
+                        className={cn('gap-1.5 text-xs border-dashed', agentFilter && 'border-solid border-brand/40 text-foreground')}
                       >
                         <Monitor className="h-3 w-3" />
                         Agent
                         {agentFilter && (
-                          <Badge variant="secondary" className="ml-0.5 h-4 px-1 text-xs">1</Badge>
+                          <Badge variant="brand" className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">1</Badge>
                         )}
                       </Button>
                     </DropdownMenuTrigger>
@@ -760,21 +754,21 @@ export default function AgentExecutionsPage() {
                       value={dateInputValue}
                       onChange={(e) => setDateInputValue(e.target.value)}
                       max={toFilter || undefined}
-                      className="h-8 text-xs w-[136px]"
+                      className="h-[28px] text-xs w-[136px]"
                       autoFocus
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && dateInputValue) applyDate('from', dateInputValue);
                         if (e.key === 'Escape') { setPendingDate(null); setDateInputValue(''); }
                       }}
                     />
-                    <Button size="sm" className="h-8 px-3 text-xs" onClick={() => applyDate('from', dateInputValue)} disabled={!dateInputValue}>Add</Button>
-                    <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => { setPendingDate(null); setDateInputValue(''); }}>Cancel</Button>
+                    <Button size="sm" className="text-xs" onClick={() => applyDate('from', dateInputValue)} disabled={!dateInputValue}>Add</Button>
+                    <Button variant="ghost" size="sm" className="text-xs" onClick={() => { setPendingDate(null); setDateInputValue(''); }}>Cancel</Button>
                   </div>
                 ) : (
                   <Button
                     variant="outline"
                     size="sm"
-                    className={cn('h-8 gap-1.5 text-xs border-dashed', fromFilter && 'border-solid border-primary/40 text-foreground')}
+                    className={cn('gap-1.5 text-xs border-dashed', fromFilter && 'border-solid border-brand/40 text-foreground')}
                     onClick={() => { setPendingDate('from'); setDateInputValue(fromFilter); }}
                   >
                     <CalendarIcon className="h-3 w-3" />
@@ -791,21 +785,21 @@ export default function AgentExecutionsPage() {
                       value={dateInputValue}
                       onChange={(e) => setDateInputValue(e.target.value)}
                       min={fromFilter || undefined}
-                      className="h-8 text-xs w-[136px]"
+                      className="h-[28px] text-xs w-[136px]"
                       autoFocus
                       onKeyDown={(e) => {
                         if (e.key === 'Enter' && dateInputValue) applyDate('to', dateInputValue);
                         if (e.key === 'Escape') { setPendingDate(null); setDateInputValue(''); }
                       }}
                     />
-                    <Button size="sm" className="h-8 px-3 text-xs" onClick={() => applyDate('to', dateInputValue)} disabled={!dateInputValue}>Add</Button>
-                    <Button variant="ghost" size="sm" className="h-8 px-2 text-xs" onClick={() => { setPendingDate(null); setDateInputValue(''); }}>Cancel</Button>
+                    <Button size="sm" className="text-xs" onClick={() => applyDate('to', dateInputValue)} disabled={!dateInputValue}>Add</Button>
+                    <Button variant="ghost" size="sm" className="text-xs" onClick={() => { setPendingDate(null); setDateInputValue(''); }}>Cancel</Button>
                   </div>
                 ) : (
                   <Button
                     variant="outline"
                     size="sm"
-                    className={cn('h-8 gap-1.5 text-xs border-dashed', toFilter && 'border-solid border-primary/40 text-foreground')}
+                    className={cn('gap-1.5 text-xs border-dashed', toFilter && 'border-solid border-brand/40 text-foreground')}
                     onClick={() => { setPendingDate('to'); setDateInputValue(toFilter); }}
                   >
                     <CalendarIcon className="h-3 w-3" />
@@ -815,7 +809,7 @@ export default function AgentExecutionsPage() {
 
                 {/* Clear all */}
                 {hasFilters && pendingDate === null && (
-                  <Button variant="ghost" size="sm" className="h-8 px-2 text-xs text-muted-foreground" onClick={clearFilters}>
+                  <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={clearFilters}>
                     Clear all
                   </Button>
                 )}

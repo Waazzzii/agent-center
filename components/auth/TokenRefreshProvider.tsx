@@ -66,7 +66,7 @@ export function TokenRefreshProvider() {
 
       onSessionExpired: clearAuth,
       lockName: "agent-center-token-refresh",
-      loginPath: "/login",
+      loginPath: "/",
 
       extraListeners: (reschedule) => {
         const handleStorage = (e: StorageEvent): void => {

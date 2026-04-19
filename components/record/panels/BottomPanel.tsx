@@ -74,7 +74,7 @@ export function BottomPanel({
               className={cn(
                 'px-3 py-1.5 text-[10px] font-medium transition-all flex items-center gap-1.5 border-t-2',
                 isActive
-                  ? 'border-primary text-foreground'
+                  ? 'border-brand text-foreground'
                   : 'border-transparent text-muted-foreground hover:text-foreground hover:border-border'
               )}
               onClick={() => {
@@ -105,7 +105,7 @@ export function BottomPanel({
         <div className="flex flex-col" style={{ height: panelHeight, maxHeight: '50vh' }}>
           {/* Resize handle — fixed, never scrolls */}
           <div
-            className="h-1 cursor-ns-resize bg-border/30 hover:bg-primary/30 active:bg-primary/50 transition-colors shrink-0"
+            className="h-1 cursor-ns-resize bg-border/30 hover:bg-brand/30 active:bg-brand/50 transition-colors shrink-0"
             onMouseDown={(e) => {
               e.preventDefault();
               const startY = e.clientY;

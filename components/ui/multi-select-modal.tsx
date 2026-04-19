@@ -164,7 +164,7 @@ export function MultiSelectModal({
             {loading ? (
               <div className="flex items-center justify-center py-12">
                 <div className="text-center">
-                  <div className="mb-2 inline-block h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent"></div>
+                  <div className="mb-2 inline-block h-8 w-8 animate-spin rounded-full border-4 border-brand border-t-transparent"></div>
                   <p className="text-sm text-muted-foreground">Loading...</p>
                 </div>
               </div>

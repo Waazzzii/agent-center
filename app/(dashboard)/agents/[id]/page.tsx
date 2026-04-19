@@ -29,6 +29,7 @@ import {
   getAgentAccessGroups,
   getActionAccessGroups,
   setActionAccessGroups,
+  getLoginAccessGroups,
   type AgentAccessGroup,
 } from '@/lib/api/agent-access-groups';
 import type { OrganizationConnector } from '@/types/api.types';
@@ -47,7 +48,7 @@ import { toast } from 'sonner';
 import {
   ArrowLeft, Plus, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
   Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Monitor,
-  LogIn, GitBranch, Settings, CircleDot,
+  LogIn, GitBranch, Settings, CircleDot, AlertTriangle, Globe, Users,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -192,6 +193,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     targetAgentId: '',
     maxConcurrent: 3,
     batchSize: 1,
+    maxRetries: 0,
     accessGroupIds: [] as string[],
   });
   const [aiSteps, setAiSteps] = useState<AiStep[]>([]);
@@ -315,6 +317,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       targetAgentId: '',
       maxConcurrent: 3,
       batchSize: 1,
+      maxRetries: 0,
       accessGroupIds: [],
     });
     if (type === 'sub_agent' && selectedOrgId) {
@@ -335,14 +338,22 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       targetAgentId: action.target_agent_id ?? '',
       maxConcurrent: action.max_concurrent ?? 3,
       batchSize: action.batch_size ?? 1,
+      maxRetries: action.max_retries ?? 0,
       accessGroupIds: [],
     });
     if (action.action_type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
     }
-    // Load existing access groups for login/approval actions
-    if ((action.action_type === 'login' || action.action_type === 'approval') && selectedOrgId) {
+    // Load existing access groups:
+    //   - Approval actions: per-action (agent_action_access_groups)
+    //   - Login actions: per-login-profile (agent_login_access_groups) — centralized
+    //     so groups configured on the same login from any agent stay in sync.
+    if (action.action_type === 'approval' && selectedOrgId) {
       getActionAccessGroups(selectedOrgId, action.id).then((groups) => {
+        setActionForm((f) => ({ ...f, accessGroupIds: groups.map((g) => g.id) }));
+      }).catch(() => {});
+    } else if (action.action_type === 'login' && action.login_id && selectedOrgId) {
+      getLoginAccessGroups(selectedOrgId, action.login_id).then((groups) => {
         setActionForm((f) => ({ ...f, accessGroupIds: groups.map((g) => g.id) }));
       }).catch(() => {});
     }
@@ -377,6 +388,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           name: selectedScript?.name ?? 'Browser Script',
           action_type: 'browser_script',
           script_id: actionForm.scriptId,
+          max_retries: actionForm.maxRetries,
         };
       } else if (actionForm.action_type === 'sub_agent') {
         const selectedAgent = validSubAgents.find((a) => a.id === actionForm.targetAgentId);
@@ -404,8 +416,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         savedActionId = created?.id;
         toast.success('Action added');
       }
-      // Save access groups for login/approval actions
-      if (savedActionId && (actionForm.action_type === 'login' || actionForm.action_type === 'approval')) {
+      // Save access groups for APPROVAL actions only (per-action gating).
+      //
+      // Login groups are managed per-login-profile on the login edit page —
+      // they're shared across every agent that uses the login, so we show a
+      // read-only summary here and deliberately skip writing from this dialog
+      // to avoid clobbering changes made elsewhere.
+      if (savedActionId && actionForm.action_type === 'approval') {
         await setActionAccessGroups(selectedOrgId, savedActionId, actionForm.accessGroupIds).catch((err) =>
           toast.error('Failed to save access groups: ' + (err.message ?? ''))
         );
@@ -563,7 +580,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   if (loading || !agent) {
     return (
       <div className="flex h-64 items-center justify-center">
-        <div className="h-10 w-10 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+        <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand border-t-transparent" />
       </div>
     );
   }
@@ -582,7 +599,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             <h1 className="text-2xl font-bold">{agent.name}</h1>
             <Badge variant={agent.is_active ? 'default' : 'secondary'}>{agent.is_active ? 'Active' : 'Inactive'}</Badge>
             {agent.requires_browser && (
-              <Badge variant="outline" className="gap-1 border-sky-400 text-sky-600 dark:text-sky-400">
+              <Badge variant="outline" className="gap-1 border-info/40 text-info">
                 <Monitor className="h-3 w-3" />Browser
               </Badge>
             )}
@@ -633,10 +650,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             <div>
               <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-2 px-1">Trigger</p>
               {trigger ? (
-                <Card className="border-primary/40 bg-primary/5 dark:bg-primary/10">
+                <Card className="border-brand/40 bg-brand/5 dark:bg-brand/10">
                   <CardContent className="py-3 px-4">
                     <div className="flex items-start gap-3">
-                      <div className="p-2 rounded-lg bg-primary/15 text-primary mt-0.5 shrink-0">
+                      <div className="p-2 rounded-lg bg-brand/15 text-brand mt-0.5 shrink-0">
                         {triggerIcon[trigger.trigger_type as keyof typeof triggerIcon]}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -646,7 +663,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         {trigger.trigger_type === 'manual' && (
                           <div className="mt-1.5 space-y-2">
                             <p className="text-xs text-muted-foreground">This agent can only be run manually. Add a Webhook or Cron trigger to also automate runs.</p>
-                            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setTriggerDialogOpen(true)}>
+                            <Button size="sm" variant="outline" className="text-xs" onClick={() => setTriggerDialogOpen(true)}>
                               <Plus className="mr-1.5 h-3 w-3" />Add Webhook or Cron trigger
                             </Button>
                           </div>
@@ -695,7 +712,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   </CardContent>
                 </Card>
               ) : (
-                <Card className="border-dashed border-2 border-primary/30 hover:border-primary/50 transition-colors">
+                <Card className="border-dashed border-2 border-brand/30 hover:border-brand/50 transition-colors">
                   <CardContent className="py-6 flex flex-col items-center gap-3">
                     <div className="p-3 rounded-full bg-muted">
                       <Play className="h-5 w-5 text-muted-foreground" />
@@ -757,7 +774,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                               ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
                               : action.action_type === 'sub_agent'
                               ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-                              : 'bg-primary/10 text-primary'
+                              : 'bg-brand/10 text-brand'
                           )}>
                             {action.action_type === 'login' ? <LogIn className="h-3.5 w-3.5" />
                               : action.action_type === 'browser_script' ? <CircleDot className="h-3.5 w-3.5" />
@@ -772,9 +789,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                 variant={action.action_type === 'agent' ? 'secondary' : 'outline'}
                                 className={cn('text-xs',
                                   action.action_type === 'approval' && 'border-orange-400 text-orange-600',
-                                  action.action_type === 'login' && 'border-sky-400 text-sky-600 dark:text-sky-400',
-                                  action.action_type === 'browser_script' && 'border-violet-400 text-violet-600 dark:text-violet-400',
-                                  action.action_type === 'sub_agent' && 'border-indigo-400 text-indigo-600 dark:text-indigo-400',
+                                  action.action_type === 'login' && 'border-info/40 text-info',
+                                  action.action_type === 'browser_script' && 'border-brand/40 text-brand',
+                                  action.action_type === 'sub_agent' && 'border-brand/40 text-brand',
                                 )}
                               >
                                 {action.action_type === 'approval' ? 'Human Review'
@@ -790,7 +807,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                 : action.action_type === 'agent'
                                 ? `→ ${action.ai_step_name ?? '(no AI step selected)'}`
                                 : action.action_type === 'browser_script'
-                                ? `→ ${action.script_name ?? '(no script selected)'}`
+                                ? `→ ${action.script_name ?? '(no script selected)'}${(action.max_retries ?? 0) > 0 ? ` · ${action.max_retries} ${action.max_retries === 1 ? 'retry' : 'retries'}` : ''}`
                                 : action.action_type === 'sub_agent'
                                 ? `→ ${action.target_agent_name ?? 'Unknown agent'}${(action.batch_size ?? 1) > 1 ? ` · batch ${action.batch_size}` : ''} · ×${action.max_concurrent ?? 3} concurrent`
                                 : (action.approval_instructions ?? '—')}
@@ -816,7 +833,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   className="w-full"
                   onClick={() => setActionTypeModalOpen(true)}
                 >
-                  <Card className="border-dashed border-2 hover:border-primary/50 hover:bg-muted/20 transition-colors cursor-pointer">
+                  <Card className="border-dashed border-2 hover:border-brand/50 hover:bg-muted/20 transition-colors cursor-pointer">
                     <CardContent className="py-4 flex items-center justify-center gap-2">
                       <Plus className="h-4 w-4 text-muted-foreground" />
                       <span className="text-sm text-muted-foreground font-medium">Add Step</span>
@@ -866,7 +883,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     onClick={() => { setAgentActive((v) => !v); setSettingsDirty(true); }}
                     className={cn(
                       'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
-                      agentActive ? 'bg-primary' : 'bg-muted-foreground/30'
+                      agentActive ? 'bg-brand' : 'bg-muted-foreground/30'
                     )}
                   >
                     <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentActive ? 'translate-x-5' : 'translate-x-0.5')} />
@@ -989,6 +1006,39 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   const selected = logins.find((l) => l.id === actionForm.loginId);
                   return selected ? <LoginPreview login={selected} availableVars={availableVars} /> : null;
                 })()}
+
+                {/* Access groups — read-only summary.  Login groups are managed
+                    per-login-profile (not per-action) so they stay in sync
+                    across every agent that uses this login.  Edit them on
+                    the login profile page. */}
+                {actionForm.loginId && (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>Login Access Groups</Label>
+                      <Link
+                        href={`/actions/logins/${actionForm.loginId}`}
+                        className="text-xs text-brand hover:underline"
+                      >
+                        Edit on login profile →
+                      </Link>
+                    </div>
+                    {actionForm.accessGroupIds.length === 0 ? (
+                      <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
+                        <Globe className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          <strong>Open to everyone.</strong> With no groups assigned to this login profile, any user with Agent Center access in this organization can complete the login when the agent pauses.
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-2 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+                        <Users className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                        <span>
+                          <strong>Restricted.</strong> Only members of the {actionForm.accessGroupIds.length === 1 ? 'assigned group' : `${actionForm.accessGroupIds.length} assigned groups`} can complete this login. Applies to every agent using this login profile.
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </>
             )}
 
@@ -1004,15 +1054,29 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   availableVars={availableVars}
                 />
                 {/* Access groups — who can approve */}
-                <div className="space-y-1">
+                <div className="space-y-2">
                   <Label>Approval Groups</Label>
-                  <p className="text-xs text-muted-foreground">Only members of selected groups can approve this step. Leave empty for anyone.</p>
                   <MultiSelectTags
                     options={allGroups.map((g) => ({ value: g.id, label: `${g.name} (${g.member_count})` }))}
                     selected={actionForm.accessGroupIds}
                     onChange={(ids) => setActionForm((f) => ({ ...f, accessGroupIds: ids }))}
                     placeholder="Select access groups…"
                   />
+                  {actionForm.accessGroupIds.length === 0 ? (
+                    <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
+                      <Globe className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      <span>
+                        <strong>Open to everyone.</strong> With no groups selected, any user with Agent Center access in this organization will see and be able to approve this step. Add one or more groups to restrict approvals.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-2 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+                      <Users className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      <span>
+                        <strong>Restricted.</strong> Only members of the {actionForm.accessGroupIds.length === 1 ? 'selected group' : `${actionForm.accessGroupIds.length} selected groups`} will see and be able to approve this step.
+                      </span>
+                    </div>
+                  )}
                 </div>
               </>
             )}
@@ -1047,6 +1111,34 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     <BrowserScriptPreview script={selected} availableVars={availableVars} />
                   ) : null;
                 })()}
+
+                {/* Retry config */}
+                <div className="space-y-1">
+                  <Label>Retries on Failure</Label>
+                  <Select
+                    value={String(actionForm.maxRetries)}
+                    onValueChange={(v) => setActionForm(f => ({ ...f, maxRetries: parseInt(v) }))}
+                  >
+                    <SelectTrigger className="w-32">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">No retries</SelectItem>
+                      <SelectItem value="1">1 retry</SelectItem>
+                      <SelectItem value="2">2 retries</SelectItem>
+                      <SelectItem value="3">3 retries</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Failed items will be retried up to this many times. Each retry re-runs the <strong>entire script from the beginning</strong> for that item.
+                  </p>
+                  {actionForm.maxRetries > 0 && (
+                    <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
+                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      <span>Use caution with scripts that perform submissions or create records — a retry will re-execute those actions and may cause duplicates.</span>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
@@ -1205,8 +1297,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
               onClick={() => { setActionTypeModalOpen(false); openNewAction('agent'); }}
             >
-              <div className="p-2 rounded-lg bg-primary/10 shrink-0">
-                <PlayCircle className="h-4 w-4 text-primary" />
+              <div className="p-2 rounded-lg bg-brand/10 shrink-0">
+                <PlayCircle className="h-4 w-4 text-brand" />
               </div>
               <div>
                 <p className="font-medium text-sm">AI Step</p>
@@ -1241,7 +1333,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   disabled={disabled}
                 >
                   <div className="p-2 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 shrink-0">
-                    <GitBranch className="h-4 w-4 text-indigo-600 dark:text-indigo-400" />
+                    <GitBranch className="h-4 w-4 text-brand" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Run Agent</p>
@@ -1266,7 +1358,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   onClick={() => { setActionTypeModalOpen(false); openNewAction('login'); }}
                 >
                   <div className="p-2 rounded-lg bg-sky-100 dark:bg-sky-900/30 shrink-0">
-                    <LogIn className="h-4 w-4 text-sky-600 dark:text-sky-400" />
+                    <LogIn className="h-4 w-4 text-info" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Browser Login</p>
@@ -1279,7 +1371,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   onClick={() => { setActionTypeModalOpen(false); openNewAction('browser_script'); }}
                 >
                   <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0">
-                    <CircleDot className="h-4 w-4 text-violet-600 dark:text-violet-400" />
+                    <CircleDot className="h-4 w-4 text-brand" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Browser Script</p>
@@ -1299,7 +1391,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <Button
                   size="sm"
                   variant="outline"
-                  className="h-7 text-xs border-sky-300 text-sky-600 hover:bg-sky-50 hover:border-sky-400 dark:text-sky-400 dark:border-sky-700 dark:hover:bg-sky-950/30"
+                  className="text-xs border-info/40 text-info hover:bg-info-soft hover:border-info/60"
                   onClick={async () => {
                     if (!selectedOrgId) return;
                     try {

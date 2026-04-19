@@ -76,7 +76,7 @@ export default function CreateAiStepPage() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-primary" /> New AI Step
+              <Sparkles className="h-5 w-5 text-brand" /> New AI Step
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">Create a reusable AI prompt for agent workflows</p>
           </div>

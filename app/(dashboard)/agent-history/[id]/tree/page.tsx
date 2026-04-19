@@ -32,28 +32,28 @@ function formatDuration(ms: number | null): string {
 }
 
 function statusColor(status: string): string {
-  if (status === 'completed') return 'border-green-400 bg-green-50 dark:bg-green-950/20';
-  if (status === 'failed') return 'border-red-400 bg-red-50 dark:bg-red-950/20';
-  if (status === 'aborted') return 'border-red-400 bg-red-50 dark:bg-red-950/20';
-  if (status === 'executing') return 'border-blue-400 bg-blue-50 dark:bg-blue-950/20';
-  if (status === 'awaiting_approval') return 'border-violet-400 bg-violet-50 dark:bg-violet-950/20';
-  if (status === 'provisioning' || status === 'queued') return 'border-amber-400 bg-amber-50 dark:bg-amber-950/20';
+  if (status === 'completed') return 'border-success/40 bg-success-soft';
+  if (status === 'failed') return 'border-danger/40 bg-danger-soft';
+  if (status === 'aborted') return 'border-danger/40 bg-danger-soft';
+  if (status === 'executing') return 'border-info/40 bg-info-soft';
+  if (status === 'awaiting_approval') return 'border-brand/40 bg-brand-soft';
+  if (status === 'provisioning' || status === 'queued') return 'border-warning/40 bg-warning-soft';
   return 'border-border bg-muted/30';
 }
 
 function statusBadgeCls(status: string): string {
-  if (status === 'completed') return 'border-green-400 text-green-600';
-  if (status === 'failed' || status === 'aborted') return 'border-red-400 text-red-600';
-  if (status === 'executing') return 'border-blue-400 text-blue-600';
-  if (status === 'awaiting_approval') return 'border-violet-400 text-violet-600';
-  return 'border-amber-400 text-amber-600';
+  if (status === 'completed') return 'border-success/40 text-success';
+  if (status === 'failed' || status === 'aborted') return 'border-danger/40 text-danger';
+  if (status === 'executing') return 'border-info/40 text-info';
+  if (status === 'awaiting_approval') return 'border-brand/40 text-brand';
+  return 'border-warning/40 text-warning';
 }
 
 function StatusIcon({ status }: { status: string }) {
-  if (status === 'completed') return <CheckCircle2 className="h-4 w-4 text-green-500" />;
-  if (status === 'failed' || status === 'aborted') return <XCircle className="h-4 w-4 text-red-500" />;
-  if (status === 'executing') return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
-  return <Clock className="h-4 w-4 text-amber-500" />;
+  if (status === 'completed') return <CheckCircle2 className="h-4 w-4 text-success" />;
+  if (status === 'failed' || status === 'aborted') return <XCircle className="h-4 w-4 text-danger" />;
+  if (status === 'executing') return <Loader2 className="h-4 w-4 text-info animate-spin" />;
+  return <Clock className="h-4 w-4 text-warning" />;
 }
 
 // ---------------------------------------------------------------------------
@@ -183,7 +183,7 @@ export default function ExecutionTreePage() {
 
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">
-        <GitBranch className="h-5 w-5 text-indigo-500" />
+        <GitBranch className="h-5 w-5 text-brand" />
         <h1 className="text-xl font-semibold tracking-tight">Execution Tree</h1>
         {root && (
           <span className="text-xs font-mono text-muted-foreground/60 bg-muted px-1.5 py-0.5 rounded">
@@ -196,9 +196,9 @@ export default function ExecutionTreePage() {
       {!loading && nodes.length > 1 && (
         <div className="flex items-center gap-4 text-sm">
           <span className="text-muted-foreground">{totalRuns} total runs</span>
-          <span className="text-green-600">{completed} completed</span>
-          {failed > 0 && <span className="text-red-600">{failed} failed</span>}
-          {running > 0 && <span className="text-blue-600">{running} running</span>}
+          <span className="text-success">{completed} completed</span>
+          {failed > 0 && <span className="text-danger">{failed} failed</span>}
+          {running > 0 && <span className="text-info">{running} running</span>}
         </div>
       )}
 

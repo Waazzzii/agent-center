@@ -140,7 +140,7 @@ export function UserSelectModal({
                         {user.picture_url ? (
                           <img src={user.picture_url} alt={displayName} className="object-cover" />
                         ) : (
-                          <div className="flex h-full w-full items-center justify-center bg-primary/10 text-primary font-medium">
+                          <div className="flex h-full w-full items-center justify-center bg-brand/10 text-brand font-medium">
                             {displayName.charAt(0).toUpperCase()}
                           </div>
                         )}
@@ -152,7 +152,7 @@ export function UserSelectModal({
                       </div>
 
                       {isSelected && (
-                        <Check className="h-5 w-5 text-primary flex-shrink-0" />
+                        <Check className="h-5 w-5 text-brand flex-shrink-0" />
                       )}
 
                       {!user.is_active && (

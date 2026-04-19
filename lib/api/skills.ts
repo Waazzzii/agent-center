@@ -5,6 +5,8 @@ export interface SkillUsage {
   action_name: string;
   agent_id: string;
   agent_name: string;
+  ai_step_id: string;
+  ai_step_name: string;
 }
 
 export interface Skill {

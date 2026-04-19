@@ -119,7 +119,6 @@ function TreeNodeRow({
           error_message: item.error_message,
           tokens_input: item.tokens_input,
           tokens_output: item.tokens_output,
-          cost_usd: item.cost_usd,
           model: item.model,
           batch_item_index: item.batch_item_index,
         }));
@@ -144,7 +143,7 @@ function TreeNodeRow({
       <div
         className={cn(
           'flex items-center gap-1.5 py-1 px-2 cursor-pointer rounded-sm transition-colors',
-          isSelected ? 'bg-primary/10 font-medium' : 'hover:bg-muted/50',
+          isSelected ? 'bg-brand/10 font-medium' : 'hover:bg-muted/50',
         )}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={() => onSelect(node)}

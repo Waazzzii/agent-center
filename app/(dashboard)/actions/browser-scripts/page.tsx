@@ -34,15 +34,15 @@ export default function RecordPage() {
 
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Video className="h-5 w-5 text-primary" /> Browser Scripts</h1>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Video className="h-5 w-5 text-brand" /> Browser Scripts</h1>
         <p className="text-sm text-muted-foreground mt-0.5">Record browser interactions and save them as reusable scripts</p>
       </div>
 
       {/* Record New Script bar */}
       <div className="flex items-center justify-between rounded-lg border px-4 py-3 bg-card">
         <div className="flex items-center gap-3">
-          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10">
-            <CircleDot className="h-4 w-4 text-primary" />
+          <div className="flex h-8 w-8 items-center justify-center rounded-md bg-brand/10">
+            <CircleDot className="h-4 w-4 text-brand" />
           </div>
           <div>
             <p className="text-sm font-medium">Record New Script</p>

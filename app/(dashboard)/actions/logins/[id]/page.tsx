@@ -34,7 +34,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   ArrowLeft, Loader2, LogIn, Save, Trash2,
-  CheckCircle2, AlertCircle, HelpCircle, ShieldCheck,
+  CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { LoginFormBody, type LoginFormData } from '@/components/actions/LoginFormBody';
@@ -43,9 +43,9 @@ import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 const TERMINAL = new Set(['completed', 'failed', 'aborted']);
 
 function StatusPill({ status }: { status: Login['status'] }) {
-  if (status === 'valid') return <Badge variant="outline" className="gap-1 border-green-500 text-green-600 dark:text-green-400"><CheckCircle2 className="h-3 w-3" />Logged In</Badge>;
-  if (status === 'needs_login') return <Badge variant="outline" className="gap-1 border-amber-500 text-amber-600 dark:text-amber-400"><AlertCircle className="h-3 w-3" />Not Logged In</Badge>;
-  return <Badge variant="outline" className="gap-1 border-slate-400 text-slate-500"><HelpCircle className="h-3 w-3" />Not Yet Checked</Badge>;
+  if (status === 'valid') return <Badge variant="success" className="gap-1"><CheckCircle2 className="h-3 w-3" />Logged In</Badge>;
+  if (status === 'needs_login') return <Badge variant="warning" className="gap-1"><AlertCircle className="h-3 w-3" />Not Logged In</Badge>;
+  return <Badge variant="neutral" className="gap-1"><HelpCircle className="h-3 w-3" />Not Yet Checked</Badge>;
 }
 
 function formatRelative(iso: string | null): string {
@@ -251,7 +251,7 @@ export default function EditLoginPage() {
           </Button>
           <div>
             <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <LogIn className="h-5 w-5 text-primary" /> {login.name}
+              <LogIn className="h-5 w-5 text-brand" /> {login.name}
             </h1>
             <p className="text-sm text-muted-foreground mt-0.5">Edit login profile</p>
           </div>
@@ -285,18 +285,18 @@ export default function EditLoginPage() {
             <div className="flex items-center gap-2">
               {needsLogin ? (
                 <Button size="sm" onClick={handleLogin} disabled={isStarting || !!activeSession}
-                  className="bg-amber-600 hover:bg-amber-700 text-white h-7 text-xs">
+                  className="bg-warning hover:bg-warning/90 text-white text-xs">
                   {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
                   <span className="ml-1">Log In</span>
                 </Button>
               ) : (
-                <Button variant="outline" size="sm" onClick={handleVerify} disabled={isStarting || !!activeSession} className="h-7 text-xs">
+                <Button variant="outline" size="sm" onClick={handleVerify} disabled={isStarting || !!activeSession} className="text-xs">
                   {isStarting || activeSession ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
                   <span className="ml-1">{activeSession ? 'Verifying...' : 'Verify'}</span>
                 </Button>
               )}
               {activeSession && (
-                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setDialogOpen(true)}>
+                <Button variant="outline" size="sm" className="text-xs" onClick={() => setDialogOpen(true)}>
                   Watch
                 </Button>
               )}
@@ -317,7 +317,7 @@ export default function EditLoginPage() {
         <CardContent className="p-5 space-y-2">
           <Label>Access Groups</Label>
           <p className="text-xs text-muted-foreground">
-            Only members of selected groups can perform this login when an agent pauses. Leave empty for anyone.
+            Controls who gets notified and who can complete this login when an agent pauses for HITL. Groups are shared across every agent that uses this login profile.
           </p>
           <MultiSelectTags
             options={allGroups.map((g) => ({ value: g.id, label: `${g.name} (${g.member_count})` }))}
@@ -325,6 +325,21 @@ export default function EditLoginPage() {
             onChange={setLoginGroupIds}
             placeholder="Select access groups..."
           />
+          {loginGroupIds.length === 0 ? (
+            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
+              <Globe className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                <strong>Open to everyone.</strong> With no groups selected, any user with Agent Center access in this organization can complete this login when an agent pauses. Add one or more groups to restrict it.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+              <Users className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                <strong>Restricted.</strong> Only members of the {loginGroupIds.length === 1 ? 'selected group' : `${loginGroupIds.length} selected groups`} can complete this login.
+              </span>
+            </div>
+          )}
         </CardContent>
       </Card>
 

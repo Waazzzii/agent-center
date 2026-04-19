@@ -69,7 +69,7 @@ export default async function RootLayout({
       <body
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+        <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
           <BrandingProvider hasLogo={!!branding.logo_storage_path} logoVersion={logoVersion}>
             <TokenRefreshProvider />
             {children}

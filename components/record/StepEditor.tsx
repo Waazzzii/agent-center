@@ -355,14 +355,14 @@ function StepRow({ step, index, isSelected, onSelect, onDelete, onUpdate }: Step
     <div
       className={cn(
         'border-b last:border-b-0 px-3 py-2.5 flex items-center gap-2 group transition-colors cursor-pointer',
-        isSelected ? 'bg-primary/10 hover:bg-primary/15' : 'hover:bg-muted/30'
+        isSelected ? 'bg-brand/10 hover:bg-brand/15' : 'hover:bg-muted/30'
       )}
       onClick={onSelect}
     >
       {/* Step number */}
       <span className={cn(
         'w-5 text-xs text-center shrink-0 tabular-nums',
-        isSelected ? 'text-primary font-medium' : 'text-muted-foreground'
+        isSelected ? 'text-brand font-medium' : 'text-muted-foreground'
       )}>
         {index + 1}
       </span>

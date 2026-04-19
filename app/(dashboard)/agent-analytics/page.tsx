@@ -19,15 +19,18 @@ import {
   type ActionTypeStats,
   type FailureHotspot,
 } from '@/lib/api/agents';
+import { getAgentCapacity, type AgentCapacity } from '@/lib/api/ai-agent';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
+import { DateRangePicker } from '@/components/ui/date-range-picker';
+import { useBillingRangePresets } from '@/lib/hooks/use-billing-ranges';
+import { getBillingCycle, type BillingCycle } from '@/lib/api/billing-cycles';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
 import { toast } from 'sonner';
 import {
-  TrendingUp, TrendingDown, Minus,
-  Activity, Clock, AlertTriangle, Zap, DollarSign,
+  Activity, Clock, AlertTriangle, Zap, Server, Monitor,
   RefreshCw, Loader2, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -37,8 +40,6 @@ import {
 } from 'recharts';
 
 // ─── Helpers ──────────────────────────────────────────────────────
-
-const NBSP = '\u00A0';
 
 function toNum(v: unknown): number {
   const n = typeof v === 'number' ? v : parseFloat(String(v ?? 0));
@@ -66,17 +67,6 @@ function fmtUSD(n: number): string {
   return `$${n.toFixed(0)}`;
 }
 
-function fmtDelta(current: number, previous: number): { label: string; cls: string; icon: React.ReactNode } | null {
-  if (previous === 0) return null;
-  const pct = ((current - previous) / previous) * 100;
-  if (Math.abs(pct) < 0.5) return { label: 'flat', cls: 'text-muted-foreground', icon: <Minus className="h-3 w-3" /> };
-  const up = pct > 0;
-  return {
-    label: `${up ? '+' : ''}${pct.toFixed(1)}%`,
-    cls: up ? 'text-emerald-600 dark:text-emerald-400' : 'text-red-600 dark:text-red-400',
-    icon: up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />,
-  };
-}
 
 function fmtRelative(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -86,15 +76,8 @@ function fmtRelative(iso: string): string {
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
 
-// ─── Time ranges ──────────────────────────────────────────────────
-
-const RANGES = [
-  { label: '24h', ms: 24 * 3_600_000 },
-  { label: '7d',  ms: 7 * 24 * 3_600_000 },
-  { label: '30d', ms: 30 * 24 * 3_600_000 },
-  { label: '90d', ms: 90 * 24 * 3_600_000 },
-] as const;
-type RangeLabel = typeof RANGES[number]['label'];
+// Preset ranges now come from useBillingRangePresets — shared with Billing
+// so customers see the same timeframe chips on both pages.
 
 // ─── Page ─────────────────────────────────────────────────────────
 
@@ -103,28 +86,52 @@ export default function AnalyticsPage() {
   const allowed = useRequirePermission('agent_center_user');
   const router = useRouter();
 
-  const [range, setRange] = useState<RangeLabel>('7d');
+  // Billing cycles — shared presets with the Billing page so the two stay
+  // visually + behaviourally in sync. Falls back to calendar-month windows
+  // until the fetch lands.
+  const [activeCycle, setActiveCycle] = useState<BillingCycle | null>(null);
+  const [recentCycles, setRecentCycles] = useState<BillingCycle[]>([]);
+  const ANALYTICS_RANGES = useBillingRangePresets(activeCycle, recentCycles);
+
+  const [rangeIdx, setRangeIdx] = useState(2); // default "7d" (after This cycle / Last cycle)
+  const [customFrom, setCustomFrom] = useState('');
+  const [customTo, setCustomTo] = useState('');
   const [data, setData] = useState<ExecutionAnalytics | null>(null);
+  const [capacity, setCapacity] = useState<AgentCapacity | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const load = useCallback(async () => {
+  const isCustom = ANALYTICS_RANGES[rangeIdx]?.label === 'Custom';
+  const range = isCustom
+    ? (customFrom && customTo ? { from: customFrom, to: customTo } : null)
+    : ANALYTICS_RANGES[rangeIdx]?.getRange() ?? null;
+
+  useEffect(() => {
     if (!selectedOrgId) return;
+    getBillingCycle(selectedOrgId)
+      .then((d) => { setActiveCycle(d.active); setRecentCycles(d.recent); })
+      .catch(() => { /* fallback presets are fine */ });
+  }, [selectedOrgId]);
+
+  const load = useCallback(async () => {
+    if (!selectedOrgId || !range) return;
     setLoading(true);
     try {
-      const ms = RANGES.find((r) => r.label === range)?.ms ?? 7 * 24 * 3_600_000;
-      const to = new Date();
-      const from = new Date(to.getTime() - ms);
-      setData(await getExecutionAnalytics(selectedOrgId, {
-        from: from.toISOString(),
-        to:   to.toISOString(),
-        compare: true,
-      }));
+      const [analytics, cap] = await Promise.all([
+        getExecutionAnalytics(selectedOrgId, {
+          from: new Date(range.from + 'T00:00:00').toISOString(),
+          to:   new Date(range.to + 'T23:59:59').toISOString(),
+          compare: true,
+        }),
+        getAgentCapacity(selectedOrgId).catch(() => null),
+      ]);
+      setData(analytics);
+      setCapacity(cap);
     } catch {
       toast.error('Failed to load analytics');
     } finally {
       setLoading(false);
     }
-  }, [selectedOrgId, range]);
+  }, [selectedOrgId, rangeIdx, customFrom, customTo, activeCycle, recentCycles]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -144,28 +151,20 @@ export default function AnalyticsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Activity className="h-5 w-5 text-primary" /> Analytics</h1>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Activity className="h-5 w-5 text-brand" /> Analytics</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Agent performance, cost, and reliability trends.
+            Agent performance, token-usage estimates, and reliability trends. For invoiced amounts, see Billing & Usage.
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <div className="flex items-center border rounded-md overflow-hidden">
-            {RANGES.map((r) => (
-              <button
-                key={r.label}
-                onClick={() => setRange(r.label)}
-                className={cn(
-                  'px-3 py-1.5 text-xs font-medium transition-colors',
-                  range === r.label
-                    ? 'bg-primary text-primary-foreground'
-                    : 'hover:bg-muted'
-                )}
-              >
-                {r.label}
-              </button>
-            ))}
-          </div>
+          <DateRangePicker
+            presets={ANALYTICS_RANGES}
+            selectedIndex={rangeIdx}
+            customFrom={customFrom}
+            customTo={customTo}
+            onPresetChange={setRangeIdx}
+            onCustomChange={(from, to) => { setCustomFrom(from); setCustomTo(to); }}
+          />
           <Button variant="outline" size="sm" onClick={load} disabled={loading}>
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           </Button>
@@ -178,11 +177,15 @@ export default function AnalyticsPage() {
         </div>
       ) : isEmpty ? (
         <Card><CardContent className="py-16 text-center text-sm text-muted-foreground">
-          No agent executions in the last {range}.  Run an agent to see analytics here.
+          No agent executions in this period.  Run an agent to see analytics here.
         </CardContent></Card>
       ) : data ? (
         <>
-          <HeadlineCard data={data} />
+          {/* Capacity bars */}
+          {capacity && <CapacityCards capacity={capacity} />}
+
+          {/* Stat cards */}
+          <SummaryCards data={data} />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2">
@@ -205,83 +208,148 @@ export default function AnalyticsPage() {
             <TriggerBreakdownCard data={data} />
           </div>
 
-          <CostAndUsageCard data={data} />
+          {/* Cost moved to dedicated Billing & Usage page */}
         </>
       ) : null}
     </div>
   );
 }
 
-// ─── Headline card ────────────────────────────────────────────────
+// ─── Capacity cards ──────────────────────────────────────────────
 
-function HeadlineCard({ data }: { data: ExecutionAnalytics }) {
-  const total     = toNum(data.summary?.total);
-  const completed = toNum(data.summary?.completed);
-  const avgDur    = toNum(data.summary?.avg_duration_s);
-  const successPct = total > 0
-    ? (completed / (completed + toNum(data.summary.failed) + toNum(data.summary.aborted))) * 100
-    : 0;
-  const active    = toNum(data.live?.active) + toNum(data.live?.awaiting);
+function CapacityCards({ capacity }: { capacity: AgentCapacity }) {
+  const agentPct = capacity.max_concurrent_agents && capacity.max_concurrent_agents > 0
+    ? Math.round((capacity.active_agents / capacity.max_concurrent_agents) * 100) : null;
+  const browserPct = capacity.max_concurrent_browsers && capacity.max_concurrent_browsers > 0
+    ? Math.round((capacity.active_browser_slots / capacity.max_concurrent_browsers) * 100) : null;
 
-  const prev = data.previous?.summary;
-  const totalDelta    = prev ? fmtDelta(total, toNum(prev.total)) : null;
-  const completedPrev = prev ? toNum(prev.completed) : 0;
-  const successDelta = prev && prev.total
-    ? fmtDelta(successPct, (completedPrev / toNum(prev.total)) * 100)
-    : null;
-  const durDelta = prev ? fmtDelta(avgDur, toNum(prev.avg_duration_s)) : null;
+  const barColor = (pct: number | null) =>
+    pct === null ? 'bg-emerald-500' : pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-400' : 'bg-emerald-500';
+  const textColor = (pct: number | null) =>
+    pct === null ? 'text-emerald-600 dark:text-emerald-400' : pct >= 90 ? 'text-red-500' : pct >= 70 ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400';
 
   return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-          <Stat label="Runs" value={total.toLocaleString()} delta={totalDelta} />
-          <Stat label="Success" value={`${successPct.toFixed(1)}%`} delta={successDelta} />
-          <Stat label="Avg duration" value={fmtDuration(avgDur)} delta={durDelta} deltaInverse />
-          <Stat
-            label="Active now"
-            value={active.toLocaleString()}
-            delta={null}
-            suffix={active > 0 ? (
-              <span className="inline-flex items-center gap-1 text-xs text-emerald-600 dark:text-emerald-400">
-                <span className="relative flex h-2 w-2"><span className="animate-ping absolute h-full w-full rounded-full bg-emerald-400 opacity-75" /><span className="relative rounded-full h-2 w-2 bg-emerald-500" /></span>
-                live
-              </span>
-            ) : null}
-          />
-        </div>
-      </CardContent>
-    </Card>
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+      {/* Agent capacity */}
+      <Card>
+        <CardContent className="py-3 px-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Server className="h-4 w-4 text-brand" />
+              <span className="text-xs font-medium text-muted-foreground">Agent Capacity</span>
+            </div>
+            {agentPct !== null && (
+              <span className={cn('text-sm font-bold tabular-nums', textColor(agentPct))}>{agentPct}%</span>
+            )}
+          </div>
+          <div className="text-lg font-bold tabular-nums">
+            {capacity.active_agents} active
+            {capacity.queued_agents > 0 && <span className="text-amber-500 text-sm ml-1">· {capacity.queued_agents} queued</span>}
+          </div>
+          {capacity.max_concurrent_agents != null && capacity.max_concurrent_agents > 0 && (
+            <>
+              <div className="text-[10px] text-muted-foreground">{capacity.active_agents} of {capacity.max_concurrent_agents} slots</div>
+              <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
+                <div className={cn('h-full rounded-full transition-all', barColor(agentPct))}
+                  style={{ width: `${Math.min(100, agentPct ?? 0)}%` }} />
+              </div>
+            </>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Browser capacity */}
+      <Card>
+        <CardContent className="py-3 px-4">
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center gap-2">
+              <Monitor className="h-4 w-4 text-blue-500" />
+              <span className="text-xs font-medium text-muted-foreground">Browser Capacity</span>
+            </div>
+            {browserPct !== null && (
+              <span className={cn('text-sm font-bold tabular-nums', textColor(browserPct))}>{browserPct}%</span>
+            )}
+          </div>
+          <div className="text-lg font-bold tabular-nums">
+            {capacity.active_browser_slots} active
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            {capacity.active_agent_browser_slots} agent · {capacity.active_browser_slots - capacity.active_agent_browser_slots} session
+            {capacity.max_concurrent_browsers ? ` · ${capacity.max_concurrent_browsers} limit` : ''}
+          </div>
+          {capacity.max_concurrent_browsers != null && capacity.max_concurrent_browsers > 0 && (
+            <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
+              <div className={cn('h-full rounded-full transition-all', barColor(browserPct))}
+                style={{ width: `${Math.min(100, browserPct ?? 0)}%` }} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
-function Stat({
-  label, value, delta, deltaInverse = false, suffix,
-}: {
-  label: string;
-  value: string;
-  delta: ReturnType<typeof fmtDelta>;
-  deltaInverse?: boolean;  // for metrics where "down" is good (duration, failure %)
-  suffix?: React.ReactNode;
-}) {
-  // Flip color for inverse metrics so a DECREASE in duration shows as green.
-  const invertedDelta = delta && deltaInverse
-    ? { ...delta, cls: delta.cls === 'text-emerald-600 dark:text-emerald-400' ? 'text-red-600 dark:text-red-400' : delta.cls === 'text-red-600 dark:text-red-400' ? 'text-emerald-600 dark:text-emerald-400' : delta.cls }
-    : delta;
+// ─── Summary cards ───────────────────────────────────────────────
+
+function SummaryCards({ data }: { data: ExecutionAnalytics }) {
+  const total     = toNum(data.summary?.total);
+  const completed = toNum(data.summary?.completed);
+  const failed    = toNum(data.summary?.failed);
+  const avgDur    = toNum(data.summary?.avg_duration_s);
+  const successPct = total > 0
+    ? (completed / (completed + failed + toNum(data.summary.aborted))) * 100
+    : 0;
+  const active    = toNum(data.live?.active) + toNum(data.live?.awaiting);
+
   return (
-    <div>
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="text-3xl font-semibold mt-1">{value}</div>
-      <div className="flex items-center gap-2 mt-1 text-xs min-h-[16px]">
-        {invertedDelta && (
-          <span className={cn('inline-flex items-center gap-0.5', invertedDelta.cls)}>
-            {invertedDelta.icon}{invertedDelta.label}
-          </span>
-        )}
-        {invertedDelta && <span className="text-muted-foreground">vs prev</span>}
-        {suffix}
-      </div>
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <SummaryCard
+        icon={<Activity className="h-4 w-4 text-blue-500" />}
+        label="Total Runs"
+        value={total.toLocaleString()}
+      />
+      <SummaryCard
+        icon={<Zap className="h-4 w-4 text-emerald-500" />}
+        label="Success Rate"
+        value={`${successPct.toFixed(1)}%`}
+        sub={`${completed} completed · ${failed} failed`}
+      />
+      <SummaryCard
+        icon={<Clock className="h-4 w-4 text-violet-500" />}
+        label="Avg Duration"
+        value={fmtDuration(avgDur)}
+      />
+      <SummaryCard
+        icon={<Activity className="h-4 w-4 text-amber-500" />}
+        label="Active Now"
+        value={active.toLocaleString()}
+        sub={active > 0 ? 'Running' : ''}
+        live={active > 0}
+      />
     </div>
+  );
+}
+
+function SummaryCard({ icon, label, value, sub, live }: {
+  icon: React.ReactNode; label: string; value: string; sub?: string; live?: boolean;
+}) {
+  return (
+    <Card>
+      <CardContent className="py-3 px-4">
+        <div className="flex items-center gap-2 mb-1">
+          {icon}
+          <span className="text-xs text-muted-foreground font-medium">{label}</span>
+          {live && (
+            <span className="relative flex h-2 w-2 ml-auto">
+              <span className="animate-ping absolute h-full w-full rounded-full bg-emerald-400 opacity-75" />
+              <span className="relative rounded-full h-2 w-2 bg-emerald-500" />
+            </span>
+          )}
+        </div>
+        <div className="text-xl font-bold tabular-nums">{value}</div>
+        {sub && <div className="text-[10px] text-muted-foreground mt-0.5">{sub}</div>}
+      </CardContent>
+    </Card>
   );
 }
 
@@ -318,10 +386,22 @@ function RunsOverTimeCard({ data, onBarClick }: {
               <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} />
               <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip
-                contentStyle={{ fontSize: 12, borderRadius: 6, border: '1px solid hsl(var(--border))', background: 'hsl(var(--popover))' }}
-                labelFormatter={(d) => new Date(d as string).toLocaleDateString()}
-              />
+              <Tooltip content={({ active, payload }) => {
+                if (!active || !payload?.length) return null;
+                const d = payload[0]?.payload;
+                const total = toNum(d?.completed) + toNum(d?.failed) + toNum(d?.aborted);
+                return (
+                  <div className="rounded-md border bg-background px-3 py-1.5 text-xs shadow-md">
+                    <div className="text-muted-foreground">{new Date(d?.date).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}</div>
+                    <div className="font-semibold">{total} runs</div>
+                    <div className="flex items-center gap-3 mt-0.5 text-[10px] text-muted-foreground">
+                      <span className="text-emerald-500">{d?.completed} ok</span>
+                      <span className="text-red-500">{d?.failed} failed</span>
+                      {d?.aborted > 0 && <span className="text-amber-500">{d?.aborted} aborted</span>}
+                    </div>
+                  </div>
+                );
+              }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
               <Bar dataKey="completed" stackId="a" fill="hsl(142 71% 45%)" name="Completed" />
               <Bar dataKey="failed"    stackId="a" fill="hsl(0 72% 51%)"   name="Failed" />
@@ -388,7 +468,7 @@ function TopAgentsCard({ data, onRowClick }: {
             <h3 className="text-sm font-semibold">Top agents</h3>
             <p className="text-xs text-muted-foreground">By run volume in period</p>
           </div>
-          <Link href="/agent-history" className="text-xs text-primary hover:underline">
+          <Link href="/agent-history" className="text-xs text-brand hover:underline">
             View all →
           </Link>
         </div>
@@ -422,7 +502,7 @@ function TopAgentsCard({ data, onRowClick }: {
                       <td className="px-3 py-2 font-medium">{r.agent_name}</td>
                       <td className="px-3 py-2 text-right tabular-nums">{total.toLocaleString()}</td>
                       <td className="px-3 py-2 text-right tabular-nums">
-                        <span className={warn ? 'text-amber-600 dark:text-amber-400' : undefined}>
+                        <span className={warn ? 'text-warning' : undefined}>
                           {successPct.toFixed(0)}%
                         </span>
                         {warn && <span className="ml-1">⚠</span>}
@@ -535,7 +615,7 @@ function ActionTypeBreakdownCard({ data }: { data: ExecutionAnalytics }) {
                     </span>
                   </div>
                   <div className="h-1.5 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full bg-primary/70" style={{ width: `${pct}%` }} />
+                    <div className="h-full bg-brand/70" style={{ width: `${pct}%` }} />
                   </div>
                 </div>
               );
@@ -582,62 +662,5 @@ function TriggerBreakdownCard({ data }: { data: ExecutionAnalytics }) {
         )}
       </CardContent>
     </Card>
-  );
-}
-
-// ─── Cost & usage ─────────────────────────────────────────────────
-
-function CostAndUsageCard({ data }: { data: ExecutionAnalytics }) {
-  const cost = data.cost;
-  const tokensIn   = toNum(cost?.tokens_input);
-  const tokensOut  = toNum(cost?.tokens_output);
-  const cacheRead  = toNum(cost?.tokens_cache_read);
-  const cacheWrite = toNum(cost?.tokens_cache_write);
-  const totalCost  = toNum(cost?.cost_usd);
-  const aiSteps    = toNum(cost?.ai_steps);
-
-  const prevCost = data.previous?.cost ? toNum(data.previous.cost.cost_usd) : 0;
-  const costDelta = data.previous ? fmtDelta(totalCost, prevCost) : null;
-
-  return (
-    <Card>
-      <CardContent className="p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div>
-            <h3 className="text-sm font-semibold flex items-center gap-1.5">
-              <DollarSign className="h-4 w-4 text-emerald-600" />
-              Cost &amp; usage
-            </h3>
-            <p className="text-xs text-muted-foreground">Your cost — {aiSteps.toLocaleString()} AI step{aiSteps === 1 ? '' : 's'} completed</p>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-          <Stat label="Total cost" value={fmtUSD(totalCost)} delta={costDelta} />
-          <UsageStat label="Input" value={fmtTokens(tokensIn)} sub="tokens" />
-          <UsageStat label="Output" value={fmtTokens(tokensOut)} sub="tokens" />
-          <UsageStat label="Cache read" value={fmtTokens(cacheRead)} sub="tokens" />
-          <UsageStat label="Cache write" value={fmtTokens(cacheWrite)} sub="tokens" />
-        </div>
-
-        {aiSteps > 0 && (
-          <div className="mt-4 pt-4 border-t text-xs text-muted-foreground">
-            Avg cost per AI step: {fmtUSD(totalCost / aiSteps)}
-            {NBSP}·{NBSP}
-            Avg tokens per step: {fmtTokens(Math.round((tokensIn + tokensOut) / aiSteps))}
-          </div>
-        )}
-      </CardContent>
-    </Card>
-  );
-}
-
-function UsageStat({ label, value, sub }: { label: string; value: string; sub: string }) {
-  return (
-    <div>
-      <div className="text-xs uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="text-2xl font-semibold mt-1 tabular-nums">{value}</div>
-      <div className="text-xs text-muted-foreground">{sub}</div>
-    </div>
   );
 }

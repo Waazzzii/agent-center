@@ -197,7 +197,7 @@ export default function AiAgentPage() {
 
         /* ── Loading state ──────────────────────────────────────────────── */
         <div className="flex items-center justify-center py-12">
-          <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+          <div className="h-8 w-8 animate-spin rounded-full border-4 border-brand border-t-transparent" />
         </div>
 
       ) : !status?.is_authorized ? (
@@ -208,7 +208,7 @@ export default function AiAgentPage() {
             <Bot className="h-12 w-12 text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">AI Agent is disabled</h3>
             <p className="text-sm text-muted-foreground mb-6 max-w-sm">
-              Enable the AI Agent to allow automated actions using connector tools on behalf of {selectedOrgName}.
+              Enable the AI Agent to allow automated actions using connector tools on behalf of {selectedOrgName}. Your platform OAuth token is stored securely.
             </p>
             <Button
               onClick={handleEnable}
@@ -256,15 +256,15 @@ export default function AiAgentPage() {
                 </CardTitle>
                 <CardDescription>
                   The AI agent is authorized to execute connector tools on behalf of this organization.
-                  The platform OAuth token is stored securely and rotated automatically on each use.
+                  Your platform OAuth token is stored securely.
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm dark:border-green-800 dark:bg-green-950">
-                  <CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400 shrink-0" />
+                <div className="flex items-center gap-2 rounded-lg border border-success/30 bg-success-soft px-4 py-3 text-sm">
+                  <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
                   <div className="space-y-0.5">
-                    <p className="font-medium text-green-800 dark:text-green-200">Authorized</p>
-                    <p className="text-green-700 dark:text-green-300">
+                    <p className="font-medium text-success">Authorized</p>
+                    <p className="text-success">
                       By {status.authorized_by_email}
                       {status.connected_at && (
                         <> &middot; {new Date(status.connected_at).toLocaleDateString()}</>
@@ -292,7 +292,7 @@ export default function AiAgentPage() {
                     href="https://platform.claude.com/settings/keys"
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="inline-flex items-center gap-0.5 text-primary underline underline-offset-2"
+                    className="inline-flex items-center gap-0.5 text-brand underline underline-offset-2"
                   >
                     Get your key
                     <ExternalLink className="h-3 w-3" />
@@ -354,9 +354,9 @@ export default function AiAgentPage() {
                   </div>
                 ) : (
                   <div className="space-y-3">
-                    <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm dark:border-amber-800 dark:bg-amber-950">
-                      <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-400 shrink-0" />
-                      <p className="text-amber-800 dark:text-amber-300">
+                    <div className="flex items-center gap-2 rounded-lg border border-warning/30 bg-warning-soft px-4 py-3 text-sm">
+                      <AlertCircle className="h-4 w-4 text-warning shrink-0" />
+                      <p className="text-warning">
                         No API key configured — agents cannot execute until a key is added.
                       </p>
                     </div>
@@ -415,7 +415,7 @@ export default function AiAgentPage() {
               <CardContent>
                 {connectorsLoading ? (
                   <div className="flex items-center justify-center py-6">
-                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+                    <div className="h-5 w-5 animate-spin rounded-full border-2 border-brand border-t-transparent" />
                   </div>
                 ) : connectors.length === 0 ? (
                   <div className="flex items-center gap-2 rounded-lg border border-muted px-4 py-3 text-sm text-muted-foreground">

@@ -33,3 +33,19 @@ export async function saveAnthropicKey(orgId: string, api_key: string): Promise<
 export async function removeAnthropicKey(orgId: string): Promise<void> {
   await apiClient.delete(`/admin/organizations/${orgId}/ai-agent/anthropic-key`);
 }
+
+export interface AgentCapacity {
+  max_concurrent_agents: number | null;
+  max_concurrent_browsers: number | null;
+  active_agents: number;
+  active_browser_slots: number;
+  active_agent_browser_slots: number;
+  queued_agents: number;
+}
+
+export async function getAgentCapacity(orgId: string): Promise<AgentCapacity> {
+  const response = await apiClient.get<AgentCapacity>(
+    `/admin/organizations/${orgId}/ai-agent/capacity`
+  );
+  return response.data;
+}

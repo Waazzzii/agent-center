@@ -8,6 +8,7 @@
  */
 
 import axios from 'axios';
+import { redirectToAuth } from '../auth/oauth';
 
 const agentClient = axios.create({
   baseURL: process.env.NEXT_PUBLIC_AGENT_API_URL || 'http://localhost:8080',
@@ -28,7 +29,7 @@ agentClient.interceptors.response.use(
   (response) => response,
   (error) => {
     if (error.response?.status === 401 && typeof window !== 'undefined') {
-      window.location.replace('/login');
+      void redirectToAuth();
     }
     return Promise.reject(error);
   }
