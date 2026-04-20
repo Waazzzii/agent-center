@@ -38,7 +38,7 @@ export function usePermissionsSync() {
       // Fetch a short-lived one-time ticket so the JWT never appears in logs
       let ticket: string;
       try {
-        const { data } = await apiClient.post<{ ticket: string }>("/admin/me/events/ticket");
+        const { data } = await apiClient.post<{ ticket: string }>("/admin/me/events/ticket", {});
         ticket = data.ticket;
       } catch {
         // Can't get a ticket — retry after backoff
