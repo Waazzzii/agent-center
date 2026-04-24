@@ -6,12 +6,16 @@ import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
+import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import {
   CheckCircle2, ChevronRight, ChevronsRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
   CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, GripVertical, PanelRightClose, PanelRightOpen,
+  Variable, MousePointer2, Link2, Clipboard,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -36,6 +40,8 @@ import {
   syncStepRunSteps,
   captureStepRunWaitFor,
   cancelStepRunWaitForCapture,
+  captureStepRunExtract,
+  cancelStepRunExtractCapture,
   type BrowserScript,
   type RecordedStep,
 } from '@/lib/api/scripts';
@@ -138,6 +144,10 @@ export function RunScriptModal({
   // ── Wait-for capture ──────────────────────────────────────────
   const [isCapturingWaitFor, setIsCapturingWaitFor] = useState(false);
   const captureAbortRef = useRef<AbortController | null>(null);
+
+  // ── Extract capture ───────────────────────────────────────────
+  const [isCapturingExtract, setIsCapturingExtract] = useState(false);
+  const captureExtractAbortRef = useRef<AbortController | null>(null);
 
   // ── VNC iframe ref + recording state sync ──────────────────────
   const vncIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -878,6 +888,54 @@ export function RunScriptModal({
     }
   };
 
+  // ── Add extract step — triggers element picker, then inserts ──
+  const handleAddExtractStep = async () => {
+    if (!runId || !orgId || !stepRunState || isCapturingExtract) return;
+
+    setIsCapturingExtract(true);
+    const controller = new AbortController();
+    captureExtractAbortRef.current = controller;
+    try {
+      const result = await captureStepRunExtract(orgId, runId, controller.signal);
+
+      // Auto-generate a field name from the description
+      const rawName = result.description
+        ? result.description.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 40) || 'extracted_value'
+        : 'extracted_value';
+
+      const extractStep: RecordedStep = {
+        action: 'extract',
+        selector: result.selector,
+        field_name: rawName,
+        text: result.value,
+        _defaultValue: result.value,
+        elementSnapshot: result.elementSnapshot ?? undefined,
+        waitFor: { selector: result.selector, description: result.description },
+      };
+
+      const idx = stepRunState.currentIndex + 1;
+      const newSteps = [...(stepRunState.steps ?? [])];
+      newSteps.splice(idx, 0, extractStep);
+      setStepRunState((s) => s ? {
+        ...s,
+        steps: newSteps,
+        totalSteps: newSteps.length,
+        step: extractStep,
+      } : s);
+      setEditedStep(JSON.stringify(extractStep, null, 2));
+      setNewStepIndices((prev) => new Set([...prev, idx]));
+      setHasChanges(true);
+      await syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+      toast.success(`Extract step added → {{${rawName}}} = "${result.value.slice(0, 40)}${result.value.length > 40 ? '…' : ''}"`);
+    } catch (err: any) {
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.name === 'CanceledError') return;
+      toast.error(err?.response?.data?.error || err?.message || 'Extract capture failed');
+    } finally {
+      captureExtractAbortRef.current = null;
+      setIsCapturingExtract(false);
+    }
+  };
+
   // ── Listen for Copy events from the VNC iframe ──────────────────
   // The VNC Copy button always postMessages.  We only create an extract
   // step when a script session is active (runId set, not done).  When
@@ -890,6 +948,48 @@ export function RunScriptModal({
   const smartCopyRef = useRef<(text: string) => void>(() => {});
 
   // Ref is updated below after handleSmartCopyWithText is declared.
+
+  // ── Create a DOM text-based extract step from copied text ────────
+  // Used when the copied value isn't found in the URL — locates the element
+  // by text content at replay time via page.getByText().
+  const insertDomTextExtract = (clipText: string) => {
+    const fieldName = clipText
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .slice(0, 40) || 'extracted_value';
+
+    const step: RecordedStep = {
+      action: 'extract',
+      selector: clipText,
+      field_name: fieldName,
+      text: clipText,
+      _defaultValue: clipText,
+      elementSnapshot: {
+        tag: 'span',
+        id: null, name: null, type: null, classes: [],
+        placeholder: null, ariaLabel: null, ariaRole: null, href: null,
+        innerText: clipText,
+        candidates: [{ sel: clipText, type: 'text' }],
+      },
+    };
+
+    const insertAt = stepRunState?.currentIndex ?? 0;
+    setStepRunState((s) => {
+      if (!s) return s;
+      const newSteps = [...s.steps];
+      newSteps.splice(insertAt, 0, step);
+      return { ...s, steps: newSteps, totalSteps: newSteps.length };
+    });
+    setNewStepIndices((prev) => new Set([...prev, insertAt]));
+    setHasChanges(true);
+    if (runId && orgId) {
+      const newSteps = [...(stepRunState?.steps ?? [])];
+      newSteps.splice(insertAt, 0, step);
+      syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+    }
+    toast.success(`Extracted text → {{${fieldName}}} = "${clipText.slice(0, 40)}${clipText.length > 40 ? '…' : ''}"`);
+  };
 
   // ── Smart Copy — core logic shared by toolbar button + VNC button ──
   const handleSmartCopyWithText = async (clipText: string) => {
@@ -904,9 +1004,7 @@ export function RunScriptModal({
     } catch { /* fall through */ }
 
     if (!liveUrl) {
-      setUrlExtractValue(clipText);
-      setUrlExtractFieldName('');
-      setUrlExtractOpen(true);
+      insertDomTextExtract(clipText);
       return;
     }
 
@@ -943,10 +1041,7 @@ export function RunScriptModal({
     }
 
     if (!method) {
-      setUrlExtractValue(clipText);
-      setUrlExtractFieldName('');
-      setUrlExtractOpen(true);
-      toast.error(`"${clipText}" not found in current URL — enter details manually`);
+      insertDomTextExtract(clipText);
       return;
     }
 
@@ -996,6 +1091,26 @@ export function RunScriptModal({
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
   }, []);
+
+  // ── Request current clipboard from the VNC iframe ─────────────
+  // Sends a 'vnc-request-clipboard' message and waits up to 400ms for
+  // the iframe to echo back 'vnc-clipboard-response' with whatever was
+  // last copied in the remote browser.  Returns '' on timeout/empty.
+  const requestVncClipboard = (timeoutMs = 400): Promise<string> =>
+    new Promise((resolve) => {
+      const tid = setTimeout(() => {
+        window.removeEventListener('message', handler);
+        resolve('');
+      }, timeoutMs);
+      const handler = (e: MessageEvent) => {
+        if (e.data?.type !== 'vnc-clipboard-response') return;
+        clearTimeout(tid);
+        window.removeEventListener('message', handler);
+        resolve((e.data.text ?? '').trim());
+      };
+      window.addEventListener('message', handler);
+      vncIframeRef.current?.contentWindow?.postMessage({ type: 'vnc-request-clipboard' }, '*');
+    });
 
   // ── Extract from URL (manual dialog — fallback) ────────────────
   const handleExtractUrl = async () => {
@@ -1461,7 +1576,7 @@ export function RunScriptModal({
               size="icon"
               className="h-7 w-7"
               onClick={isRecordMode && isRecording ? handleStopRecordSession : handleToggleRecording}
-              disabled={starting || (isExecuting && !isRecording) || isCapturingWaitFor}
+              disabled={starting || (isExecuting && !isRecording) || isCapturingWaitFor || isCapturingExtract}
               title={isRecording ? 'Stop recording' : 'Record new steps here'}
             >
               <CircleDot className={cn('h-3.5 w-3.5', isRecording && 'animate-pulse')} />
@@ -1480,13 +1595,93 @@ export function RunScriptModal({
                 cancelStepRunWaitForCapture(orgId!, runId!).catch(() => {});
                 setIsCapturingWaitFor(false);
               } : handleAddWaitStep}
-              disabled={!isCapturingWaitFor && (isRecording || isExecuting)}
+              disabled={!isCapturingWaitFor && (isRecording || isExecuting || isCapturingExtract)}
               title={isCapturingWaitFor ? 'Cancel — press Esc or click here' : 'Add a wait step — click an element on the page'}
             >
               {isCapturingWaitFor
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
                 : <Clock className="h-3.5 w-3.5" />}
             </Button>
+          )}
+
+          {/* Extract — dropdown with three modes; collapses to cancel during element capture */}
+          {runId && !stepRunState?.done && (
+            isCapturingExtract ? (
+              <Button
+                variant="default"
+                size="icon"
+                className="h-7 w-7 focus-visible:ring-0 focus-visible:ring-offset-0"
+                onClick={() => {
+                  captureExtractAbortRef.current?.abort();
+                  captureExtractAbortRef.current = null;
+                  cancelStepRunExtractCapture(orgId!, runId!).catch(() => {});
+                  setIsCapturingExtract(false);
+                }}
+                title="Cancel — press Esc or click here"
+              >
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              </Button>
+            ) : (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 focus-visible:ring-0 focus-visible:ring-offset-0"
+                    disabled={isRecording || isExecuting || isCapturingWaitFor}
+                    title="Extract a value"
+                  >
+                    <Variable className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="text-xs min-w-[200px]">
+                  <DropdownMenuItem className="gap-2 cursor-pointer" onClick={handleAddExtractStep}>
+                    <MousePointer2 className="h-3.5 w-3.5 shrink-0" />
+                    <div>
+                      <div className="font-medium">Extract from element</div>
+                      <div className="text-muted-foreground text-[10px]">Click any element on the page</div>
+                    </div>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="gap-2 cursor-pointer"
+                    onClick={async () => {
+                      const clip = await requestVncClipboard();
+                      if (clip) {
+                        handleSmartCopyWithText(clip);
+                      } else {
+                        handleExtractUrl();
+                      }
+                    }}
+                  >
+                    <Link2 className="h-3.5 w-3.5 shrink-0" />
+                    <div>
+                      <div className="font-medium">Extract from URL</div>
+                      <div className="text-muted-foreground text-[10px]">Uses selected value, or enter manually</div>
+                    </div>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    className="gap-2 cursor-pointer"
+                    onClick={async () => {
+                      const clip = await requestVncClipboard();
+                      if (clip) {
+                        handleSmartCopyWithText(clip);
+                      } else {
+                        toast.info(isRecording
+                          ? 'Nothing copied yet — select and copy text on the page first'
+                          : 'Start recording, then copy any text on the page to extract it'
+                        );
+                      }
+                    }}
+                  >
+                    <Clipboard className="h-3.5 w-3.5 shrink-0" />
+                    <div>
+                      <div className="font-medium">Copy on page (Ctrl+C)</div>
+                      <div className="text-muted-foreground text-[10px]">Uses last copied text automatically</div>
+                    </div>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )
           )}
 
           {/* Step/Auto + run — visible whenever a run is active */}
@@ -1523,7 +1718,7 @@ export function RunScriptModal({
               ) : (
                 <Button
                   onClick={stepRunState?.done ? () => handleJumpToStep(0) : (autoMode ? handleRunAll : handleExecuteStep)}
-                  disabled={isExecuting || isCapturingWaitFor || isRecording || (!stepRunState?.done && !hasSteps)}
+                  disabled={isExecuting || isCapturingWaitFor || isCapturingExtract || isRecording || (!stepRunState?.done && !hasSteps)}
                   size="sm"
                 >
                   {isExecuting

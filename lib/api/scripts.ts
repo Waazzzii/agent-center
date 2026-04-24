@@ -394,3 +394,27 @@ export async function captureStepRunWaitFor(
 export async function cancelStepRunWaitForCapture(orgId: string, runId: string): Promise<void> {
   await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}/capture-wait-for`).catch(() => {});
 }
+
+/**
+ * Inject the extract element picker overlay onto the live browser page.
+ * Blocks (up to ~30s) until the user clicks an element or presses Esc.
+ */
+export async function captureStepRunExtract(
+  orgId: string,
+  runId: string,
+  signal?: AbortSignal
+): Promise<{ selector: string; description: string | null; value: string; elementSnapshot?: ElementSnapshot }> {
+  const res = await agentClient.post(
+    `/api/admin/${orgId}/step-runs/${runId}/capture-extract`,
+    {},
+    { signal, timeout: 35_000 }
+  );
+  return res.data;
+}
+
+/**
+ * Cancel an in-progress extract capture.
+ */
+export async function cancelStepRunExtractCapture(orgId: string, runId: string): Promise<void> {
+  await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}/capture-extract`).catch(() => {});
+}
