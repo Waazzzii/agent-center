@@ -26,7 +26,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner';
 import {
   Loader2, Zap, LogIn, Play, GitBranch, PauseCircle,
-  AlertCircle, Copy, Hash, Bot, History, ChevronRight,
+  AlertCircle, Copy, Hash, Bot, History, ChevronRight, ChevronDown, ArrowDownToLine,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
@@ -369,6 +369,54 @@ function SubAgentModal({ open, onOpenChange, childNodes }: {
   );
 }
 
+/**
+ * Collapsible "View Input" panel — shows the resolved data the action received
+ * (e.g. the params a browser_script ran with, or the items a sub-agent
+ * dispatched). Closed by default to keep the action detail compact; click the
+ * header to expand. Pretty-prints JSON when parseable, falls back to raw text.
+ */
+function InputPanel({ input }: { input: string }) {
+  const [open, setOpen] = useState(false);
+  const pretty = useMemo(() => {
+    try { return JSON.stringify(JSON.parse(input), null, 2); } catch { return input; }
+  }, [input]);
+
+  return (
+    <div className="rounded-lg border border-border/50 overflow-hidden">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-2 bg-muted/20 border-b border-border/30 hover:bg-muted/40 transition-colors"
+      >
+        <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
+          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+          <ArrowDownToLine className="h-3 w-3" />
+          View input
+        </span>
+        {open && (
+          <span
+            role="button"
+            tabIndex={0}
+            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 cursor-pointer"
+            onClick={(e) => {
+              e.stopPropagation();
+              navigator.clipboard.writeText(pretty);
+              toast.success('Copied');
+            }}
+          >
+            <Copy className="h-3 w-3" /> Copy
+          </span>
+        )}
+      </button>
+      {open && (
+        <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-auto">
+          {pretty}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgId: string; executionId: string }) {
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
@@ -403,6 +451,10 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
           <pre className="text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap break-words font-mono leading-relaxed">{action.error_message}</pre>
         </div>
       )}
+
+      {/* Input the action received — collapsed by default to stay out of the way.
+          Click to expand. Useful for debugging "why did this step do that?". */}
+      {action.input && <InputPanel input={action.input} />}
 
       {/* AI steps + browser scripts: full log viewer */}
       {hasLogs && <LogViewer steps={steps} loading={loadingSteps} />}

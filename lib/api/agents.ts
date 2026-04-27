@@ -267,6 +267,8 @@ export interface ExecutionAction {
   status: string;
   started_at: string;
   completed_at?: string | null;
+  /** Resolved input the action received (JSON string when structured). */
+  input?: string | null;
   output: string | null;
   error_message: string | null;
   tokens_input?: number | null;
@@ -428,6 +430,8 @@ export interface FullTreeNode {
   tokens_input?: number | null;
   tokens_output?: number | null;
   model?: string | null;
+  /** Resolved input the action received (JSON string when structured). */
+  input?: string | null;
   output?: string | null;
   batch_item_count?: number;
   batch_item_index?: number | null;
