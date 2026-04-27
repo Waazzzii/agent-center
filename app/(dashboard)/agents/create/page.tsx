@@ -35,7 +35,7 @@ export default function CreateAgentPage() {
   };
 
   return (
-    <div className="space-y-6 max-w-lg">
+    <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex items-center gap-4">
         <Button variant="ghost" size="sm" onClick={() => router.push('/agents')}>
           <ArrowLeft className="mr-2 h-4 w-4" />
