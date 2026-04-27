@@ -674,19 +674,27 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                             <span>{describeCron(String(trigger.trigger_config.cron_expr ?? ''))}</span>
                           </p>
                         )}
-                        {trigger.trigger_type === 'webhook' && (
+                        {trigger.trigger_type === 'webhook' && (() => {
+                          // Agent webhook now lives on agent-backend (not wazzi-backend),
+                          // and the host varies per environment (dev/staging/prod tunnels).
+                          // NEXT_PUBLIC_AGENT_API_URL is the same env var the rest of the
+                          // agent-center frontend uses to talk to agent-backend, so this
+                          // stays correct without a separate config.
+                          const agentApiBase = (process.env.NEXT_PUBLIC_AGENT_API_URL ?? '').replace(/\/+$/, '');
+                          const webhookUrl = `${agentApiBase}/webhooks/agents/${trigger.id}`;
+                          return (
                           <div className="mt-2 space-y-3">
                             <div className="flex items-center gap-2">
                               <code className="text-xs bg-background border px-2 py-1 rounded flex-1 truncate font-mono">
-                                {`https://api.wazzi.io/webhooks/agents/${trigger.id}`}
+                                {webhookUrl}
                               </code>
-                              <Button variant="outline" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => { navigator.clipboard.writeText(`https://api.wazzi.io/webhooks/agents/${trigger.id}`); toast.success('URL copied'); }}>
+                              <Button variant="outline" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => { navigator.clipboard.writeText(webhookUrl); toast.success('URL copied'); }}>
                                 <Copy className="h-3 w-3" />
                               </Button>
                             </div>
                             <div className="rounded-md bg-muted/60 border px-3 py-2 space-y-1.5">
                               <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">How to trigger</p>
-                              <pre className="text-xs text-foreground whitespace-pre-wrap break-all leading-relaxed">{`POST https://api.wazzi.io/webhooks/agents/${trigger.id}\nX-Wazzi-Key: <your-api-key>`}</pre>
+                              <pre className="text-xs text-foreground whitespace-pre-wrap break-all leading-relaxed">{`POST ${webhookUrl}\nX-Wazzi-Key: <your-api-key>`}</pre>
                               <p className="text-xs text-muted-foreground">Optionally pass a JSON body — it will be available as the initial input to the first action.</p>
                             </div>
                             <div className="space-y-1.5">
@@ -701,7 +709,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                               </div>
                             </div>
                           </div>
-                        )}
+                          );
+                        })()}
                       </div>
                       {trigger.trigger_type !== 'manual' && (
                         <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => handleDeleteTrigger(trigger.id)}>
