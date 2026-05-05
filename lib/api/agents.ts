@@ -79,9 +79,33 @@ export interface AgentApprovalItem {
   login_name: string | null;
 }
 
+/**
+ * Submissions Center routine that's bound to this agent. Multiple bindings
+ * can exist (an agent could fill the slot for several authorities under the
+ * same domain). Surfaces in the agent detail page so admins can see at a
+ * glance "this agent is wired into Submissions Center for X / Y / Z."
+ */
+export interface AgentRoutineBinding {
+  id: string;
+  product_slug: string;
+  domain_type: string;
+  routine_key: string;
+  name: string;
+  description: string | null;
+  is_active: boolean;
+  /** Timestamp of the most recent successful contract verification.
+   *  NULL = the SSC runtime gate refuses to fire for this routine. */
+  agent_verified_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface AgentDetail extends Agent {
   actions: AgentAction[] | null;
   triggers: AgentTrigger[] | null;
+  /** Optional — only present when the agent-backend is running with the
+   *  ssc tables migrated (171–173). Empty array = not bound to any routine. */
+  routine_bindings?: AgentRoutineBinding[];
 }
 
 /** Status of a browser-based agent run (tracked in agent-backend memory) */

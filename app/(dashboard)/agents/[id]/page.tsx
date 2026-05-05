@@ -605,6 +605,34 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             )}
           </div>
           {agent.description && <p className="text-sm text-muted-foreground mt-0.5">{agent.description}</p>}
+
+          {/* Routine bindings — surfaces every centers.ssc_routines row this
+              agent is currently assigned to. Verified state shown inline so
+              admins know whether the SSC runtime gate is open. */}
+          {agent.routine_bindings && agent.routine_bindings.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="font-medium">Bound to:</span>
+              {agent.routine_bindings.map((b) => (
+                <Badge
+                  key={b.id}
+                  variant="outline"
+                  className={
+                    b.agent_verified_at
+                      ? 'gap-1 border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300'
+                      : 'gap-1 border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300'
+                  }
+                  title={
+                    b.agent_verified_at
+                      ? `Verified ${new Date(b.agent_verified_at).toLocaleDateString()} — domain: ${b.domain_type}`
+                      : `Not yet verified — Submissions Center won't fire this routine`
+                  }
+                >
+                  {b.name}
+                  <span className="opacity-60">· {b.domain_type}</span>
+                </Badge>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Quick links */}
