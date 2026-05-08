@@ -417,6 +417,47 @@ function InputPanel({ input }: { input: string }) {
   );
 }
 
+// Always-visible JSON viewer for the 3-column layout. Same look as the
+// collapsed InputPanel but no toggle — the column is the affordance.
+function IOColumn({
+  label,
+  value,
+  empty,
+}: {
+  label: string
+  value: string | null | undefined
+  empty: string
+}) {
+  const pretty = useMemo(() => {
+    if (!value) return null;
+    try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
+  }, [value]);
+
+  return (
+    <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden min-h-0">
+      <div className="flex items-center justify-between px-3 py-2 bg-muted/20 border-b border-border/30 shrink-0">
+        <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</span>
+        {pretty && (
+          <button
+            type="button"
+            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+            onClick={() => { navigator.clipboard.writeText(pretty); toast.success('Copied'); }}
+          >
+            <Copy className="h-3 w-3" /> Copy
+          </button>
+        )}
+      </div>
+      {pretty ? (
+        <pre className="px-3 py-2 text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed overflow-auto flex-1 min-h-0">
+          {pretty}
+        </pre>
+      ) : (
+        <p className="px-3 py-4 text-xs text-muted-foreground italic">{empty}</p>
+      )}
+    </div>
+  );
+}
+
 function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgId: string; executionId: string }) {
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
@@ -452,51 +493,67 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
         </div>
       )}
 
-      {/* Input the action received — collapsed by default to stay out of the way.
-          Click to expand. Useful for debugging "why did this step do that?". */}
-      {action.input && <InputPanel input={action.input} />}
-
-      {/* AI steps + browser scripts: full log viewer */}
-      {hasLogs && <LogViewer steps={steps} loading={loadingSteps} />}
-
-      {/* Other action types: show result */}
-      {!hasLogs && action.output && (
-        <div className="rounded-lg border border-border/50 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2 bg-muted/20 border-b border-border/30">
-            <span className="text-xs font-medium text-muted-foreground">Result</span>
-            <button className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-              onClick={() => { navigator.clipboard.writeText(action.output ?? ''); toast.success('Copied'); }}>
-              <Copy className="h-3 w-3" /> Copy
-            </button>
+      {/* AI steps + browser scripts: 3-column layout — input | output | logs.
+          Each column is independently scrollable. Login / human_approval /
+          sub_agent skip this view (no meaningful I/O); they fall through to
+          the simpler single-block result view below. */}
+      {hasLogs ? (
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:h-[28rem] lg:min-h-[20rem]">
+          <IOColumn
+            label="Input"
+            value={action.input}
+            empty="No input recorded for this action."
+          />
+          <IOColumn
+            label="Output"
+            value={action.output}
+            empty={
+              action.status === 'executing'
+                ? 'Still running…'
+                : action.status === 'awaiting_approval'
+                  ? 'Awaiting approval.'
+                  : 'No output emitted.'
+            }
+          />
+          <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden min-h-0">
+            <div className="px-3 py-2 bg-muted/20 border-b border-border/30 shrink-0">
+              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Logs</span>
+            </div>
+            <div className="flex-1 min-h-0 overflow-auto">
+              <LogViewer steps={steps} loading={loadingSteps} />
+            </div>
           </div>
-          <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-auto">
-            {(() => { try { return JSON.stringify(JSON.parse(action.output!), null, 2); } catch { return action.output; } })()}
-          </pre>
         </div>
-      )}
+      ) : (
+        <>
+          {/* Login / approval / sub_agent — input/output panels are
+              irrelevant. Just surface the result if there is one. Input is
+              still available via the collapsed panel for debugging. */}
+          {action.input && <InputPanel input={action.input} />}
 
-      {/* Show output below log viewer for browser scripts (output is the batch result JSON) */}
-      {action.action_type === 'browser_script' && action.output && (
-        <div className="rounded-lg border border-border/50 overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-2 bg-muted/20 border-b border-border/30">
-            <span className="text-xs font-medium text-muted-foreground">Output</span>
-            <button className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-              onClick={() => { navigator.clipboard.writeText(action.output ?? ''); toast.success('Copied'); }}>
-              <Copy className="h-3 w-3" /> Copy
-            </button>
-          </div>
-          <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-auto">
-            {(() => { try { return JSON.stringify(JSON.parse(action.output!), null, 2); } catch { return action.output; } })()}
-          </pre>
-        </div>
-      )}
+          {action.output && (
+            <div className="rounded-lg border border-border/50 overflow-hidden">
+              <div className="flex items-center justify-between px-4 py-2 bg-muted/20 border-b border-border/30">
+                <span className="text-xs font-medium text-muted-foreground">Result</span>
+                <button className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+                  onClick={() => { navigator.clipboard.writeText(action.output ?? ''); toast.success('Copied'); }}>
+                  <Copy className="h-3 w-3" /> Copy
+                </button>
+              </div>
+              <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-auto">
+                {(() => { try { return JSON.stringify(JSON.parse(action.output!), null, 2); } catch { return action.output; } })()}
+              </pre>
+            </div>
+          )}
 
-      {!hasLogs && !action.output && !action.error_message && (
-        <p className="text-sm text-muted-foreground italic py-4">
-          {action.status === 'completed' || action.status === 'approved' ? 'Completed successfully.' :
-           action.status === 'awaiting_approval' ? 'Waiting for review...' :
-           action.status === 'executing' ? 'Running...' : `Status: ${action.status}`}
-        </p>
+          {!action.output && !action.error_message && (
+            <p className="text-sm text-muted-foreground italic py-4">
+              {action.status === 'completed' || action.status === 'approved' ? 'Completed successfully.' :
+               action.status === 'awaiting_approval' ? 'Waiting for review...' :
+               action.status === 'executing' ? 'Running...' : `Status: ${action.status}`}
+            </p>
+          )}
+        </>
       )}
     </div>
   );

@@ -142,9 +142,12 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
               Declare the JSON keys this step should return.  The executor appends a JSON
               instruction to the prompt automatically and parses the response into the
               execution context — you don&apos;t need to write &quot;respond with JSON&quot; yourself.
+              When no keys are declared, the executor still nudges the model toward a
+              <code className="mx-1 rounded bg-muted px-1 py-0.5 text-[10px]">{`[{ "result": "..." }]`}</code>
+              shape but skips strict validation.
             </p>
             {form.outputs.length === 0 ? (
-              <p className="text-xs text-muted-foreground italic">No declared outputs — response will be captured as free-form text.</p>
+              <p className="text-xs text-muted-foreground italic">No declared outputs — response captured as free-form text (default JSON nudge still applies).</p>
             ) : (
               <div className="space-y-1.5">
                 {form.outputs.map((o, i) => (
@@ -169,17 +172,17 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
               </div>
             )}
 
-            {/* Live preview of the auto-appended JSON instruction. */}
-            {form.outputs.some((o) => o.key.trim()) && (
-              <div className="space-y-1 pt-1">
-                <Label className="text-[11px] text-muted-foreground">
-                  Auto-appended to prompt at runtime
-                </Label>
-                <pre className="text-[11px] font-mono whitespace-pre-wrap bg-background/60 rounded-md border border-dashed p-2 text-muted-foreground">
-                  {buildOutputInstructionBlock(form.outputs).trimStart()}
-                </pre>
-              </div>
-            )}
+            {/* Live preview of the auto-appended JSON instruction. Renders
+                in both modes (declared schema vs. soft default) so the user
+                always sees exactly what gets sent. */}
+            <div className="space-y-1 pt-1">
+              <Label className="text-[11px] text-muted-foreground">
+                Auto-appended to prompt at runtime
+              </Label>
+              <pre className="text-[11px] font-mono whitespace-pre-wrap bg-background/60 rounded-md border border-dashed p-2 text-muted-foreground">
+                {buildOutputInstructionBlock(form.outputs).trimStart()}
+              </pre>
+            </div>
           </div>
         </>
       )}

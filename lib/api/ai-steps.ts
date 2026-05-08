@@ -9,7 +9,14 @@ export interface AiStepOutput {
 
 /**
  * Render the JSON output instruction block that the executor auto-appends
- * to every AI step prompt at runtime when outputs are declared.
+ * to every AI step prompt at runtime.
+ *
+ * Two modes:
+ *   • Declared outputs → strict schema; each array element must contain
+ *     every declared key. Validated post-hoc.
+ *   • No declared outputs → soft default: ask for `[{ "result": "..." }]`.
+ *     Not enforced (raw response returned), but nudges the model toward
+ *     parseable output for downstream consumers.
  *
  * The response is ALWAYS a JSON array of objects — single-result responses
  * become a one-element array.  This makes the shape consistent and lets
@@ -22,20 +29,39 @@ export interface AiStepOutput {
  */
 export function buildOutputInstructionBlock(outputs: AiStepOutput[]): string {
   const usable = outputs.filter((o) => o.key.trim());
-  if (usable.length === 0) return '';
+  if (usable.length === 0) {
+    return [
+      '',
+      '---',
+      'OUTPUT FORMAT — strongly preferred:',
+      '• Respond with ONLY a JSON array of result objects. No markdown fences (```), no surrounding prose.',
+      '• Default shape when no specific schema is required:',
+      '[',
+      '  { "result": "your result here" }',
+      ']',
+      '• If you have multiple results, emit one array element per result. If none, emit [].',
+      '• Make sure the JSON is syntactically valid: matching brackets, no trailing commas, all strings closed.',
+    ].join('\n');
+  }
   const schemaLines = usable
     .map((o) => `    "${o.key.trim()}": ${JSON.stringify(o.description ?? '')}`)
     .join(',\n');
   return [
     '',
     '---',
-    'Respond with ONLY a JSON array (no markdown fences, no surrounding prose) where each element matches this schema:',
+    'OUTPUT FORMAT — strict requirements:',
+    '• Respond with ONLY a JSON array. No markdown fences (```), no prose before or after, no comments.',
+    '• Output a single complete JSON value — do not split across multiple messages.',
+    '• Each element matches this schema:',
     '[',
     '  {',
     schemaLines,
     '  }',
     ']',
-    'Return ALL results found as separate elements in the array.  If only one result, return a one-element array.  If none, return an empty array [].  Each value must be the actual data described — do NOT repeat the description.',
+    '• Return ALL results found as separate elements in the array.  If only one result, return a one-element array.  If none, return an empty array [].',
+    '• Each value must be the actual data described — do NOT repeat the description.',
+    '• Do NOT invent placeholder values or partial words. If a field has no real value, use null.',
+    '• Make sure the JSON is syntactically valid: matching brackets, no trailing commas, all strings closed.',
   ].join('\n');
 }
 
