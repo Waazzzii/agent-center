@@ -98,6 +98,20 @@ function formatDate(iso: string): string {
   });
 }
 
+/** Compact "started at" for the run feed table. Skips the year for this
+ *  year's runs so the column stays narrow ("Nov 11, 2:34 PM"); year
+ *  appears when crossing into a prior year so older rows aren't
+ *  ambiguous. */
+function formatStartedAt(iso: string): string {
+  const d = new Date(iso);
+  const sameYear = d.getFullYear() === new Date().getFullYear();
+  return d.toLocaleString(undefined, {
+    month: 'short', day: 'numeric',
+    ...(sameYear ? {} : { year: 'numeric' }),
+    hour: 'numeric', minute: '2-digit',
+  });
+}
+
 function formatShortDate(dateStr: string): string {
   return new Date(dateStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
@@ -193,11 +207,12 @@ function RunsTable({
   return (
     <div>
       {/* Column headers */}
-      <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_80px_70px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 border-b">
+      <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_130px_80px_70px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 border-b">
         <span>Agent</span>
         <span>Progress</span>
         <span>Status</span>
         <span>Trigger</span>
+        <span>Started</span>
         <span className="text-right">Duration</span>
         <span className="text-right">Tokens</span>
         <span />
@@ -226,7 +241,7 @@ function RunsTable({
                  onClick={() => router.push(`/agent-history/${run.id}`)}>
 
               {/* Desktop: column layout */}
-              <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_80px_70px_60px] gap-2 items-center px-3 py-2">
+              <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_130px_80px_70px_60px] gap-2 items-center px-3 py-2">
                 {/* Agent */}
                 <div className="flex items-center gap-2 min-w-0">
                   <StatusGlyph status={displayStatus} />
@@ -258,6 +273,15 @@ function RunsTable({
                 <StatusBadge status={displayStatus} />
                 {/* Trigger */}
                 <TriggerBadge type={run.trigger_type} />
+                {/* Started — full timestamp on hover, compact display in
+                    the column (year omitted for this year's runs so the
+                    column stays narrow). */}
+                <span
+                  className="text-xs text-muted-foreground tabular-nums truncate"
+                  title={formatDate(run.started_at)}
+                >
+                  {formatStartedAt(run.started_at)}
+                </span>
                 {/* Duration */}
                 <span className="text-xs text-muted-foreground tabular-nums text-right">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
                 {/* Tokens */}
