@@ -144,6 +144,11 @@ export function RunScriptModal({
   const [editedStep, setEditedStep]     = useState('');
   const [stepEditError, setStepEditError] = useState('');
   const [hoveredStep, setHoveredStep]   = useState<number | null>(null);
+  // Inline-rename state for a step row. When set, that row renders its
+  // name as a text input instead of a static label. Saving (Enter / blur)
+  // updates stepRunState + syncs to the worker. Escape cancels.
+  const [inlineRenameIndex, setInlineRenameIndex] = useState<number | null>(null);
+  const [inlineRenameValue, setInlineRenameValue] = useState('');
   const [jumpingTo, setJumpingTo]       = useState<number | null>(null);
   const [autoMode, setAutoMode]         = useState(false);
 
@@ -803,6 +808,38 @@ export function RunScriptModal({
       setShowExitWarning(true);
     } else {
       performExit();
+    }
+  };
+
+  // ── Inline rename a step's display name. Triggered by double-clicking
+  // the name span on a step row. Commits on Enter / blur, cancels on Esc.
+  const commitInlineRename = async (idx: number, nextName: string) => {
+    const trimmed = nextName.trim();
+    const current = stepRunState?.steps?.[idx];
+    if (!current) {
+      setInlineRenameIndex(null);
+      return;
+    }
+    // Treat empty string as "clear the operator label" — falls back to auto label.
+    const updated: RecordedStep = { ...current, name: trimmed.length > 0 ? trimmed : undefined };
+    // Use functional updater so we compose against latest state (avoids the
+    // same stale-closure trap that bit the StepEdit save earlier).
+    const newSteps = [...(stepRunState?.steps ?? [])];
+    newSteps[idx] = updated;
+    setStepRunState((s) => {
+      if (!s) return s;
+      const merged = [...s.steps];
+      merged[idx] = updated;
+      return { ...s, steps: merged, step: idx === s.currentIndex ? updated : s.step };
+    });
+    setHasChanges(true);
+    setInlineRenameIndex(null);
+    if (orgId && runId) {
+      try {
+        await syncStepRunSteps(orgId, runId, newSteps);
+      } catch (err: any) {
+        toast.error(err?.response?.data?.error || err?.message || 'Failed to rename step');
+      }
     }
   };
 
@@ -1923,7 +1960,17 @@ export function RunScriptModal({
                           // complete, clicking effectively rewinds and
                           // re-runs from there (handleJumpToStep clears
                           // the done flag and replays from the target).
+                          if (inlineRenameIndex === i) return; // mid-rename, ignore
                           if (!isCurrent && !isExecuting && !isRecording) handleJumpToStep(i);
+                        }}
+                        onDoubleClick={(e) => {
+                          // Double-click anywhere on the row (except the name —
+                          // that double-click starts inline rename instead) opens
+                          // the full step-edit modal. Convenience shortcut for the
+                          // pencil button, which is hidden until hover.
+                          if (isExecuting || isRecording) return;
+                          e.stopPropagation();
+                          setEditingStepIndex(i);
                         }}
                       >
                         {/* Drag handle — only in test mode */}
@@ -1945,9 +1992,43 @@ export function RunScriptModal({
                             <>{i + 1}</>
                           )}
                         </span>
-                        <span className="truncate flex-1">
-                          {stepLabel(s)}
-                        </span>
+                        {inlineRenameIndex === i ? (
+                          <input
+                            autoFocus
+                            value={inlineRenameValue}
+                            onChange={(e) => setInlineRenameValue(e.target.value)}
+                            onClick={(e) => e.stopPropagation()}
+                            onDoubleClick={(e) => e.stopPropagation()}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                commitInlineRename(i, inlineRenameValue);
+                              } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                setInlineRenameIndex(null);
+                              }
+                            }}
+                            onBlur={() => commitInlineRename(i, inlineRenameValue)}
+                            placeholder={autoStepLabel(s)}
+                            className="flex-1 min-w-0 bg-transparent border-b border-brand/60 outline-none px-0 py-0 text-xs"
+                          />
+                        ) : (
+                          <span
+                            className="truncate flex-1 cursor-text"
+                            title="Double-click to rename"
+                            onDoubleClick={(e) => {
+                              // Double-click on the name span starts inline
+                              // rename. stopPropagation prevents the row's
+                              // own onDoubleClick from opening the edit modal.
+                              if (isExecuting || isRecording) return;
+                              e.stopPropagation();
+                              setInlineRenameValue(s.name ?? '');
+                              setInlineRenameIndex(i);
+                            }}
+                          >
+                            {stepLabel(s)}
+                          </span>
+                        )}
                         {/* iframe badge — flags steps that run inside an
                             iframe so operators can tell at a glance. The
                             actual frame_selector is visible in the JSON tab. */}

@@ -9,8 +9,8 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Trash2, Pencil } from 'lucide-react';
-import { listScripts, deleteScript, type BrowserScript } from '@/lib/api/scripts';
+import { Trash2, Pencil, Copy } from 'lucide-react';
+import { listScripts, deleteScript, createScript, type BrowserScript } from '@/lib/api/scripts';
 import { RunScriptModal } from './RunScriptModal';
 
 interface ScriptsListProps {
@@ -25,6 +25,9 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const [runModalScript, setRunModalScript] = useState<BrowserScript | null>(null);
   const [scriptToDelete, setScriptToDelete] = useState<BrowserScript | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  // Per-script "currently being duplicated" state so the action button can
+  // show a busy state without blocking the rest of the table.
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
 
   const load = async () => {
     if (!orgId) return;
@@ -43,6 +46,43 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [orgId, refreshKey]);
+
+  /**
+   * Duplicate a script — copies name + steps + parameters + test_values
+   * into a brand-new script via the existing createScript endpoint. We
+   * append "(copy)" / "(copy N)" to the name so the list stays scannable
+   * and the user can rename inline (via the modal or step list) afterward.
+   */
+  const handleDuplicate = async (script: BrowserScript) => {
+    if (!orgId || duplicatingId) return;
+    setDuplicatingId(script.id);
+    try {
+      // Find the next "(copy N)" suffix that isn't already taken. Avoids
+      // ending up with "Foo (copy) (copy) (copy)" if the operator duplicates
+      // the same script multiple times.
+      const base = script.name.replace(/\s*\(copy(?:\s+\d+)?\)\s*$/, '');
+      const existing = new Set(scripts.map((s) => s.name));
+      let candidate = `${base} (copy)`;
+      let n = 2;
+      while (existing.has(candidate)) {
+        candidate = `${base} (copy ${n})`;
+        n++;
+      }
+      await createScript(orgId, {
+        name: candidate,
+        description: script.description,
+        steps: script.steps,
+        parameters: script.parameters,
+        test_values: script.test_values,
+      });
+      toast.success(`Duplicated → ${candidate}`);
+      await load();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to duplicate script');
+    } finally {
+      setDuplicatingId(null);
+    }
+  };
 
   const handleDeleteConfirm = async () => {
     if (!orgId || !scriptToDelete) return;
@@ -133,6 +173,16 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                           title="Edit script"
                         >
                           <Pencil className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                          size="icon"
+                          variant="ghost"
+                          className="h-7 w-7"
+                          onClick={() => handleDuplicate(script)}
+                          disabled={duplicatingId === script.id}
+                          title="Duplicate script"
+                        >
+                          <Copy className="h-3.5 w-3.5" />
                         </Button>
                         <Button
                           size="icon"
