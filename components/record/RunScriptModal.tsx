@@ -15,7 +15,7 @@ import {
 import {
   CheckCircle2, ChevronRight, ChevronsRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
   CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, GripVertical, PanelRightClose, PanelRightOpen,
-  Variable, MousePointer2, Link2, Clipboard,
+  Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, ListTodo,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -47,6 +47,7 @@ import {
 } from '@/lib/api/scripts';
 import { cn } from '@/lib/utils';
 import { BottomPanel } from './panels';
+import { StepEditModal } from './StepEditModal';
 import { ProvisioningNotice } from '@/components/hitl/ProvisioningNotice';
 import { AGENT_BACKEND_URL as agentApiUrl } from '@/lib/config';
 
@@ -67,7 +68,14 @@ interface RunScriptModalProps {
   onSaved?: () => void;
 }
 
-function stepLabel(step: RecordedStep): string {
+/**
+ * Display label for a step. Prefers the operator-supplied `step.name`
+ * when set, otherwise falls back to the auto-generated description.
+ * The auto label still gets returned by autoStepLabel — handy for
+ * showing both ("Open contract form" with "Click: button.submit" as a
+ * tooltip / subtitle).
+ */
+function autoStepLabel(step: RecordedStep): string {
   switch (step.action) {
     case 'navigate':   return `Navigate → ${step.url ?? ''}`;
     case 'click':      return `Click: ${step.text || step.selector || ''}`;
@@ -83,6 +91,11 @@ function stepLabel(step: RecordedStep): string {
     case 'wait_for_tab': return `Wait for new tab${step.selector ? `: ${step.waitFor?.description ?? step.selector}` : ''}`;
     default:           return step.action;
   }
+}
+
+function stepLabel(step: RecordedStep): string {
+  const custom = step.name?.trim();
+  return custom && custom.length > 0 ? custom : autoStepLabel(step);
 }
 
 export function RunScriptModal({
@@ -182,6 +195,12 @@ export function RunScriptModal({
   // ── Steps panel collapse ──────────────────────────────────────
   const [stepsCollapsed, setStepsCollapsed] = useState(false);
 
+  // ── Step edit modal ───────────────────────────────────────────
+  // Set to the index of the step the operator clicked the pencil on.
+  // Modal lets them rename, tweak the selector, and edit raw JSON in
+  // one place — the bottom panel only carries Variables now.
+  const [editingStepIndex, setEditingStepIndex] = useState<number | null>(null);
+
   // ── Current step editor resize ────────────────────────────────
   const [stepEditorHeight, setStepEditorHeight] = useState(200);
   const [dragStepIdx, setDragStepIdx] = useState<number | null>(null);
@@ -237,6 +256,7 @@ export function RunScriptModal({
     setOrphanSession(null);
     setCheckingOrphan(false);
     setResumingOrphan(false);
+    setEditingStepIndex(null);
   };
 
   // ── Auto-start when overlay opens (with orphan check) ────────
@@ -1203,6 +1223,49 @@ export function RunScriptModal({
     toast.success(`URL extract step added: ${urlExtraction.method === 'query_param' ? `?${urlExtraction.param_name}` : urlExtraction.method === 'path_segment' ? `path[${urlExtraction.path_index}]` : 'match'} → {{${fieldName}}}`);
   };
 
+  /**
+   * Insert a copy of the step at `stepIndex + 1`. Useful when the
+   * operator wants to repeat an action with tweaked values without
+   * re-recording. The duplicate carries forward everything including
+   * the custom name (with a "(copy)" suffix so operators can spot the
+   * pair in the list). Pushes the change through syncStepRunSteps so
+   * the worker sees the new list immediately.
+   */
+  const handleDuplicateStep = async (stepIndex: number) => {
+    if (!runId || !orgId || isRecording || isExecuting) return;
+    const currentSteps = stepRunState?.steps ?? [];
+    const source = currentSteps[stepIndex];
+    if (!source) return;
+    const copy: RecordedStep = {
+      ...source,
+      _tested: false, // duplicate hasn't been validated yet
+      name: source.name?.trim() ? `${source.name.trim()} (copy)` : undefined,
+    };
+    const newSteps = [
+      ...currentSteps.slice(0, stepIndex + 1),
+      copy,
+      ...currentSteps.slice(stepIndex + 1),
+    ];
+    setStepRunState((s) => s ? {
+      ...s,
+      steps: newSteps,
+      totalSteps: newSteps.length,
+    } : s);
+    setNewStepIndices((prev) => {
+      const next = new Set<number>();
+      // Shift any existing markers >= insertion point up by one, then add the new index.
+      for (const idx of prev) next.add(idx > stepIndex ? idx + 1 : idx);
+      next.add(stepIndex + 1);
+      return next;
+    });
+    setHasChanges(true);
+    try {
+      await syncStepRunSteps(orgId, runId, newSteps);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to duplicate step');
+    }
+  };
+
   // ── Unified save (stays in the session window) ───────────────
   const handleDeleteStep = async (stepIndex: number) => {
     if (!runId || !orgId || isRecording) return;
@@ -1238,23 +1301,15 @@ export function RunScriptModal({
   const handleSave = async () => {
     if (!orgId) return;
 
-    // Auto-apply any pending JSON edits locally before saving.
-    // The full step list (including this edit) gets synced to the worker
-    // via syncStepRunSteps later in the save flow.
-    if (editedStep && stepRunState) {
-      try {
-        const parsed = JSON.parse(editedStep);
-        if (parsed?.action) {
-          const idx = stepRunState.currentIndex;
-          setStepRunState((s) => {
-            if (!s) return s;
-            const steps = [...s.steps];
-            if (idx < steps.length) steps[idx] = parsed;
-            return { ...s, steps };
-          });
-        }
-      } catch { /* invalid JSON — skip */ }
-    }
+    // NOTE: there used to be an "auto-apply pending JSON edits" block here
+    // that read `editedStep` (the legacy bottom-panel JSON editor's text),
+    // parsed it, and overwrote stepRunState.steps[currentIndex] with the
+    // result before saving. That editor moved into StepEditModal a while
+    // back, but `editedStep` is still written-to by many callbacks (without
+    // anyone reading it as a live edit source). The auto-apply was reading
+    // a stale snapshot from BEFORE the StepEdit modal save and writing it
+    // BACK over the user's edit — visible as the URL/value reverting the
+    // moment the operator hit the main Save button. Removed.
 
     if (mode === 'record') {
       let steps = stepRunState?.steps ?? [];
@@ -1566,144 +1621,69 @@ export function RunScriptModal({
           )}
         </div>
 
-        {/* Right: actions — identical for both record and test */}
+        {/* Right: actions ─────────────────────────────────────────
+            Single Mode dropdown collapses what used to be four toolbar
+            sections (record toggle / wait capture / extract dropdown /
+            step-auto toggle) into one labeled picker. Selecting a mode
+            triggers it immediately:
+              • Step Test / Auto Test → updates Run button behavior, no action
+              • Record Interactions   → starts recording
+              • Record Wait           → starts wait-for capture
+              • Extract From Element  → starts extract capture
+              • Extract From URL      → uses clipboard or opens URL dialog
+              • Copy From Page        → uses last-copied text
+            The current mode label is always visible so the operator
+            sees exactly what action will happen next. */}
         <div className="flex items-center gap-1.5 shrink-0">
 
-          {/* Record toggle — visible whenever a run is active */}
           {runId && (
-            <Button
-              variant={isRecording ? 'destructive' : 'ghost'}
-              size="icon"
-              className="h-7 w-7"
-              onClick={isRecordMode && isRecording ? handleStopRecordSession : handleToggleRecording}
-              disabled={starting || (isExecuting && !isRecording) || isCapturingWaitFor || isCapturingExtract}
-              title={isRecording ? 'Stop recording' : 'Record new steps here'}
-            >
-              <CircleDot className={cn('h-3.5 w-3.5', isRecording && 'animate-pulse')} />
-            </Button>
-          )}
-
-          {/* Add wait step — always visible when run active, disabled during record/execute */}
-          {runId && !stepRunState?.done && (
-            <Button
-              variant={isCapturingWaitFor ? 'default' : 'ghost'}
-              size="icon"
-              className="h-7 w-7 focus-visible:ring-0 focus-visible:ring-offset-0"
-              onClick={isCapturingWaitFor ? () => {
+            <ModeDropdown
+              autoMode={autoMode}
+              isRecording={isRecording}
+              isCapturingWaitFor={isCapturingWaitFor}
+              isCapturingExtract={isCapturingExtract}
+              isExecuting={isExecuting}
+              disabled={starting}
+              onSelectStep={() => setAutoMode(false)}
+              onSelectAuto={() => setAutoMode(true)}
+              onSelectRecordInteractions={isRecordMode && isRecording ? handleStopRecordSession : handleToggleRecording}
+              onSelectRecordWait={isCapturingWaitFor ? () => {
                 captureAbortRef.current?.abort();
                 captureAbortRef.current = null;
                 cancelStepRunWaitForCapture(orgId!, runId!).catch(() => {});
                 setIsCapturingWaitFor(false);
               } : handleAddWaitStep}
-              disabled={!isCapturingWaitFor && (isRecording || isExecuting || isCapturingExtract)}
-              title={isCapturingWaitFor ? 'Cancel — press Esc or click here' : 'Add a wait step — click an element on the page'}
-            >
-              {isCapturingWaitFor
-                ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                : <Clock className="h-3.5 w-3.5" />}
-            </Button>
+              onSelectExtractElement={isCapturingExtract ? () => {
+                captureExtractAbortRef.current?.abort();
+                captureExtractAbortRef.current = null;
+                cancelStepRunExtractCapture(orgId!, runId!).catch(() => {});
+                setIsCapturingExtract(false);
+              } : handleAddExtractStep}
+              onSelectExtractUrl={async () => {
+                const clip = await requestVncClipboard();
+                if (clip) handleSmartCopyWithText(clip);
+                else handleExtractUrl();
+              }}
+              onSelectCopyPage={async () => {
+                const clip = await requestVncClipboard();
+                if (clip) {
+                  handleSmartCopyWithText(clip);
+                } else {
+                  toast.info(isRecording
+                    ? 'Nothing copied yet — select and copy text on the page first'
+                    : 'Start recording, then copy any text on the page to extract it'
+                  );
+                }
+              }}
+            />
           )}
 
-          {/* Extract — dropdown with three modes; collapses to cancel during element capture */}
-          {runId && !stepRunState?.done && (
-            isCapturingExtract ? (
-              <Button
-                variant="default"
-                size="icon"
-                className="h-7 w-7 focus-visible:ring-0 focus-visible:ring-offset-0"
-                onClick={() => {
-                  captureExtractAbortRef.current?.abort();
-                  captureExtractAbortRef.current = null;
-                  cancelStepRunExtractCapture(orgId!, runId!).catch(() => {});
-                  setIsCapturingExtract(false);
-                }}
-                title="Cancel — press Esc or click here"
-              >
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              </Button>
-            ) : (
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="icon"
-                    className="h-7 w-7 focus-visible:ring-0 focus-visible:ring-offset-0"
-                    disabled={isRecording || isExecuting || isCapturingWaitFor}
-                    title="Extract a value"
-                  >
-                    <Variable className="h-3.5 w-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end" className="text-xs min-w-[200px]">
-                  <DropdownMenuItem className="gap-2 cursor-pointer" onClick={handleAddExtractStep}>
-                    <MousePointer2 className="h-3.5 w-3.5 shrink-0" />
-                    <div>
-                      <div className="font-medium">Extract from element</div>
-                      <div className="text-muted-foreground text-[10px]">Click any element on the page</div>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="gap-2 cursor-pointer"
-                    onClick={async () => {
-                      const clip = await requestVncClipboard();
-                      if (clip) {
-                        handleSmartCopyWithText(clip);
-                      } else {
-                        handleExtractUrl();
-                      }
-                    }}
-                  >
-                    <Link2 className="h-3.5 w-3.5 shrink-0" />
-                    <div>
-                      <div className="font-medium">Extract from URL</div>
-                      <div className="text-muted-foreground text-[10px]">Uses selected value, or enter manually</div>
-                    </div>
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="gap-2 cursor-pointer"
-                    onClick={async () => {
-                      const clip = await requestVncClipboard();
-                      if (clip) {
-                        handleSmartCopyWithText(clip);
-                      } else {
-                        toast.info(isRecording
-                          ? 'Nothing copied yet — select and copy text on the page first'
-                          : 'Start recording, then copy any text on the page to extract it'
-                        );
-                      }
-                    }}
-                  >
-                    <Clipboard className="h-3.5 w-3.5 shrink-0" />
-                    <div>
-                      <div className="font-medium">Copy on page (Ctrl+C)</div>
-                      <div className="text-muted-foreground text-[10px]">Uses last copied text automatically</div>
-                    </div>
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )
-          )}
-
-          {/* Step/Auto + run — visible whenever a run is active */}
+          {/* Run / Stop — visible whenever a run is active. Mode is
+              chosen in the dropdown above; the button below just
+              fires (or aborts) the current test mode. */}
           {runId && (
             <>
               <div className="w-px h-5 bg-border mx-0.5" />
-              <div className="flex rounded-md border overflow-hidden shrink-0">
-                <button
-                  className={cn('px-2.5 py-1 text-xs transition-colors',
-                    !autoMode ? 'bg-brand text-brand-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                  )}
-                  onClick={() => setAutoMode(false)}
-                  disabled={isExecuting || isRecording}
-                >Step</button>
-                <button
-                  className={cn('px-2.5 py-1 text-xs transition-colors border-l',
-                    autoMode ? 'bg-brand text-brand-foreground' : 'text-muted-foreground hover:text-foreground hover:bg-muted'
-                  )}
-                  onClick={() => setAutoMode(true)}
-                  disabled={isExecuting || isRecording}
-                >Auto</button>
-              </div>
               {/* Stop button — visible during auto-run.  Cancels the in-flight
                   HTTP request AND tells the backend to halt the step run. */}
               {isExecuting && autoMode ? (
@@ -1717,19 +1697,30 @@ export function RunScriptModal({
                 </Button>
               ) : (
                 <Button
-                  onClick={stepRunState?.done ? () => handleJumpToStep(0) : (autoMode ? handleRunAll : handleExecuteStep)}
-                  disabled={isExecuting || isCapturingWaitFor || isCapturingExtract || isRecording || (!stepRunState?.done && !hasSteps)}
+                  onClick={autoMode ? handleRunAll : handleExecuteStep}
+                  disabled={
+                    isExecuting ||
+                    isCapturingWaitFor ||
+                    isCapturingExtract ||
+                    isRecording ||
+                    !hasSteps ||
+                    // When the run is done, every step is marked
+                    // completed. There's no "Restart" — clicking a step
+                    // in the list jumps back to it and re-runs from
+                    // there. Disabled state keeps the button visible so
+                    // the layout doesn't shift on completion.
+                    !!stepRunState?.done
+                  }
                   size="sm"
+                  title={stepRunState?.done ? 'Run complete — click any step to re-run from there.' : undefined}
                 >
                   {isExecuting
                     ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    : stepRunState?.done
-                      ? <RotateCcw className="mr-1.5 h-3 w-3" />
-                      : autoMode
-                        ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
-                        : <Play className="mr-1.5 h-3 w-3 fill-current" />
+                    : autoMode
+                      ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
+                      : <Play className="mr-1.5 h-3 w-3 fill-current" />
                   }
-                  {stepRunState?.done ? 'Restart' : autoMode ? 'Run All' : 'Run Step'}
+                  {autoMode ? 'Run All' : 'Run Step'}
                 </Button>
               )}
             </>
@@ -1927,7 +1918,13 @@ export function RunScriptModal({
                         onDrop={isRecording ? undefined : () => handleDropStep(i)}
                         onMouseEnter={() => setHoveredStep(i)}
                         onMouseLeave={() => setHoveredStep(null)}
-                        onClick={() => { if (!isCurrent && !isExecuting && !isRecording && !stepRunState?.done) handleJumpToStep(i); }}
+                        onClick={() => {
+                          // Click jumps to that step. When the run is
+                          // complete, clicking effectively rewinds and
+                          // re-runs from there (handleJumpToStep clears
+                          // the done flag and replays from the target).
+                          if (!isCurrent && !isExecuting && !isRecording) handleJumpToStep(i);
+                        }}
                       >
                         {/* Drag handle — only in test mode */}
                         {!isRecording && (
@@ -1951,16 +1948,43 @@ export function RunScriptModal({
                         <span className="truncate flex-1">
                           {stepLabel(s)}
                         </span>
-                        {/* Actions: delete (on hover) + selector warning (persistent) */}
+                        {/* iframe badge — flags steps that run inside an
+                            iframe so operators can tell at a glance. The
+                            actual frame_selector is visible in the JSON tab. */}
+                        {s.frame_selector && (
+                          <span
+                            className="shrink-0 px-1 py-0 rounded text-[8px] uppercase tracking-wide font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30"
+                            title={`Runs inside iframe: ${s.frame_selector}`}
+                          >
+                            iframe
+                          </span>
+                        )}
+                        {/* Actions: edit + duplicate + delete (on hover) + selector warning (persistent). */}
                         <div className="ml-auto shrink-0 flex items-center gap-1">
                           {isHovered && (
-                            <button
-                              className="text-muted-foreground hover:text-destructive transition-colors"
-                              onClick={(e) => { e.stopPropagation(); handleDeleteStep(i); }}
-                              title="Delete step"
-                            >
-                              <Trash2 className="h-3 w-3" />
-                            </button>
+                            <>
+                              <button
+                                className="text-muted-foreground hover:text-foreground transition-colors"
+                                onClick={(e) => { e.stopPropagation(); setEditingStepIndex(i); }}
+                                title="Edit step — name, selector, JSON"
+                              >
+                                <Pencil className="h-3 w-3" />
+                              </button>
+                              <button
+                                className="text-muted-foreground hover:text-foreground transition-colors"
+                                onClick={(e) => { e.stopPropagation(); handleDuplicateStep(i); }}
+                                title="Duplicate step"
+                              >
+                                <Copy className="h-3 w-3" />
+                              </button>
+                              <button
+                                className="text-muted-foreground hover:text-destructive transition-colors"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteStep(i); }}
+                                title="Delete step"
+                              >
+                                <Trash2 className="h-3 w-3" />
+                              </button>
+                            </>
                           )}
                           {needsSelectorReview(s) && (
                             <span title="Selector needs review — run this step to auto-select"><AlertTriangle className="h-3 w-3 text-amber-500" /></span>
@@ -1984,6 +2008,14 @@ export function RunScriptModal({
                             <div key={`rec-${ri}`} className="px-3 py-1.5 flex items-center gap-2 text-muted-foreground bg-red-500/5">
                               <Plus className="h-3 w-3 shrink-0 text-green-500" />
                               <span className="truncate flex-1">{stepLabel(r)}</span>
+                              {r.frame_selector && (
+                                <span
+                                  className="shrink-0 px-1 py-0 rounded text-[8px] uppercase tracking-wide font-semibold bg-purple-500/15 text-purple-300 border border-purple-500/30"
+                                  title={`Runs inside iframe: ${r.frame_selector}`}
+                                >
+                                  iframe
+                                </span>
+                              )}
                             </div>
                           ))}
                         </>
@@ -2009,14 +2041,12 @@ export function RunScriptModal({
                 </div>
               )}
 
-              {/* ── Bottom panel (extracted component) ── */}
+              {/* ── Bottom panel — Variables only. Selector + JSON
+                  editors moved to the step-edit modal so the operator
+                  has one editing surface (and Variables can stay
+                  pinned without competing for tab space). ── */}
               {(() => {
                 const vars = analyzeVariables(stepsToShow);
-                const allNames = [...new Set([...vars.keys(), ...Object.keys(params).filter((k) => !vars.has(k))])];
-                const idx = stepRunState?.done
-                  ? Math.max(0, (stepRunState?.steps?.length ?? 1) - 1)
-                  : (stepRunState?.currentIndex ?? 0);
-                const curStep = stepRunState?.steps?.[idx] ?? null;
                 return (
                   <BottomPanel
                     variables={vars}
@@ -2025,22 +2055,6 @@ export function RunScriptModal({
                     onRenameVariable={handleRenameVariable}
                     onDeleteVariable={handleDeleteVariable}
                     hoveredStep={hoveredStep}
-                    variableNames={allNames}
-                    currentStep={curStep}
-                    currentStepIndex={idx}
-                    onUpdateStep={(updated) => {
-                      const newSteps = [...(stepRunState?.steps ?? [])];
-                      newSteps[idx] = updated;
-                      setStepRunState((s) => s ? { ...s, steps: newSteps, step: updated } : s);
-                      setEditedStep(JSON.stringify(updated, null, 2));
-                      setHasChanges(true);
-                    }}
-                    needsSelectorReview={needsSelectorReview}
-                    editedStep={editedStep}
-                    onEditedStepChange={(v) => { setEditedStep(v); setStepEditError(''); }}
-                    stepEditError={stepEditError}
-                    isExecuting={isExecuting}
-                    isRecording={isRecording}
                     extracted={stepRunState?.extracted ?? {}}
                   />
                 );
@@ -2054,9 +2068,60 @@ export function RunScriptModal({
     document.body
   );
 
+  // Variable name set for the step-edit modal's JSON tab.
+  const editModalVarNames = (() => {
+    const v = analyzeVariables(stepRunState?.steps ?? []);
+    return [...new Set([...v.keys(), ...Object.keys(params).filter((k) => !v.has(k))])];
+  })();
+
   return (
     <>
       {portal}
+
+      {/* Step edit modal — opened by the pencil button on a step row.
+          Consolidates name, selector, and JSON editing in one place so
+          the right-rail bottom panel can stay pinned to Variables. */}
+      <StepEditModal
+        step={editingStepIndex != null ? (stepRunState?.steps?.[editingStepIndex] ?? null) : null}
+        stepIndex={editingStepIndex ?? 0}
+        open={editingStepIndex != null}
+        onClose={() => setEditingStepIndex(null)}
+        variableNames={editModalVarNames}
+        onSave={async (updated) => {
+          if (editingStepIndex == null) return;
+          const idx = editingStepIndex;
+          // Compute the new step list once, in a regular variable — used for
+          // BOTH the React state update and the backend sync. Avoid mutating
+          // anything inside setStepRunState's updater: React requires the
+          // updater to be pure (it may run multiple times under StrictMode or
+          // be skipped under bail-out), so capturing values via side effects
+          // inside it is unreliable.
+          const newSteps = [...(stepRunState?.steps ?? [])];
+          newSteps[idx] = updated;
+          // Functional updater so we compose against the latest s — if any
+          // concurrent state change touched OTHER steps, they're preserved.
+          // For the step being edited we always win (operator's intent).
+          setStepRunState((s) => {
+            if (!s) return s;
+            const merged = [...s.steps];
+            merged[idx] = updated;
+            return {
+              ...s,
+              steps: merged,
+              step: idx === s.currentIndex ? updated : s.step,
+            };
+          });
+          setHasChanges(true);
+          if (orgId && runId) {
+            try {
+              await syncStepRunSteps(orgId, runId, newSteps);
+            } catch (err: any) {
+              toast.error(err?.response?.data?.error || err?.message || 'Failed to save step');
+            }
+          }
+        }}
+      />
+
       {/* Exit-session warning — shown on explicit exit AND on nav interception */}
       <Dialog open={showExitWarning} onOpenChange={(o) => {
         if (!o) { pendingNavRef.current = null; setShowExitWarning(false); }
@@ -2150,5 +2215,164 @@ export function RunScriptModal({
         </DialogContent>
       </Dialog>
     </>
+  );
+}
+
+// ── Action mode dropdown ───────────────────────────────────────────────
+//
+// Single picker that consolidates the test mode + every capture action
+// (record interactions, record wait, extract from element / url / copy)
+// into one labeled dropdown. Picking a capture mode fires it immediately;
+// picking Step / Auto Test just toggles the Run button behavior.
+
+interface ModeDropdownProps {
+  autoMode: boolean;
+  isRecording: boolean;
+  isCapturingWaitFor: boolean;
+  isCapturingExtract: boolean;
+  isExecuting: boolean;
+  disabled: boolean;
+  onSelectStep: () => void;
+  onSelectAuto: () => void;
+  onSelectRecordInteractions: () => void;
+  onSelectRecordWait: () => void;
+  onSelectExtractElement: () => void;
+  onSelectExtractUrl: () => void | Promise<void>;
+  onSelectCopyPage: () => void | Promise<void>;
+}
+
+function ModeDropdown({
+  autoMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
+  onSelectStep, onSelectAuto, onSelectRecordInteractions, onSelectRecordWait,
+  onSelectExtractElement, onSelectExtractUrl, onSelectCopyPage,
+}: ModeDropdownProps) {
+  // Compute the current mode label + icon. Capture states take
+  // precedence over the test-mode toggle so the operator can tell at a
+  // glance what the next click on the page will do.
+  let label = autoMode ? 'Auto Test' : 'Step Test';
+  let Icon: React.ComponentType<{ className?: string }> = autoMode ? ChevronsRight : Play;
+  let accent = 'text-muted-foreground';
+  if (isRecording) {
+    label = 'Recording…';
+    Icon = CircleDot;
+    accent = 'text-red-500 animate-pulse';
+  } else if (isCapturingWaitFor) {
+    label = 'Click to set Wait';
+    Icon = Loader2;
+    accent = 'text-brand animate-spin';
+  } else if (isCapturingExtract) {
+    label = 'Click to Extract';
+    Icon = Loader2;
+    accent = 'text-brand animate-spin';
+  }
+
+  const sectionLabelClass = 'px-2 pt-1.5 pb-0.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground';
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-7 gap-1.5 text-xs"
+          disabled={disabled}
+          title="Choose what the next action will do"
+        >
+          <ListTodo className="h-3 w-3 shrink-0" />
+          <span className="truncate max-w-[140px]">{label}</span>
+          <Icon className={cn('h-3 w-3 shrink-0', accent)} />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-[240px]">
+        <div className={sectionLabelClass}>Test</div>
+        <DropdownMenuItem
+          className={cn('gap-2 cursor-pointer', !autoMode && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
+          onClick={onSelectStep}
+          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
+        >
+          <Play className="h-3.5 w-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">Step Test</div>
+            <div className="text-muted-foreground text-[10px]">Run one step at a time</div>
+          </div>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn('gap-2 cursor-pointer', autoMode && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
+          onClick={onSelectAuto}
+          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
+        >
+          <ChevronsRight className="h-3.5 w-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">Auto Test</div>
+            <div className="text-muted-foreground text-[10px]">Run all remaining steps in sequence</div>
+          </div>
+        </DropdownMenuItem>
+
+        <div className={sectionLabelClass}>Record</div>
+        <DropdownMenuItem
+          className={cn('gap-2 cursor-pointer', isRecording && 'bg-muted/60')}
+          onClick={onSelectRecordInteractions}
+          disabled={isExecuting || isCapturingWaitFor || isCapturingExtract}
+        >
+          <CircleDot className={cn('h-3.5 w-3.5 shrink-0', isRecording && 'text-red-500')} />
+          <div>
+            <div className="font-medium">{isRecording ? 'Stop Recording' : 'Record Interactions'}</div>
+            <div className="text-muted-foreground text-[10px]">
+              {isRecording ? 'Stop capturing clicks / fills / navigations' : 'Capture clicks, fills, and navigations on the page'}
+            </div>
+          </div>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn('gap-2 cursor-pointer', isCapturingWaitFor && 'bg-muted/60')}
+          onClick={onSelectRecordWait}
+          disabled={isExecuting || isRecording || isCapturingExtract}
+        >
+          <Clock className="h-3.5 w-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">{isCapturingWaitFor ? 'Cancel Wait Capture' : 'Record Wait'}</div>
+            <div className="text-muted-foreground text-[10px]">
+              {isCapturingWaitFor ? 'Stop waiting for the next click' : 'Click an element to insert a wait-for step'}
+            </div>
+          </div>
+        </DropdownMenuItem>
+
+        <div className={sectionLabelClass}>Extract</div>
+        <DropdownMenuItem
+          className={cn('gap-2 cursor-pointer', isCapturingExtract && 'bg-muted/60')}
+          onClick={onSelectExtractElement}
+          disabled={isExecuting || isRecording || isCapturingWaitFor}
+        >
+          <MousePointer2 className="h-3.5 w-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">{isCapturingExtract ? 'Cancel Element Capture' : 'Extract From Element'}</div>
+            <div className="text-muted-foreground text-[10px]">
+              {isCapturingExtract ? 'Stop waiting for an element click' : 'Click any element on the page'}
+            </div>
+          </div>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="gap-2 cursor-pointer"
+          onClick={onSelectExtractUrl}
+          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
+        >
+          <Link2 className="h-3.5 w-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">Extract From URL</div>
+            <div className="text-muted-foreground text-[10px]">Uses selected value, or enter manually</div>
+          </div>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="gap-2 cursor-pointer"
+          onClick={onSelectCopyPage}
+          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
+        >
+          <Clipboard className="h-3.5 w-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">Copy From Page</div>
+            <div className="text-muted-foreground text-[10px]">Uses last copied text (Ctrl+C)</div>
+          </div>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

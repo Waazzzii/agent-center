@@ -26,6 +26,12 @@ export interface ElementSnapshot {
 
 export interface RecordedStep {
   action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for' | 'wait_for_tab';
+  /** Optional user-supplied label. When set, the step list and edit
+   *  modal show this instead of the auto-generated stepLabel. Lets
+   *  operators give meaningful names like "Open contract form" instead
+   *  of "Click: button.submit-contract". Empty / unset → fall back to
+   *  the auto label. */
+  name?: string;
   /** For wait_for_tab steps: which tab event to wait for. */
   tab_action?: 'open';
   url?: string;
@@ -37,6 +43,14 @@ export interface RecordedStep {
   tab_index?: number;
   /** For wait_for steps: optional timeout override in ms */
   timeout?: number;
+  /**
+   * When the recorded interaction happened inside an iframe, the CSS
+   * selector that picks out the iframe in the parent document. At
+   * replay time the worker uses `page.frameLocator(frame_selector)` to
+   * scope `selector` resolution to the right document. Unset / empty
+   * means the step targets the top-level page (default).
+   */
+  frame_selector?: string;
   /** Rich element snapshot captured at recording time; used for robust replay */
   elementSnapshot?: ElementSnapshot;
   /**
