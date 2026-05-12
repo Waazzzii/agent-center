@@ -366,10 +366,15 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
                   title="Agent browser view"
                   allow="clipboard-read; clipboard-write"
                 />
-                {/* Block mouse/keyboard interaction with the browser except when
-                    login is required — that's the only state where the human
-                    needs to type credentials directly into the browser. */}
-                {!isAuthRequired && (
+                {/* Block mouse/keyboard interaction in observe mode. In
+                    interactive mode (manual login / HITL flows) the user must
+                    be able to interact for the entire dialog lifetime,
+                    regardless of status flicker — keying the overlay off
+                    `runStatus.status === 'auth_required'` causes interactivity
+                    to drop whenever the backend briefly reports a different
+                    status (SSE event, polling lag, transient state). The
+                    `mode` prop is the stable source of truth. */}
+                {!isInteractive && !isAuthRequired && (
                   <div className="absolute inset-0 cursor-not-allowed" />
                 )}
               </div>
