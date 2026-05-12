@@ -36,7 +36,7 @@ export function ProvisioningNotice({
           <p className="text-xs text-muted-foreground leading-relaxed">
             All browser slots are currently in use. A new VM is being provisioned
             {long ? " — it's taking a little longer than usual, hang tight" : ' — this typically takes 1–2 minutes'}.
-            The browser will open automatically once it&apos;s ready.
+            The browser will open automatically once it{"'"}s ready.
           </p>
         </div>
         {showPersistenceHint && (
