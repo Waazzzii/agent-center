@@ -15,7 +15,8 @@ import {
 import { getConnectors } from '@/lib/api/connectors';
 import { getSkills, type Skill } from '@/lib/api/skills';
 import { listScripts, type BrowserScript } from '@/lib/api/scripts';
-import { listAiSteps, type AiStep } from '@/lib/api/ai-steps';
+import { listAiSteps, createAiStep, type AiStep } from '@/lib/api/ai-steps';
+import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
 import { listLogins, type Login } from '@/lib/api/logins';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
 import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
@@ -25,6 +26,7 @@ import { BrowserScriptPreview } from '@/components/actions/BrowserScriptPreview'
 import { SubAgentPreview } from '@/components/actions/SubAgentPreview';
 import { ApprovalPreview } from '@/components/actions/ApprovalPreview';
 import { InfoBlock } from '@/components/actions/InfoBlock';
+import { SlackChannelInput } from '@/components/notifications/SlackChannelInput';
 import {
   getAgentAccessGroups,
   getActionAccessGroups,
@@ -195,12 +197,28 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     batchSize: 1,
     maxRetries: 0,
     accessGroupIds: [] as string[],
+    // Per-action Slack notification channel override. Only surfaces in
+    // the UI for approval-type actions; other types ignore it. Empty
+    // string = "no override; fall through to program or stay silent".
+    notificationSlackChannelId: '',
   });
   const [aiSteps, setAiSteps] = useState<AiStep[]>([]);
   const [logins, setLogins] = useState<Login[]>([]);
   const [validSubAgents, setValidSubAgents] = useState<Agent[]>([]);
   const [savingAction, setSavingAction] = useState(false);
   const [actionTypeModalOpen, setActionTypeModalOpen] = useState(false);
+
+  // Inline "create new AI step" dialog state. Lets the operator spin up
+  // a fresh AI step without leaving the agent action editor — on save we
+  // refresh the local aiSteps list and auto-select the new one. Uses the
+  // SAME AiStepFormData shape as the standalone create page so a future
+  // field added to AiStepFormBody flows through here automatically.
+  const [newAiStepOpen, setNewAiStepOpen] = useState(false);
+  const [savingNewAiStep, setSavingNewAiStep] = useState(false);
+  const [newAiStepForm, setNewAiStepForm] = useState<AiStepFormData>({
+    name: '', description: '', prompt: '', model: 'claude-sonnet-4-6',
+    connector_ids: [], outputs: [], skill_ids: [],
+  });
 
   // Trigger dialog
   const [triggerDialogOpen, setTriggerDialogOpen] = useState(false);
@@ -319,6 +337,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       batchSize: 1,
       maxRetries: 0,
       accessGroupIds: [],
+      notificationSlackChannelId: '',
     });
     if (type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -340,6 +359,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       batchSize: action.batch_size ?? 1,
       maxRetries: action.max_retries ?? 0,
       accessGroupIds: [],
+      notificationSlackChannelId: action.notification_slack_channel_id ?? '',
     });
     if (action.action_type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -358,6 +378,45 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       }).catch(() => {});
     }
     setActionDialogOpen(true);
+  };
+
+  /**
+   * Create an AI step from inside the agent action editor, then select it
+   * for the action that's currently being edited. Avoids round-tripping
+   * through the standalone AI step create page (and the back-button
+   * adventure that goes with that) so adding a never-before-used AI step
+   * doesn't cost the operator their in-progress action state.
+   */
+  const handleCreateAiStepInline = async () => {
+    if (!selectedOrgId) return;
+    if (!newAiStepForm.name.trim() || !newAiStepForm.prompt.trim()) return;
+    setSavingNewAiStep(true);
+    try {
+      const created = await createAiStep(selectedOrgId, {
+        name: newAiStepForm.name.trim(),
+        description: newAiStepForm.description.trim() || null,
+        prompt: newAiStepForm.prompt,
+        model: newAiStepForm.model,
+        connector_ids: newAiStepForm.connector_ids,
+        outputs: newAiStepForm.outputs
+          .filter((o) => o.key.trim())
+          .map((o) => ({ key: o.key.trim(), description: o.description.trim() })),
+        skill_ids: newAiStepForm.skill_ids,
+      });
+      // Refresh the local AI steps list AND immediately point the action
+      // form at the new one so the operator can carry on saving the
+      // action without re-selecting.
+      setAiSteps((prev) => [...prev, created]);
+      setActionForm((f) => ({ ...f, aiStepId: created.id }));
+      // Reset the form so a subsequent "+ create another" starts blank.
+      setNewAiStepForm({ name: '', description: '', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], outputs: [], skill_ids: [] });
+      setNewAiStepOpen(false);
+      toast.success(`Created "${created.name}" and selected for this action`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to create AI step');
+    } finally {
+      setSavingNewAiStep(false);
+    }
   };
 
   const handleSaveAction = async () => {
@@ -400,10 +459,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           batch_size: actionForm.batchSize,
         };
       } else {
+        // Approval action. notification_slack_channel_id is sent as either
+        // a non-empty string (set/replace) or null (clear). undefined means
+        // "leave alone" but for create we always send it explicitly.
+        const slackCh = actionForm.notificationSlackChannelId.trim();
         payload = {
           name: actionForm.name.trim(),
           action_type: 'approval',
           approval_instructions: actionForm.approval_instructions.trim(),
+          notification_slack_channel_id: slackCh ? slackCh : null,
         };
       }
       let savedActionId: string;
@@ -989,16 +1053,32 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               <>
                 <div className="space-y-1">
                   <Label>AI Step <span className="text-destructive">*</span></Label>
-                  <Select value={actionForm.aiStepId} onValueChange={(v) => setActionForm(f => ({ ...f, aiStepId: v }))}>
-                    <SelectTrigger><SelectValue placeholder="Select an AI step…" /></SelectTrigger>
-                    <SelectContent>
-                      {aiSteps.length === 0 ? (
-                        <SelectItem value="_none" disabled>No AI steps yet — create one first</SelectItem>
-                      ) : (
-                        aiSteps.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)
-                      )}
-                    </SelectContent>
-                  </Select>
+                  <div className="flex items-center gap-2">
+                    <Select value={actionForm.aiStepId} onValueChange={(v) => setActionForm(f => ({ ...f, aiStepId: v }))}>
+                      <SelectTrigger className="flex-1"><SelectValue placeholder="Select an AI step…" /></SelectTrigger>
+                      <SelectContent>
+                        {aiSteps.length === 0 ? (
+                          <SelectItem value="_none" disabled>No AI steps yet — click + to create one</SelectItem>
+                        ) : (
+                          aiSteps.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)
+                        )}
+                      </SelectContent>
+                    </Select>
+                    {/* Inline create — opens a nested dialog with the full
+                        AI step form. On save we add to the local list AND
+                        auto-select for this action, so the operator doesn't
+                        lose their in-progress action state. */}
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={() => setNewAiStepOpen(true)}
+                      title="Create a new AI step inline"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
                 </div>
                 <EntityPreviewNotice
                   entityLabel="AI step"
@@ -1115,6 +1195,14 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </div>
                   )}
                 </div>
+                {/* Slack notification override — when this approval HITL-pauses,
+                    the notify-on-pause service uses this channel before falling
+                    back to the program / org-default cascade. Empty = no override. */}
+                <SlackChannelInput
+                  scope="approval"
+                  value={actionForm.notificationSlackChannelId}
+                  onChange={(v) => setActionForm((f) => ({ ...f, notificationSlackChannelId: v }))}
+                />
               </>
             )}
 
@@ -1475,6 +1563,44 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           </div>
           <DialogFooter>
             <Button onClick={() => setNewRawKey(null)}>Done</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Inline AI step creation — opens from the "+" next to the AI step
+          select in the action form. Reuses the SAME AiStepFormBody as the
+          standalone /actions/ai-steps/create page (and the edit page), so
+          any future fields added there land here for free.
+          Width: max-w-5xl (~1024px) gives the prompt textarea, the
+          connector multi-select, and the outputs table all proper room to
+          breathe — the previous max-w-3xl (~768px) was uncomfortably
+          tight, especially for the prompt editor. */}
+      <Dialog open={newAiStepOpen} onOpenChange={setNewAiStepOpen}>
+        <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>New AI Step</DialogTitle>
+          </DialogHeader>
+          <div className="py-2">
+            <AiStepFormBody
+              form={newAiStepForm}
+              setForm={setNewAiStepForm}
+              connectors={connectors
+                .filter((c) => (c as unknown as { agent_enabled?: boolean }).agent_enabled)
+                .map((c) => ({ id: c.id, label: (c as unknown as { connector_name?: string }).connector_name ?? c.id }))}
+              skills={skills}
+            />
+          </div>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setNewAiStepOpen(false)} disabled={savingNewAiStep}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateAiStepInline}
+              disabled={savingNewAiStep || !newAiStepForm.name.trim() || !newAiStepForm.prompt.trim()}
+            >
+              {savingNewAiStep ? <RefreshCw className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}
+              Create &amp; select
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

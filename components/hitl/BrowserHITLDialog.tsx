@@ -45,11 +45,19 @@ interface Props {
    *   to exit are Done (success) or Abort (kill).
    */
   mode?: 'observe' | 'interactive';
+  /**
+   * Affects user-facing copy only — the dialog flips between login-themed
+   * wording ("Awaiting Login" / "Done — I'm Logged In") and logout-themed
+   * wording ("Awaiting Logout" / "Done — I'm Logged Out"). Defaults to
+   * 'login' since the vast majority of interactive flows are logins.
+   */
+  purpose?: 'login' | 'logout';
 }
 
 const POLL_INTERVAL_MS = 10_000;
 
-function StatusPill({ status }: { status: BrowserRunStatus['status'] }) {
+function StatusPill({ status, purpose = 'login' }: { status: BrowserRunStatus['status']; purpose?: 'login' | 'logout' }) {
+  const authLabel = purpose === 'logout' ? 'Awaiting Logout' : 'Awaiting Login';
   const map: Record<
     BrowserRunStatus['status'],
     { label: string; cls: string; icon: React.ReactNode }
@@ -57,7 +65,7 @@ function StatusPill({ status }: { status: BrowserRunStatus['status'] }) {
     pending:           { label: 'Pending',            cls: 'border-slate-300 text-slate-500',                          icon: <Loader2 className="h-3 w-3 animate-spin" /> },
     provisioning:      { label: 'Provisioning',        cls: 'border-slate-300 text-slate-500',                          icon: <Loader2 className="h-3 w-3 animate-spin" /> },
     running:           { label: 'Running',             cls: 'border-blue-300 text-blue-600 dark:text-blue-400',        icon: <Loader2 className="h-3 w-3 animate-spin" /> },
-    auth_required:     { label: 'Awaiting Login',      cls: 'border-amber-400 text-amber-600 dark:text-amber-400',     icon: <Monitor className="h-3 w-3" /> },
+    auth_required:     { label: authLabel,             cls: 'border-amber-400 text-amber-600 dark:text-amber-400',     icon: <Monitor className="h-3 w-3" /> },
     awaiting_approval: { label: 'Awaiting Approval',   cls: 'border-violet-400 text-violet-600 dark:text-violet-400',  icon: <PauseCircle className="h-3 w-3" /> },
     completed:         { label: 'Completed',           cls: 'border-green-500 text-green-600 dark:text-green-400',     icon: <CheckCircle2 className="h-3 w-3" /> },
     failed:            { label: 'Failed',              cls: 'border-red-400 text-red-600 dark:text-red-400',           icon: <XCircle className="h-3 w-3" /> },
@@ -71,8 +79,22 @@ function StatusPill({ status }: { status: BrowserRunStatus['status'] }) {
   );
 }
 
-export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe' }: Props) {
-  const isInteractive = mode === 'interactive';
+export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe', purpose = 'login' }: Props) {
+  // postDone = the user has clicked the Done button and we've handed off
+  // to the backend for session-save + (for logins) post-Done verification.
+  // The original browser slot is being torn down; a fresh one may be
+  // allocated server-side for the verify. We do NOT want the user trapped
+  // in interactive mode while that runs — close should be allowed, and
+  // the live-viewer iframe should be hidden (it points at a now-dead VNC
+  // endpoint).
+  const [postDone, setPostDone] = useState(false);
+  const isInteractive = mode === 'interactive' && !postDone;
+  const isLogout = purpose === 'logout';
+  const doneLabel = isLogout ? "Done — I'm Logged Out" : "Done — I'm Logged In";
+  const authBannerStrong = isLogout ? 'Logout required.' : 'Login required.';
+  const authBannerBody = isLogout
+    ? 'Log out using the browser below, then click '
+    : 'Log in using the browser below, then click ';
   const [runStatus, setRunStatus] = useState<BrowserRunStatus | null>(null);
   const [novnc, setNovnc] = useState<NoVNCInfo | null>(null);
   const [loadingNovnc, setLoadingNovnc] = useState(false);
@@ -109,11 +131,16 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
 
   // ── Load browser view once the run has an active browser instance ──
   // Don't attempt VNC while provisioning/pending — there's no instance yet.
+  // Don't attempt VNC after Done has been clicked either — the worker slot
+  // is being torn down by the server, so any call would either hit a dead
+  // VNC endpoint or race the loginRun's 30s grace and surface a misleading
+  // "Run not found" toast even though the operation succeeded.
 
   const browserReadyStatuses: Array<BrowserRunStatus['status']> = ['running', 'auth_required', 'awaiting_approval'];
 
   useEffect(() => {
     if (!open || novnc || loadingNovnc) return;
+    if (postDone) return; // post-Done: we've already hidden the iframe behind the overlay
     if (!runStatus || !browserReadyStatuses.includes(runStatus.status)) return;
 
     setLoadingNovnc(true);
@@ -122,7 +149,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
       .catch(() => toast.error('Could not load browser view — check that the agent backend is running'))
       .finally(() => setLoadingNovnc(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, runId, runStatus?.status]);
+  }, [open, runId, runStatus?.status, postDone]);
 
   // ── Status polling (10s) — runs after provisioning is complete ──
   // Kept as a safety net; SSE below drives the fast path.
@@ -198,6 +225,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
       setRunStatus(null);
       setPollError(false);
       setProvisioningRunId(null);
+      setPostDone(false);
     }
   }, [open]);
 
@@ -225,16 +253,32 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
     setResuming(true);
     try {
       await resumeBrowserRun(runId);
-      toast.success('Agent resuming — browser session saved');
-      // Immediately flip to running so the button/banner disappear and the
-      // interaction overlay is restored — don't wait for the next poll cycle.
-      setRunStatus((prev) => prev ? { ...prev, status: 'running' } : prev);
-      // Resume polling to track actual progress, but delay the first poll so
-      // the backend has time to transition state — otherwise it returns the
-      // stale auth_required status and the button flickers back.
-      if (intervalRef.current) clearInterval(intervalRef.current);
-      intervalRef.current = setInterval(fetchStatus, POLL_INTERVAL_MS);
+      // For logins, the server kicks off an independent background verify
+      // (separate logId) right after the save — its result will reflect
+      // on the Logins list row, not this dialog. For logouts, the save
+      // IS the job. Either way, the user is done here — auto-close the
+      // dialog. Leaving it open invited stale-runId 404s from getNoVNCInfo
+      // / getBrowserRunStatus once the loginRun's 30s grace expired,
+      // which surfaced as misleading "Run not found" toasts even when
+      // the operation had succeeded.
+      toast.success(
+        purpose === 'logout'
+          ? 'Logged out — session saved.'
+          : 'Logged in — verifying in the background.'
+      );
+      // Stop any polling/SSE-driven status refetches we were running
+      // against this runId; the backend cleanup continues independently,
+      // and the Logins list row + Recent Runs panel are the source of
+      // truth for the final outcome.
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      setNovnc(null);
+      onOpenChange(false);
     } catch (err: any) {
+      // Real failure (e.g. resume route rejected) — keep the dialog open
+      // so the user can see what happened.
       toast.error(err?.response?.data?.error ?? 'Failed to resume agent');
     } finally {
       setResuming(false);
@@ -280,7 +324,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
           <DialogTitle className="text-sm font-medium">
             {agentName ? `${agentName} — Live Browser` : 'Live Browser View'}
           </DialogTitle>
-          {runStatus && <StatusPill status={runStatus.status} />}
+          {runStatus && <StatusPill status={runStatus.status} purpose={purpose} />}
           {pollError && (
             <Badge variant="outline" className="gap-1.5 border-orange-400 text-orange-500">
               <WifiOff className="h-3 w-3" />Cannot reach agent-backend
@@ -296,7 +340,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
               >
                 {resuming
                   ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Saving…</>
-                  : <><CheckCircle2 className="mr-1 h-3 w-3" />Done — I'm Logged In</>
+                  : <><CheckCircle2 className="mr-1 h-3 w-3" />{doneLabel}</>
                 }
               </Button>
             )}
@@ -325,7 +369,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
           <div className="shrink-0 px-4 py-2 border-b">
             {isAuthRequired && (
               <p className="text-xs text-amber-700 dark:text-amber-400">
-                <strong>Login required.</strong> Log in using the browser below, then click <strong>Done — I'm Logged In</strong>.
+                <strong>{authBannerStrong}</strong> {authBannerBody}<strong>{doneLabel}</strong>.
               </p>
             )}
             {isAwaitingApproval && (
@@ -333,21 +377,52 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
                 <strong>Awaiting approval.</strong> This step requires manual approval before the agent can continue.
               </p>
             )}
-            {isTerminal && (
-              <p className={`text-xs ${runStatus?.status === 'completed' ? 'text-green-700 dark:text-green-400' : runStatus?.status === 'aborted' ? 'text-red-700 dark:text-red-400' : 'text-red-700 dark:text-red-400'}`}>
-                {runStatus?.status === 'completed'
-                  ? 'Agent run completed successfully.'
-                  : runStatus?.status === 'aborted'
-                  ? 'Agent run was aborted.'
-                  : `Agent run failed${runStatus?.error ? `: ${runStatus.error}` : '.'}`}
-              </p>
-            )}
+            {isTerminal && (() => {
+              // Tailor the wording to login / logout flows when the dialog
+              // is purpose-scoped; otherwise stay generic for agent runs.
+              // For login, "completed" here means session was saved — the
+              // independent verify runs as a separate background job and
+              // its outcome shows on the Logins list row, not this dialog.
+              const succeededTxt =
+                purpose === 'logout' ? 'Logged out — session saved.' :
+                purpose === 'login'  ? 'Session saved — running background verify (the login row will update shortly).' :
+                'Agent run completed successfully.';
+              const failedPrefix =
+                purpose === 'logout' ? 'Logout did not complete' :
+                purpose === 'login'  ? 'Login flow failed' :
+                'Agent run failed';
+              const abortedTxt =
+                purpose === 'logout' ? 'Logout was aborted.' :
+                purpose === 'login'  ? 'Login was aborted.' :
+                'Agent run was aborted.';
+              return (
+                <p className={`text-xs ${runStatus?.status === 'completed' ? 'text-green-700 dark:text-green-400' : 'text-red-700 dark:text-red-400'}`}>
+                  {runStatus?.status === 'completed'
+                    ? succeededTxt
+                    : runStatus?.status === 'aborted'
+                    ? abortedTxt
+                    : `${failedPrefix}${runStatus?.error ? `: ${runStatus.error}` : '.'}`}
+                </p>
+              );
+            })()}
           </div>
         )}
 
         {/* ── Browser viewport ───────────────────────────────── */}
         <div className="flex-1 min-h-0 overflow-hidden relative bg-muted/30">
-            {isProvisioning || runStatus?.status === 'provisioning' || runStatus?.status === 'pending' ? (
+            {postDone && !isTerminal ? (
+              // After Done, the original viewer is dead. The server's
+              // doing its post-flight work (session save, sibling resume,
+              // and for logins a background verify on a separate run).
+              // Calm overlay; the user can close any time.
+              <div className="flex h-full flex-col items-center justify-center gap-3 text-muted-foreground">
+                <Loader2 className="h-8 w-8 animate-spin" />
+                <p className="text-sm">
+                  {purpose === 'logout' ? 'Saving logged-out session…' : 'Saving session…'}
+                </p>
+                <p className="text-xs">You can close this window. The login row will update when the background verify finishes.</p>
+              </div>
+            ) : isProvisioning || runStatus?.status === 'provisioning' || runStatus?.status === 'pending' ? (
               <ProvisioningNotice
                 elapsedMs={provisioningElapsedMs}
                 showPersistenceHint={!isInteractive}

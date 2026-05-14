@@ -1763,14 +1763,26 @@ export function RunScriptModal({
             </>
           )}
 
-          {/* Save — always visible */}
+          {/* Save — always visible, but gated until the session is actually
+              ready. Saving while the VM is still provisioning (or before
+              the step-run has been initialised on the worker) hits the
+              backend with whatever local steps state happens to be loaded,
+              which can wipe the script's persisted steps when the operator
+              has a pre-existing script open and the VM hasn't connected yet.
+              The hook to "is there a real session backing this UI?" is
+              `runId` — if it's null we're either pre-allocation or still
+              provisioning. */}
           <Button
             variant="ghost"
             size="icon"
             className="h-7 w-7"
             onClick={handleSave}
-            disabled={isExecuting || isRecording}
-            title="Save"
+            disabled={isExecuting || isRecording || isProvisioning || starting || !runId}
+            title={
+              !runId || isProvisioning || starting
+                ? 'Waiting for the browser session to start — save unlocks once it is ready'
+                : 'Save'
+            }
           >
             <Save className="h-3.5 w-3.5" />
           </Button>

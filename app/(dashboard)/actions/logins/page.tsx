@@ -7,8 +7,8 @@ import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   listLogins,
   deleteLogin,
-  verifyLogin,
   startLogin,
+  startLogout,
   type Login,
 } from '@/lib/api/logins';
 import { getBrowserRunStatus } from '@/lib/api/agents';
@@ -18,8 +18,7 @@ import { Badge } from '@/components/ui/badge';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  Plus, Trash2, LogIn, Loader2, CheckCircle2, AlertCircle, HelpCircle,
-  ShieldCheck,
+  Plus, Trash2, LogIn, LogOut, Loader2, CheckCircle2, AlertCircle, HelpCircle,
 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
@@ -161,23 +160,26 @@ export default function LoginsPage() {
     }
   };
 
-  // ── Verify / Log In actions ────────────────────────────────
-  const handleVerify = async (item: Login) => {
+  // ── Log Out / Log In actions ───────────────────────────────
+  // Verify lives on the edit page now — the list page only exposes the
+  // two interactive flows (log in, log out) since those need the noVNC
+  // dialog to open immediately.
+  const handleLogout = async (item: Login) => {
     if (!selectedOrgId) return;
     setStarting((s) => ({ ...s, [item.id]: true }));
     try {
-      const result = await verifyLogin(selectedOrgId, item.id);
+      const result = await startLogout(selectedOrgId, item.id);
       setActiveVerifySession({
         entityId: item.id,
-        kind: 'login_verify',
+        kind: 'login_logout',
         logId: result.executionLogId,
-        label: `Verifying: ${item.name}`,
-        mode: 'observe',
+        label: `Log out: ${item.name}`,
+        mode: 'interactive',
       });
-      toast.success('Verifying in the background — click the monitor icon any time to watch.');
+      setViewingLoginId(item.id);
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e.response?.data?.error || 'Failed to start verify');
+      toast.error(e.response?.data?.error || 'Failed to start logout');
     } finally {
       setStarting((s) => ({ ...s, [item.id]: false }));
     }
@@ -264,9 +266,9 @@ export default function LoginsPage() {
                               <span className="ml-1">Log In</span>
                             </Button>
                           ) : (
-                            <Button variant="outline" size="sm" onClick={() => handleVerify(item)} disabled={isStarting || !!active} className="text-xs">
-                              {isStarting || active ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
-                              <span className="ml-1">{active ? 'Verifying...' : 'Verify'}</span>
+                            <Button variant="outline" size="sm" onClick={() => handleLogout(item)} disabled={isStarting || !!active} className="text-xs">
+                              {isStarting || active ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
+                              <span className="ml-1">Log Out</span>
                             </Button>
                           )}
                           <Button variant="ghost" size="icon-sm" className="text-destructive/50 hover:text-destructive"
@@ -293,6 +295,7 @@ export default function LoginsPage() {
           runId={activeForDialog.logId}
           agentName={activeForDialog.label}
           mode={activeForDialog.mode}
+          purpose={activeForDialog.kind === 'login_logout' ? 'logout' : 'login'}
         />
       )}
     </div>

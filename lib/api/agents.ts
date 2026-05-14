@@ -37,6 +37,9 @@ export interface AgentAction {
   batch_size?: number | null;
   /** browser_script retry — 0 = no retries, max 3 */
   max_retries?: number | null;
+  /** Per-action Slack channel override for HITL notifications. Falls
+   *  through to program / org-default if null. */
+  notification_slack_channel_id?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -155,6 +158,67 @@ export async function updateAgent(orgId: string, agentId: string, data: { name?:
 
 export async function deleteAgent(orgId: string, agentId: string) {
   await agentClient.delete(`/api/admin/${orgId}/agents/${agentId}`);
+}
+
+/**
+ * Duplicate an agent and all its actions. Client-side composition over the
+ * existing create/update/createAction endpoints — no new backend route
+ * needed. The duplicate:
+ *   • copies name (with "(copy)" suffix), description, requires_browser
+ *   • is created INACTIVE so it doesn't fire while the operator reviews
+ *   • clones every action, preserving order_index and FK references
+ *     (ai_step_id, login_id, script_id, target_agent_id) — the dup uses
+ *     the same reusable resources as the source
+ *   • does NOT clone triggers (webhook keys would conflict, cron would
+ *     double-fire) or routine_bindings — operator wires those up post-dup
+ */
+export async function duplicateAgent(
+  orgId: string,
+  sourceAgentId: string,
+  newName: string,
+): Promise<Agent> {
+  const source = await getAgent(orgId, sourceAgentId);
+  const newAgent = await createAgent(orgId, {
+    name: newName,
+    description: source.description ?? undefined,
+  });
+  // is_active + requires_browser are only settable via PATCH after create.
+  // Always create as inactive — operator activates after reviewing.
+  await updateAgent(orgId, newAgent.id, {
+    is_active: false,
+    requires_browser: source.requires_browser,
+  });
+  // Replay actions in order_index order so the dup's action sequence
+  // matches the source visually.
+  if (source.actions) {
+    const ordered = [...source.actions].sort((a, b) => a.order_index - b.order_index);
+    for (const a of ordered) {
+      // Numeric tuning fields have NOT NULL columns in agent_actions with
+      // service-layer defaults that only apply when the keys are `undefined`
+      // (JS destructuring defaults — they don't fire on explicit `null`).
+      // For non-sub_agent action types the source has these as null, so
+      // we omit them from the payload entirely and let the backend default
+      // (max_concurrent=3, batch_size=1, max_retries=0) take effect.
+      const tuning: Partial<AgentAction> = {};
+      if (a.max_concurrent != null) tuning.max_concurrent = a.max_concurrent;
+      if (a.batch_size != null) tuning.batch_size = a.batch_size;
+      if (a.max_retries != null) tuning.max_retries = a.max_retries;
+
+      await createAction(orgId, newAgent.id, {
+        name: a.name,
+        action_type: a.action_type,
+        approval_instructions: a.approval_instructions ?? null,
+        notify_user_id: a.notify_user_id ?? null,
+        order_index: a.order_index,
+        ai_step_id: a.ai_step_id ?? null,
+        login_id: a.login_id ?? null,
+        script_id: a.script_id ?? null,
+        target_agent_id: a.target_agent_id ?? null,
+        ...tuning,
+      });
+    }
+  }
+  return newAgent;
 }
 
 // ─── Actions ──────────────────────────────────────────────────

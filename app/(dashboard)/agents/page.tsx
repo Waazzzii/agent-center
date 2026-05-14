@@ -4,14 +4,14 @@ import { useEffect, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { getAgents, deleteAgent, runAgent, type Agent } from '@/lib/api/agents';
+import { getAgents, deleteAgent, duplicateAgent, runAgent, type Agent } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Play, RefreshCw, Bot } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
 
@@ -24,6 +24,7 @@ export default function AgentsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [runningId, setRunningId] = useState<string | null>(null);
+  const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
 
   useEffect(() => {
     if (selectedOrgId) loadAgents();
@@ -64,6 +65,36 @@ export default function AgentsPage() {
       toast.error(err.response?.data?.message || err.message || 'Failed to run agent');
     } finally {
       setRunningId(null);
+    }
+  };
+
+  /**
+   * Duplicate an agent. Picks the next free "(copy N)" suffix so repeated
+   * duplications don't end up with "Foo (copy) (copy) (copy)". Created
+   * inactive — operator activates after reviewing.
+   */
+  const handleDuplicate = async (agent: Agent) => {
+    if (!selectedOrgId || duplicatingId) return;
+    setDuplicatingId(agent.id);
+    try {
+      const base = agent.name.replace(/\s*\(copy(?:\s+\d+)?\)\s*$/, '');
+      const existing = new Set(agents.map((a) => a.name));
+      let candidate = `${base} (copy)`;
+      let n = 2;
+      while (existing.has(candidate)) {
+        candidate = `${base} (copy ${n})`;
+        n++;
+      }
+      const created = await duplicateAgent(selectedOrgId, agent.id, candidate);
+      toast.success(`Duplicated → ${candidate}`);
+      await loadAgents();
+      // Jump straight into the new agent so the operator can review/edit
+      // the cloned actions immediately.
+      router.push(`/agents/${created.id}`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to duplicate agent');
+    } finally {
+      setDuplicatingId(null);
     }
   };
 
@@ -127,14 +158,15 @@ export default function AgentsPage() {
                 {
                   key: 'name',
                   label: 'Name',
-                  render: (a) => <span className="font-medium">{a.name}</span>,
-                },
-                {
-                  key: 'description',
-                  label: 'Description',
+                  // Description shows on hover via native title attribute — we
+                  // dropped the standalone Description column to reclaim
+                  // horizontal space for the more useful Status/Created/Actions.
                   render: (a) => (
-                    <span className="text-muted-foreground text-sm">
-                      {a.description ? (a.description.length > 60 ? a.description.slice(0, 60) + '…' : a.description) : '—'}
+                    <span
+                      className="font-medium"
+                      title={a.description || undefined}
+                    >
+                      {a.name}
                     </span>
                   ),
                 },
@@ -152,7 +184,15 @@ export default function AgentsPage() {
                 },
                 {
                   key: 'actions',
-                  label: 'Actions',
+                  // No label — actions are self-evident from the icons, and
+                  // the th would just steal width on a column we want as
+                  // narrow as possible.
+                  label: '',
+                  // w-px + whitespace-nowrap collapses the column to the
+                  // intrinsic width of its content (the icon buttons) so
+                  // the rest of the table gets the surplus.
+                  thClassName: 'w-px whitespace-nowrap',
+                  tdClassName: 'w-px whitespace-nowrap',
                   desktopRender: (a) => (
                     <div className="flex items-center justify-end gap-2">
                       <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
@@ -160,10 +200,15 @@ export default function AgentsPage() {
                           ? <RefreshCw className="h-4 w-4 animate-spin" />
                           : <Play className="h-4 w-4 text-success" />}
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }}>
+                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} title="Edit agent">
                         <Pencil className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }}>
+                      <Button variant="ghost" size="sm" disabled={duplicatingId === a.id} title="Duplicate agent" onClick={(e) => { e.stopPropagation(); handleDuplicate(a); }}>
+                        {duplicatingId === a.id
+                          ? <RefreshCw className="h-4 w-4 animate-spin" />
+                          : <Copy className="h-4 w-4" />}
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }} title="Delete agent">
                         <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </div>
@@ -175,6 +220,9 @@ export default function AgentsPage() {
                       </Button>
                       <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} className="flex-1 rounded-none border-r-0 border-t-0 border-l">
                         <Pencil className="h-4 w-4" />
+                      </Button>
+                      <Button variant="outline" size="sm" disabled={duplicatingId === a.id} onClick={(e) => { e.stopPropagation(); handleDuplicate(a); }} className="flex-1 rounded-none border-r-0 border-t-0 border-l">
+                        {duplicatingId === a.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
                       </Button>
                       <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }} className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10">
                         <Trash2 className="h-4 w-4 text-destructive" />

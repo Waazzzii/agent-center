@@ -24,7 +24,7 @@
 const STORAGE_KEY = 'active_verify_sessions';
 const MAX_SESSION_AGE_MS = 2 * 60 * 60 * 1000;
 
-export type VerifyKind = 'login_verify' | 'login_manual';
+export type VerifyKind = 'login_verify' | 'login_manual' | 'login_logout';
 
 export interface ActiveVerifySession {
   entityId: string;   // e.g. login id
