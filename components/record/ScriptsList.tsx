@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import {
@@ -115,18 +114,25 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
         </p></Card>
       ) : (
         <Card className="overflow-hidden py-0">
-          <table className="w-full text-sm">
+          {/* table-auto + narrow numeric columns let the Name column
+              expand to consume freed space. Parameters and Steps are
+              now compact counts (no names, no unit word) — the actual
+              variable list is one click away in the script editor and
+              didn't justify a wide column on the index. */}
+          <table className="w-full text-sm table-auto">
             <thead className="bg-muted/40 text-xs text-muted-foreground">
               <tr>
                 <th className="text-left font-medium px-4 py-2">Name</th>
-                <th className="text-left font-medium px-4 py-2">Parameters</th>
-                <th className="text-left font-medium px-4 py-2">Steps</th>
-                <th className="text-left font-medium px-4 py-2">Created</th>
+                <th className="text-left font-medium px-4 py-2 w-px whitespace-nowrap">Params</th>
+                <th className="text-left font-medium px-4 py-2 w-px whitespace-nowrap">Steps</th>
+                <th className="text-left font-medium px-4 py-2 w-px whitespace-nowrap">Created</th>
                 <th className="text-right font-medium px-4 py-2 w-20" />
               </tr>
             </thead>
               <tbody>
-                {scripts.map((script) => (
+                {scripts.map((script) => {
+                  const paramCount = Object.keys(script.parameters ?? {}).length;
+                  return (
                   <tr
                     key={script.id}
                     className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
@@ -136,29 +142,17 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                       <div>
                         <span className="font-medium">{script.name}</span>
                         {script.description && (
-                          <p className="text-xs text-muted-foreground mt-0.5 max-w-[200px] truncate">
+                          <p className="text-xs text-muted-foreground mt-0.5 max-w-[420px] truncate">
                             {script.description}
                           </p>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-2.5">
-                      {Object.keys(script.parameters ?? {}).length === 0 ? (
-                        <span className="text-muted-foreground">—</span>
-                      ) : (
-                        <div className="flex flex-wrap gap-1">
-                          {Object.keys(script.parameters).map((p) => (
-                            <Badge key={p} variant="secondary" className="text-xs px-1.5 py-0 h-5 font-mono">
-                              {p}
-                            </Badge>
-                          ))}
-                        </div>
-                      )}
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
+                      {paramCount === 0 ? '—' : paramCount}
                     </td>
-                    <td className="px-4 py-2.5">
-                      <span className="text-muted-foreground">
-                        {script.steps.length} step{script.steps.length !== 1 ? 's' : ''}
-                      </span>
+                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
+                      {script.steps.length}
                     </td>
                     <td className="py-3 pr-4 text-muted-foreground whitespace-nowrap">
                       {new Date(script.created_at).toLocaleDateString()}
@@ -196,7 +190,8 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
         </Card>

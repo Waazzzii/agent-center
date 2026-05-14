@@ -4,7 +4,13 @@ import { AlertTriangle, Link2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { RecordedStep, SelectorCandidate } from '@/lib/api/scripts';
 
-const SELECTOR_TYPES = ['id', 'data-testid', 'name', 'aria-label', 'role-label', 'role-text', 'text', 'scoped-positional', 'scoped-tag', 'css-path', 'xpath', 'current'] as const;
+// Order matches the runtime locator priority in
+// browser-step-run-worker.service.js so the editor reads top-down the
+// same way the agent tries candidates. xpath-text-contains is Tier 6.5
+// (between `text` and the css/xpath positional fallbacks) — adding it
+// to this allowlist is what makes the row appear in the editor; missing
+// from this list = silently filtered out of the UI even when captured.
+const SELECTOR_TYPES = ['id', 'data-testid', 'name', 'aria-label', 'role-label', 'role-text', 'text', 'xpath-text-contains', 'scoped-positional', 'scoped-tag', 'css-path', 'xpath', 'current'] as const;
 
 const URL_METHODS = [
   { value: 'query_param',  label: 'Query Parameter', hint: '?key=VALUE' },

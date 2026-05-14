@@ -407,9 +407,32 @@ export function RunScriptModal({
       if (!vars.has(name)) vars.set(name, { sources: [], consumers: [] });
       return vars.get(name)!;
     };
+    // Read-side fields where an operator might insert a {{var}}. The runner
+    // resolves templates across all of these now (see substituteStep in
+    // browser-step-run-worker.service.js), so the Variables Panel needs to
+    // match — otherwise operators who hand-author a templated selector get
+    // a "missing variable" UX even though the runner will resolve it fine.
+    // Keep this in sync with substituteStep's field list.
+    const fieldsFor = (s: RecordedStep): string[] => {
+      const fields: string[] = [];
+      if (s.value)          fields.push(s.value);
+      if (s.field_name)     fields.push(s.field_name);
+      if (s.url)            fields.push(s.url);
+      // Selector-like fields. Operators commonly inject {{var}} here to
+      // click buttons whose IDs embed contract / year / etc.
+      const sel = (s as RecordedStep & { selector?: string }).selector;
+      if (sel)              fields.push(sel);
+      const text = (s as RecordedStep & { text?: string }).text;
+      if (text)             fields.push(text);
+      const frameSel = (s as RecordedStep & { frame_selector?: string }).frame_selector;
+      if (frameSel)         fields.push(frameSel);
+      const wf = (s as RecordedStep & { waitFor?: { selector?: string } }).waitFor;
+      if (wf?.selector)     fields.push(wf.selector);
+      return fields;
+    };
     steps.forEach((s, i) => {
-      // Consumers: anywhere {{name}} appears in value/url/field_name
-      for (const src of [s.value ?? '', s.field_name ?? '', s.url ?? '']) {
+      // Consumers: anywhere {{name}} appears in any user-editable string
+      for (const src of fieldsFor(s)) {
         for (const m of (src.match(/\{\{(\w+)\}\}/g) ?? [])) {
           ensure(m.slice(2, -2)).consumers.push({ index: i, action: s.action });
         }
