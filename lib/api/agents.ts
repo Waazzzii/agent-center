@@ -178,6 +178,13 @@ export async function duplicateAgent(
   newName: string,
 ): Promise<Agent> {
   const source = await getAgent(orgId, sourceAgentId);
+  // getAgent's `actions` field only includes (id, name, action_type,
+  // order_index) — the SQL there strips the FK refs (ai_step_id,
+  // login_id, script_id, target_agent_id, etc.) to keep the agent-list
+  // payload small. We need the FULL action shape to clone the
+  // underlying-step references, so fetch from the dedicated actions
+  // endpoint (listActions service — returns every column).
+  const sourceActions = await getActions(orgId, sourceAgentId);
   const newAgent = await createAgent(orgId, {
     name: newName,
     description: source.description ?? undefined,
@@ -190,8 +197,8 @@ export async function duplicateAgent(
   });
   // Replay actions in order_index order so the dup's action sequence
   // matches the source visually.
-  if (source.actions) {
-    const ordered = [...source.actions].sort((a, b) => a.order_index - b.order_index);
+  if (sourceActions.length > 0) {
+    const ordered = [...sourceActions].sort((a, b) => a.order_index - b.order_index);
     for (const a of ordered) {
       // Numeric tuning fields have NOT NULL columns in agent_actions with
       // service-layer defaults that only apply when the keys are `undefined`
