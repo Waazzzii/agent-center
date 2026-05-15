@@ -1,19 +1,22 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { getAgents, deleteAgent, duplicateAgent, runAgent, type Agent } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy, Search } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
+
+type SortKey = 'name' | 'status' | 'created';
 
 export default function AgentsPage() {
   const router = useRouter();
@@ -25,6 +28,13 @@ export default function AgentsPage() {
   const [loading, setLoading] = useState(true);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+
+  // Search + sort live entirely client-side. The list is small enough
+  // (hundreds, not thousands) that filtering / sorting in memory is
+  // cheaper than round-tripping to the backend for each keystroke.
+  const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState<SortKey>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   useEffect(() => {
     if (selectedOrgId) loadAgents();
@@ -117,6 +127,42 @@ export default function AgentsPage() {
     }
   };
 
+  // Filter + sort. Search matches name OR description (case-insensitive,
+  // substring) so operators can find "the agent that does X" by typing
+  // a fragment of either. Sort by name (lexicographic), status (active
+  // first), or created (newest first when desc).
+  const visibleAgents = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = q
+      ? agents.filter((a) =>
+          a.name.toLowerCase().includes(q) ||
+          (a.description?.toLowerCase().includes(q) ?? false),
+        )
+      : agents;
+    const sorted = [...filtered].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === 'name') {
+        cmp = a.name.localeCompare(b.name);
+      } else if (sortKey === 'status') {
+        // Active (true) sorts before Inactive (false) on asc.
+        cmp = Number(b.is_active) - Number(a.is_active);
+      } else if (sortKey === 'created') {
+        cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      }
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+    return sorted;
+  }, [agents, search, sortKey, sortDir]);
+
+  const handleSort = (key: string) => {
+    if (sortKey === key) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortKey(key as SortKey);
+      setSortDir('asc');
+    }
+  };
+
   if (loading && selectedOrgId) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -149,15 +195,39 @@ export default function AgentsPage() {
       ) : (
         <Card className="overflow-hidden py-0">
           <CardContent className="p-0">
+            <div className="flex items-center gap-2 border-b px-3 py-2">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by name or description…"
+                  className="h-9 pl-8"
+                />
+              </div>
+              {search && (
+                <span className="text-xs text-muted-foreground">
+                  {visibleAgents.length} of {agents.length}
+                </span>
+              )}
+            </div>
             <ResponsiveTable
-              data={agents}
+              data={visibleAgents}
               getRowKey={(a) => a.id}
               onRowClick={(a) => router.push(`/agents/${a.id}`)}
-              emptyMessage="No agents yet. Create one to get started."
+              emptyMessage={
+                search
+                  ? `No agents match "${search}".`
+                  : 'No agents yet. Create one to get started.'
+              }
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={handleSort}
               columns={[
                 {
                   key: 'name',
                   label: 'Name',
+                  sortable: true,
                   // Description shows on hover via native title attribute — we
                   // dropped the standalone Description column to reclaim
                   // horizontal space for the more useful Status/Created/Actions.
@@ -173,6 +243,7 @@ export default function AgentsPage() {
                 {
                   key: 'status',
                   label: 'Status',
+                  sortable: true,
                   render: (a) => a.is_active
                     ? <Badge variant="success">Active</Badge>
                     : <Badge variant="neutral">Inactive</Badge>,
@@ -180,6 +251,7 @@ export default function AgentsPage() {
                 {
                   key: 'created',
                   label: 'Created',
+                  sortable: true,
                   render: (a) => new Date(a.created_at).toLocaleDateString(),
                 },
                 {
