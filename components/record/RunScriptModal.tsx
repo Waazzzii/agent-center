@@ -1876,7 +1876,7 @@ export function RunScriptModal({
           ) : isProvisioning ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
               <Loader2 className="h-8 w-8 animate-spin opacity-50" />
-              <p className="text-sm">Starting browser instance{provisioningElapsedMs > 30_000 ? ' — this may take a minute' : ''}…</p>
+              <p className="text-sm">Starting browser{provisioningElapsedMs > 60_000 ? ' — taking a little longer than usual' : ' — typically 10–60 seconds'}…</p>
             </div>
           ) : (
             <div className="w-full h-full flex items-center justify-center text-muted-foreground">

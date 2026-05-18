@@ -17,13 +17,15 @@ export function ProvisioningNotice({
   elapsedMs,
   showPersistenceHint = true,
 }: {
-  /** Optional — if provided, we nudge the "this may take a minute" copy after 30s. */
+  /** Optional — if provided, we nudge the "taking longer than usual" copy
+   *  after 60s. GKE Pod cold-start is typically 10-30s; anything past 60s is
+   *  genuinely slower than normal. */
   elapsedMs?: number;
   /** Show the "you can close this window" footer. Turn off for interactive
    *  flows where closing isn't allowed (e.g. manual login). */
   showPersistenceHint?: boolean;
 }) {
-  const long = (elapsedMs ?? 0) > 30_000;
+  const long = (elapsedMs ?? 0) > 60_000;
 
   return (
     <div className="w-full h-full flex items-center justify-center">
@@ -32,10 +34,10 @@ export function ProvisioningNotice({
           <Server className="h-7 w-7 text-amber-600 dark:text-amber-400" />
         </div>
         <div className="space-y-1.5">
-          <p className="text-sm font-semibold">Waiting for a browser VM</p>
+          <p className="text-sm font-semibold">Spinning up a browser</p>
           <p className="text-xs text-muted-foreground leading-relaxed">
-            All browser slots are currently in use. A new VM is being provisioned
-            {long ? " — it's taking a little longer than usual, hang tight" : ' — this typically takes 1–2 minutes'}.
+            All browser slots are currently in use. A new browser is being prepared
+            {long ? " — it's taking a little longer than usual, hang tight" : ' — this typically takes 10–60 seconds'}.
             The browser will open automatically once it{"'"}s ready.
           </p>
         </div>
