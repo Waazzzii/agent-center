@@ -26,12 +26,13 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner';
 import {
   Loader2, Zap, LogIn, Play, GitBranch, PauseCircle,
-  AlertCircle, Copy, Hash, Bot, History, ChevronRight, ChevronDown, ArrowDownToLine,
+  AlertCircle, Copy, Hash, Bot, History, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
 import { LogViewer } from '@/components/execution/LogViewer';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -370,97 +371,83 @@ function SubAgentModal({ open, onOpenChange, childNodes }: {
 }
 
 /**
- * Collapsible "View Input" panel — shows the resolved data the action received
- * (e.g. the params a browser_script ran with, or the items a sub-agent
- * dispatched). Closed by default to keep the action detail compact; click the
- * header to expand. Pretty-prints JSON when parseable, falls back to raw text.
+ * Tabbed payload viewer used inside the Input / Output / Logs tabs. Pretty-
+ * prints JSON-shaped strings, falls back to raw text, shows an italic empty-
+ * state line when there's no value. Copy button only renders when there's
+ * actually something to copy.
+ *
+ * Sized to match the previous 3-column layout (~28rem) so the action detail
+ * region keeps a stable footprint regardless of which tab is active.
  */
-function InputPanel({ input }: { input: string }) {
-  const [open, setOpen] = useState(false);
-  const pretty = useMemo(() => {
-    try { return JSON.stringify(JSON.parse(input), null, 2); } catch { return input; }
-  }, [input]);
-
-  return (
-    <div className="rounded-lg border border-border/50 overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-2 bg-muted/20 border-b border-border/30 hover:bg-muted/40 transition-colors"
-      >
-        <span className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-          {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
-          <ArrowDownToLine className="h-3 w-3" />
-          View input
-        </span>
-        {open && (
-          <span
-            role="button"
-            tabIndex={0}
-            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1 cursor-pointer"
-            onClick={(e) => {
-              e.stopPropagation();
-              navigator.clipboard.writeText(pretty);
-              toast.success('Copied');
-            }}
-          >
-            <Copy className="h-3 w-3" /> Copy
-          </span>
-        )}
-      </button>
-      {open && (
-        <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-auto">
-          {pretty}
-        </pre>
-      )}
-    </div>
-  );
-}
-
-// Always-visible JSON viewer for the 3-column layout. Same look as the
-// collapsed InputPanel but no toggle — the column is the affordance.
-function IOColumn({
-  label,
+function PayloadView({
   value,
   empty,
 }: {
-  label: string
-  value: string | null | undefined
-  empty: string
+  value: string | null | undefined;
+  empty: string;
 }) {
   const pretty = useMemo(() => {
     if (!value) return null;
     try { return JSON.stringify(JSON.parse(value), null, 2); } catch { return value; }
   }, [value]);
 
-  return (
-    <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden min-h-0">
-      <div className="flex items-center justify-between px-3 py-2 bg-muted/20 border-b border-border/30 shrink-0">
-        <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">{label}</span>
-        {pretty && (
-          <button
-            type="button"
-            className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-            onClick={() => { navigator.clipboard.writeText(pretty); toast.success('Copied'); }}
-          >
-            <Copy className="h-3 w-3" /> Copy
-          </button>
-        )}
+  if (!pretty) {
+    return (
+      <div className="rounded-lg border border-border/50 bg-card px-4 py-6">
+        <p className="text-xs text-muted-foreground italic">{empty}</p>
       </div>
-      {pretty ? (
-        <pre className="px-3 py-2 text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed overflow-auto flex-1 min-h-0">
-          {pretty}
-        </pre>
-      ) : (
-        <p className="px-3 py-4 text-xs text-muted-foreground italic">{empty}</p>
-      )}
+    );
+  }
+
+  return (
+    <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden min-h-0 h-[28rem]">
+      <div className="flex items-center justify-end px-3 py-1.5 bg-muted/20 border-b border-border/30 shrink-0">
+        <button
+          type="button"
+          className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
+          onClick={() => { navigator.clipboard.writeText(pretty); toast.success('Copied'); }}
+        >
+          <Copy className="h-3 w-3" /> Copy
+        </button>
+      </div>
+      <pre className="px-3 py-2 text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed overflow-auto flex-1 min-h-0">
+        {pretty}
+      </pre>
     </div>
   );
 }
 
+/**
+ * Action detail viewer.  Every action type renders the same three-tab
+ * layout — Input / Output / Logs — so operators get a consistent
+ * triage experience regardless of whether the step is an AI prompt, a
+ * browser script, a login, or an approval.
+ *
+ * Tabs always present, even when empty:
+ *   • Input  — accumulated context the step received (snapshot at run
+ *              time). Empty for steps that ran before context capture
+ *              landed; for HITL pauses the input was captured before
+ *              the pause so it's there even when output isn't.
+ *   • Output — the step's emitted output. For login it's
+ *              `logged_in:<sessionId>` or the HITL note; for approval
+ *              it's the resolved instructions text or the approver's
+ *              note; for AI / browser_script it's the JSON return value.
+ *              When still running / waiting, a status-aware empty
+ *              message replaces it.
+ *   • Logs   — the LogViewer step stream (Anthropic SDK init →
+ *              tool_use → tool_result → text → result). Only AI steps
+ *              and browser scripts emit these; login / approval show
+ *              an explanatory empty message so the tab isn't surprising
+ *              when it's blank.
+ *
+ * Sub-agent actions never reach this component — they open a modal
+ * picker from the parent action list.
+ */
 function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgId: string; executionId: string }) {
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
+  // Only AI steps and browser scripts emit log rows; the rest pre-empt
+  // the fetch to avoid an unnecessary 404 and a "Loading…" flash.
   const hasLogs = action.action_type === 'agent' || action.action_type === 'browser_script';
 
   const loadSteps = useCallback(() => {
@@ -484,6 +471,26 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
     },
   });
 
+  // Action-type-aware empty copy. Tabs render even when there's
+  // nothing to show — the empty state explains why so an operator
+  // doesn't think the UI is broken.
+  const outputEmpty =
+    action.status === 'executing'      ? 'Still running…' :
+    action.status === 'awaiting_approval'
+      ? (action.action_type === 'approval' ? 'Waiting for approval.' :
+         action.action_type === 'login'    ? 'Waiting for the user to complete the login.' :
+         'Paused for review.')
+      : action.status === 'failed' || action.status === 'aborted'
+        ? 'Step did not complete — see the error above.'
+        : action.action_type === 'login'    ? 'Login verified; no output to return.' :
+          action.action_type === 'approval' ? 'No output recorded for this approval.' :
+          'No output emitted.';
+
+  const logsEmpty =
+    action.action_type === 'login'    ? 'Login steps do not emit logs.' :
+    action.action_type === 'approval' ? 'Approval steps do not emit logs.' :
+    'No log entries recorded.';
+
   return (
     <div className="space-y-3">
       {action.error_message && (
@@ -493,68 +500,45 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
         </div>
       )}
 
-      {/* AI steps + browser scripts: 3-column layout — input | output | logs.
-          Each column is independently scrollable. Login / human_approval /
-          sub_agent skip this view (no meaningful I/O); they fall through to
-          the simpler single-block result view below. */}
-      {hasLogs ? (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:h-[28rem] lg:min-h-[20rem]">
-          <IOColumn
-            label="Input"
+      <Tabs defaultValue="input">
+        <TabsList variant="line">
+          <TabsTrigger value="input">Input</TabsTrigger>
+          <TabsTrigger value="output">Output</TabsTrigger>
+          <TabsTrigger value="logs">
+            Logs
+            {hasLogs && steps.length > 0 && (
+              <span className="ml-1.5 text-[10px] text-muted-foreground tabular-nums">
+                {steps.length}
+              </span>
+            )}
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="input">
+          <PayloadView
             value={action.input}
-            empty="No input recorded for this action."
+            empty="No input recorded for this step."
           />
-          <IOColumn
-            label="Output"
-            value={action.output}
-            empty={
-              action.status === 'executing'
-                ? 'Still running…'
-                : action.status === 'awaiting_approval'
-                  ? 'Awaiting approval.'
-                  : 'No output emitted.'
-            }
-          />
-          <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden min-h-0">
-            <div className="px-3 py-2 bg-muted/20 border-b border-border/30 shrink-0">
-              <span className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide">Logs</span>
-            </div>
-            <div className="flex-1 min-h-0 overflow-auto">
-              <LogViewer steps={steps} loading={loadingSteps} />
-            </div>
-          </div>
-        </div>
-      ) : (
-        <>
-          {/* Login / approval / sub_agent — input/output panels are
-              irrelevant. Just surface the result if there is one. Input is
-              still available via the collapsed panel for debugging. */}
-          {action.input && <InputPanel input={action.input} />}
+        </TabsContent>
 
-          {action.output && (
-            <div className="rounded-lg border border-border/50 overflow-hidden">
-              <div className="flex items-center justify-between px-4 py-2 bg-muted/20 border-b border-border/30">
-                <span className="text-xs font-medium text-muted-foreground">Result</span>
-                <button className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-                  onClick={() => { navigator.clipboard.writeText(action.output ?? ''); toast.success('Copied'); }}>
-                  <Copy className="h-3 w-3" /> Copy
-                </button>
+        <TabsContent value="output">
+          <PayloadView value={action.output} empty={outputEmpty} />
+        </TabsContent>
+
+        <TabsContent value="logs">
+          {hasLogs ? (
+            <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden h-[28rem]">
+              <div className="flex-1 min-h-0 overflow-auto">
+                <LogViewer steps={steps} loading={loadingSteps} />
               </div>
-              <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed max-h-96 overflow-auto">
-                {(() => { try { return JSON.stringify(JSON.parse(action.output!), null, 2); } catch { return action.output; } })()}
-              </pre>
+            </div>
+          ) : (
+            <div className="rounded-lg border border-border/50 bg-card px-4 py-6">
+              <p className="text-xs text-muted-foreground italic">{logsEmpty}</p>
             </div>
           )}
-
-          {!action.output && !action.error_message && (
-            <p className="text-sm text-muted-foreground italic py-4">
-              {action.status === 'completed' || action.status === 'approved' ? 'Completed successfully.' :
-               action.status === 'awaiting_approval' ? 'Waiting for review...' :
-               action.status === 'executing' ? 'Running...' : `Status: ${action.status}`}
-            </p>
-          )}
-        </>
-      )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
