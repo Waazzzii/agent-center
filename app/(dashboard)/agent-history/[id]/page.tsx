@@ -210,6 +210,18 @@ function SummaryCard({ label, value, accent, mono, children: ch }: {
 // Content: Action List (for agents) or Logs (for actions)
 // ═══════════════════════════════════════════════════════════════
 
+// Color treatment per action type — kept in sync with the agent editor's
+// step cards so operators see the same hue for the same action kind in
+// both places. Five distinct hues so the action list reads at a glance.
+const ACTION_TYPE_STYLES: Record<string, { bg: string; fg: string; border: string }> = {
+  approval:       { bg: 'bg-orange-100 dark:bg-orange-900/30', fg: 'text-orange-700 dark:text-orange-400', border: 'border-orange-200/60 dark:border-orange-800/40 hover:border-orange-300 hover:bg-orange-50/30 dark:hover:bg-orange-950/10' },
+  login:          { bg: 'bg-sky-100 dark:bg-sky-900/30',       fg: 'text-sky-700 dark:text-sky-400',       border: 'border-sky-200/60 dark:border-sky-800/40 hover:border-sky-300 hover:bg-sky-50/30 dark:hover:bg-sky-950/10' },
+  browser_script: { bg: 'bg-violet-100 dark:bg-violet-900/30', fg: 'text-violet-700 dark:text-violet-400', border: 'border-violet-200/60 dark:border-violet-800/40 hover:border-violet-300 hover:bg-violet-50/30 dark:hover:bg-violet-950/10' },
+  sub_agent:      { bg: 'bg-amber-100 dark:bg-amber-900/30',   fg: 'text-amber-700 dark:text-amber-400',   border: 'border-amber-200/60 dark:border-amber-800/40 hover:border-amber-300 hover:bg-amber-50/30 dark:hover:bg-amber-950/10' },
+  agent:          { bg: 'bg-blue-100 dark:bg-blue-900/30',     fg: 'text-blue-700 dark:text-blue-400',     border: 'border-blue-200/60 dark:border-blue-800/40 hover:border-blue-300 hover:bg-blue-50/30 dark:hover:bg-blue-950/10' },
+};
+const ACTION_TYPE_FALLBACK = { bg: 'bg-muted/60', fg: 'text-muted-foreground', border: 'border-border/50 hover:border-border hover:bg-muted/20' };
+
 function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: (a: FullTreeNode) => void }) {
   return (
     <div className="space-y-1">
@@ -217,6 +229,7 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
         const Icon = action.action_type === 'sub_agent' ? GitBranch : ICONS[action.action_type ?? ''] ?? Zap;
         const isSub = action.action_type === 'sub_agent';
         const childExecs = action.children?.filter((c) => c.type === 'execution') ?? [];
+        const style = ACTION_TYPE_STYLES[action.action_type ?? ''] ?? ACTION_TYPE_FALLBACK;
 
         return (
           <button
@@ -224,14 +237,11 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
             onClick={() => onSelect(action)}
             className={cn(
               'w-full flex items-center gap-3 rounded-lg border p-3 text-left transition-all',
-              isSub ? 'border-blue-200/60 dark:border-blue-800/40 hover:border-blue-300 hover:bg-blue-50/30 dark:hover:bg-blue-950/10'
-                    : 'border-border/50 hover:border-border hover:bg-muted/20',
+              style.border,
             )}
           >
-            <div className={cn('p-1.5 rounded-md shrink-0',
-              isSub ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-muted/60',
-            )}>
-              <Icon className={cn('h-4 w-4', isSub ? 'text-blue-600 dark:text-blue-400' : 'text-muted-foreground')} />
+            <div className={cn('p-1.5 rounded-md shrink-0', style.bg)}>
+              <Icon className={cn('h-4 w-4', style.fg)} />
             </div>
 
             <div className="flex-1 min-w-0">
@@ -247,7 +257,7 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
                 <span>{AT[action.action_type ?? ''] ?? action.action_type}</span>
                 <span className="tabular-nums">{fmtDur(action.duration_ms)}</span>
                 {(action.tokens_input ?? 0) > 0 && <span className="tabular-nums">{fmtTokens(action.tokens_input)} / {fmtTokens(action.tokens_output)}</span>}
-                {isSub && childExecs.length > 0 && <span className="text-blue-600 dark:text-blue-400">{childExecs.length} run{childExecs.length !== 1 ? 's' : ''}</span>}
+                {isSub && childExecs.length > 0 && <span className="text-amber-700 dark:text-amber-400">{childExecs.length} run{childExecs.length !== 1 ? 's' : ''}</span>}
               </div>
             </div>
 
@@ -446,9 +456,22 @@ function PayloadView({
 function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgId: string; executionId: string }) {
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
-  // Only AI steps and browser scripts emit log rows; the rest pre-empt
-  // the fetch to avoid an unnecessary 404 and a "Loading…" flash.
-  const hasLogs = action.action_type === 'agent' || action.action_type === 'browser_script';
+  // AI steps, browser scripts, AND login steps emit log rows.
+  // - AI steps + browser_script: tool_use / text / result rows from the SDK driver.
+  // - Login: runPromptAction (the AI verify) records its tool_use / text rows
+  //   AND the executor's runVerify helper bookends each verify pass with
+  //   verify_attempt / verify_result init/result rows; the auto-login linked
+  //   script run records its own init / result around the credential fill.
+  //   These are what the "Logs" tab on a login step shows operators when
+  //   triaging "why did the agent ask for HITL but the standalone test says
+  //   I'm logged in?" — the verify_result row carries the AI's
+  //   verified=true/false call so the divergence is visible.
+  // Approval is the only action type that never emits steps (it's pure HITL,
+  // no AI calls), so it stays excluded.
+  const hasLogs =
+    action.action_type === 'agent' ||
+    action.action_type === 'browser_script' ||
+    action.action_type === 'login';
 
   const loadSteps = useCallback(() => {
     if (!hasLogs || !orgId) { setSteps([]); return; }
@@ -487,7 +510,6 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
           'No output emitted.';
 
   const logsEmpty =
-    action.action_type === 'login'    ? 'Login steps do not emit logs.' :
     action.action_type === 'approval' ? 'Approval steps do not emit logs.' :
     'No log entries recorded.';
 

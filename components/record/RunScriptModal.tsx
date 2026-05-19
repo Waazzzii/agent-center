@@ -15,7 +15,7 @@ import {
 import {
   CheckCircle2, ChevronRight, ChevronsRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
   CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, GripVertical, PanelRightClose, PanelRightOpen,
-  Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, ListTodo,
+  Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, ListTodo, LogIn, KeyRound,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -42,9 +42,14 @@ import {
   cancelStepRunWaitForCapture,
   captureStepRunExtract,
   cancelStepRunExtractCapture,
+  runLinkedLoginInStepRun,
+  getScriptAgentUsage,
+  propagateScriptLogin,
   type BrowserScript,
   type RecordedStep,
 } from '@/lib/api/scripts';
+import { listLogins, type Login } from '@/lib/api/logins';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import { BottomPanel } from './panels';
 import { StepEditModal } from './StepEditModal';
@@ -111,6 +116,7 @@ export function RunScriptModal({
 }: RunScriptModalProps) {
   const browserClientId = useBrowserClientId();
   const router = useRouter();
+  const { confirm } = useConfirmDialog();
 
   // ── Shared ────────────────────────────────────────────────────
   const [params, setParams]       = useState<Record<string, string>>({});
@@ -127,6 +133,20 @@ export function RunScriptModal({
   const [scriptName, setScriptName] = useState('');
   const [scriptDescription, setScriptDescription] = useState('');
   const [showDescription, setShowDescription] = useState(false);
+
+  // ── Linked login (the script's auth dependency) ───────────────
+  // `linkedLoginId` mirrors agent_browser_scripts.login_id. Saved on
+  // every change so navigating away doesn't lose the association.
+  // `availableLogins` is fetched once when the modal opens — small
+  // list, doesn't need pagination.
+  const [linkedLoginId, setLinkedLoginId] = useState<string | null>(null);
+  const [availableLogins, setAvailableLogins] = useState<Login[]>([]);
+  const [loginPickerOpen, setLoginPickerOpen] = useState(false);
+  const [loggingIn, setLoggingIn] = useState(false);
+  const linkedLogin = availableLogins.find((l) => l.id === linkedLoginId) ?? null;
+  // Auto-login eligibility: the linked login must have BOTH a script and
+  // credentials configured before the in-editor "Log in" button works.
+  const canAutoLogin = !!(linkedLogin?.auto_login_script_id && linkedLogin?.credentials_secret_id);
 
   // ── Test / step-run mode ──────────────────────────────────────
   const [runId, setRunId] = useState<string | null>(null);
@@ -294,6 +314,7 @@ export function RunScriptModal({
       } else {
         setScriptName(script?.name ?? '');
         setScriptDescription(script?.description ?? '');
+        setLinkedLoginId(script?.login_id ?? null);
         // Pre-seed: recording defaults from parameters, then override with
         // persisted test_values (user's latest test overrides survive sessions)
         if (script?.parameters && typeof script.parameters === 'object') {
@@ -301,6 +322,13 @@ export function RunScriptModal({
         }
         // Always auto-start — variables are editable inline in the Variables Panel
         handleStartStepRun();
+      }
+      // Fetch the org's login profiles for the chip picker. Cheap
+      // request, only fires once per modal open.
+      if (orgId) {
+        listLogins(orgId)
+          .then(setAvailableLogins)
+          .catch(() => { /* picker just shows "no logins available" */ });
       }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -608,6 +636,92 @@ export function RunScriptModal({
     try {
       await updateScript(orgId, targetId, { name: scriptName.trim() || 'Untitled Script' });
     } catch { /* non-fatal */ }
+  };
+
+  // ── Linked-login handlers ─────────────────────────────────────
+  // Linking the script's login propagates the change to every agent
+  // already using this script — the operator gets a confirm dialog
+  // showing the count before we touch other agents. Idempotent at
+  // the backend, so re-running with the same login_id is a no-op.
+  const handleSetLinkedLogin = async (loginId: string | null) => {
+    setLoginPickerOpen(false);
+    if (!orgId || mode === 'record' || !script?.id) {
+      setLinkedLoginId(loginId);
+      return;
+    }
+
+    // Skip the confirm when the value didn't actually change. Picking
+    // the currently-linked login from the dropdown is a no-op.
+    if (loginId === linkedLoginId) return;
+
+    // Count downstream agents so the operator can make an informed call.
+    let agentCount = 0;
+    try {
+      const usage = await getScriptAgentUsage(orgId, script.id);
+      agentCount = usage.count;
+    } catch {
+      // Best-effort count — if it fails we still let the operator
+      // proceed; the propagate call below is idempotent + safe.
+    }
+
+    if (agentCount > 0) {
+      const newLoginName = availableLogins.find((l) => l.id === loginId)?.name;
+      const desc = loginId
+        ? `This script is used by ${agentCount} agent${agentCount === 1 ? '' : 's'}. ` +
+          `Linking "${newLoginName ?? 'this login'}" will replace any existing login step paired with this script in those agents.`
+        : `This script is used by ${agentCount} agent${agentCount === 1 ? '' : 's'}. ` +
+          `Unlinking the login will remove the paired login step from those agents.`;
+      const ok = await confirm({
+        title: loginId ? 'Update login on all agents?' : 'Unlink login on all agents?',
+        description: desc,
+        confirmText: loginId ? 'Update agents' : 'Unlink',
+        cancelText: 'Cancel',
+        variant: 'default',
+      });
+      if (!ok) return;
+    }
+
+    setLinkedLoginId(loginId);
+    try {
+      await updateScript(orgId, script.id, { login_id: loginId });
+      // Fire-and-await the propagate so the operator's next agent
+      // editor visit shows the synced state. Best-effort: a propagate
+      // failure doesn't roll back the script's link change.
+      const propagated = await propagateScriptLogin(orgId, script.id, loginId).catch(() => null);
+      if (propagated && propagated.agents_touched > 0) {
+        const adds = propagated.actions_added;
+        const removes = propagated.actions_removed;
+        const parts = [];
+        if (adds > 0)    parts.push(`+${adds} login step${adds === 1 ? '' : 's'}`);
+        if (removes > 0) parts.push(`-${removes} login step${removes === 1 ? '' : 's'}`);
+        toast.success(
+          `Updated ${propagated.agents_touched} agent${propagated.agents_touched === 1 ? '' : 's'}` +
+          (parts.length ? ` (${parts.join(', ')})` : '')
+        );
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Failed to update linked login');
+    }
+  };
+
+  // Run the linked login's auto-login script inside the editor's
+  // current browser session. The recorded steps & current index are
+  // unchanged — only cookies/localStorage update.
+  const handleLogInWithLinkedLogin = async () => {
+    if (!orgId || !runId || !script?.id || !linkedLoginId) return;
+    if (!canAutoLogin) {
+      toast.error('This login needs an auto-login script AND credentials configured first');
+      return;
+    }
+    setLoggingIn(true);
+    try {
+      const result = await runLinkedLoginInStepRun(orgId, runId, script.id);
+      toast.success(`Logged in via "${result.login_name}" (${result.steps_run} step${result.steps_run !== 1 ? 's' : ''})`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Auto-login failed');
+    } finally {
+      setLoggingIn(false);
+    }
   };
 
   // ── Test / step-run handlers ──────────────────────────────────
@@ -1670,12 +1784,93 @@ export function RunScriptModal({
             )}
           </div>
 
-          {/* Progress chip */}
-          {stepRunState && !stepRunState.done && stepRunState.totalSteps > 0 && !isRecording && (
-            <span className="text-xs text-muted-foreground shrink-0 tabular-nums">
-              {Math.min(stepRunState.currentIndex + 1, stepRunState.totalSteps)} / {stepRunState.totalSteps}
-            </span>
+          {/* Linked login — chip + Log in button.
+              Record mode skips this: the script doesn't exist yet, so
+              there's nothing to update. The chip reappears once the
+              script is saved and the modal is reopened in test mode. */}
+          {mode !== 'record' && script?.id && (
+            <div className="flex items-center gap-1.5 shrink-0">
+              <DropdownMenu open={loginPickerOpen} onOpenChange={setLoginPickerOpen}>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className={cn(
+                      'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border transition-colors',
+                      linkedLogin
+                        ? 'border-brand/30 bg-brand/5 text-brand hover:bg-brand/10'
+                        : 'border-dashed border-border text-muted-foreground hover:bg-muted/40'
+                    )}
+                    title={linkedLogin ? `Linked to: ${linkedLogin.name}` : 'No login linked — click to link one'}
+                  >
+                    <KeyRound className="h-3 w-3" />
+                    <span className="max-w-[140px] truncate">
+                      {linkedLogin?.name ?? 'Link login'}
+                    </span>
+                    {linkedLogin && <ChevronRight className="h-3 w-3 rotate-90 opacity-60" />}
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" className="w-56">
+                  {availableLogins.length === 0 ? (
+                    <DropdownMenuItem disabled className="text-xs text-muted-foreground">
+                      No logins configured for this org
+                    </DropdownMenuItem>
+                  ) : (
+                    <>
+                      {availableLogins.map((l) => (
+                        <DropdownMenuItem
+                          key={l.id}
+                          onSelect={() => handleSetLinkedLogin(l.id)}
+                          className="text-xs"
+                        >
+                          {l.id === linkedLoginId && <CheckCircle2 className="h-3 w-3 mr-1.5 text-brand" />}
+                          <span className="truncate">{l.name}</span>
+                        </DropdownMenuItem>
+                      ))}
+                      {linkedLoginId && (
+                        <DropdownMenuItem
+                          onSelect={() => handleSetLinkedLogin(null)}
+                          className="text-xs text-destructive border-t mt-1 pt-1.5"
+                        >
+                          <X className="h-3 w-3 mr-1.5" /> Unlink
+                        </DropdownMenuItem>
+                      )}
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {/* Only render the Log in button when the linked login
+                  actually has auto-login configured (both an
+                  auto_login_script_id AND credentials_secret_id). A
+                  disabled-but-visible button was confusing — operators
+                  thought it should work and clicked it. If the linked
+                  login isn't auto-loginable, the chip alone signals the
+                  association and the operator can either configure
+                  auto-login on the Logins page or just manually
+                  authenticate inside the browser preview. */}
+              {linkedLogin && canAutoLogin && (
+                <button
+                  type="button"
+                  onClick={handleLogInWithLinkedLogin}
+                  disabled={loggingIn || !runId || !!isRecording}
+                  className={cn(
+                    'flex items-center gap-1 px-2 py-1 rounded-md text-xs border border-border hover:bg-muted/40 text-foreground transition-colors',
+                    loggingIn && 'opacity-60 cursor-wait',
+                  )}
+                  title="Run the linked login's auto-login flow in this browser"
+                >
+                  {loggingIn
+                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                    : <LogIn className="h-3 w-3" />}
+                  Log in
+                </button>
+              )}
+            </div>
           )}
+
+          {/* Recording indicator stays so operators see when capture is
+              live; the N/M step counter is gone (the inline step list
+              already shows current position more usefully). */}
           {isRecording && (
             <span className="text-xs text-red-500/70 shrink-0">Recording…</span>
           )}
@@ -2207,11 +2402,11 @@ export function RunScriptModal({
           if (editingStepIndex == null) return;
           const idx = editingStepIndex;
           // Compute the new step list once, in a regular variable — used for
-          // BOTH the React state update and the backend sync. Avoid mutating
-          // anything inside setStepRunState's updater: React requires the
-          // updater to be pure (it may run multiple times under StrictMode or
-          // be skipped under bail-out), so capturing values via side effects
-          // inside it is unreliable.
+          // the React state update, the worker sync, AND the persistent DB
+          // update below. Avoid mutating anything inside setStepRunState's
+          // updater: React requires the updater to be pure (it may run
+          // multiple times under StrictMode or be skipped under bail-out),
+          // so capturing values via side effects inside it is unreliable.
           const newSteps = [...(stepRunState?.steps ?? [])];
           newSteps[idx] = updated;
           // Functional updater so we compose against the latest s — if any
@@ -2228,12 +2423,48 @@ export function RunScriptModal({
             };
           });
           setHasChanges(true);
-          if (orgId && runId) {
-            try {
+          if (!orgId) return;
+          // Two-tier persist:
+          //   1. syncStepRunSteps — pushes the new step list into the
+          //      worker's in-memory run state so the next Run Step picks it
+          //      up immediately. Fast, low-latency, but only lives as long
+          //      as the test session.
+          //   2. updateScript — writes the full steps array (plus derived
+          //      parameters + current test values) to agent_browser_scripts
+          //      so the edit survives a session teardown, page reload, or
+          //      another operator opening the script. Per operator
+          //      direction this now fires on EVERY modal save so there's no
+          //      gap between "the operator saw their edit committed" and
+          //      "the row in Postgres reflects it" — the previous behavior
+          //      (only the session-level Save button wrote to the DB)
+          //      meant a crashed tab could lose every per-step edit.
+          //
+          // The DB write needs an existing script row to update. In test
+          // mode the `script` prop carries the row id. In record mode the
+          // row is created by the session-level Save button and its id is
+          // stashed in `tempScriptId`. If neither is set yet (a brand-new
+          // recording before its first save) we skip the DB write — the
+          // session-level Save still handles persisting + name capture for
+          // that first-save case.
+          const targetScriptId = script?.id ?? tempScriptId ?? null;
+          try {
+            if (runId) {
               await syncStepRunSteps(orgId, runId, newSteps);
-            } catch (err: any) {
-              toast.error(err?.response?.data?.error || err?.message || 'Failed to save step');
             }
+            if (targetScriptId) {
+              await updateScript(orgId, targetScriptId, {
+                steps: newSteps,
+                parameters: buildParameters(newSteps),
+                test_values: params,
+              });
+              // Clear the dirty flag — what was in memory now matches the
+              // DB row. The session-level Save button visibly hides itself
+              // when hasChanges is false; without this clear it would
+              // misleadingly stay lit after a modal save persisted things.
+              setHasChanges(false);
+            }
+          } catch (err: any) {
+            toast.error(err?.response?.data?.error || err?.message || 'Failed to save step');
           }
         }}
       />

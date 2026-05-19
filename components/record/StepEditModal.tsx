@@ -108,6 +108,26 @@ export function StepEditModal({
         return;
       }
     }
+    // Mark the step as committed so the executor's auto-lock doesn't
+    // overwrite the operator's deliberate edits on the next run.
+    //
+    // The executor's first-run auto-lock (browser-step-run-worker.service.js,
+    // lines 985-996) rewrites `step.selector` and `step.waitFor.selector`
+    // to whatever candidate just matched — but ONLY when `_tested` is
+    // falsy. That's the right call on an initial recording (lock in the
+    // best selector after one successful run), but it's the WRONG call
+    // after a deliberate modal save: the operator opened JSON, edited a
+    // value, and clicked Save — that's an explicit commit. Without this
+    // line the next Run Step would silently revert the edit, which was
+    // exactly the reported bug.
+    //
+    // The unless-the-operator-explicitly-removed-it caveat is honored:
+    // if the JSON tab's parsed payload sets `_tested: false` (or omits
+    // it after deletion), we respect the explicit choice. This branch
+    // only DEFAULTS to true when the field is missing entirely.
+    if (toSave._tested === undefined) {
+      toSave = { ...toSave, _tested: true };
+    }
     setSaving(true);
     try {
       await onSave(toSave);

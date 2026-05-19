@@ -99,6 +99,16 @@ export interface BrowserScript {
   parameters: Record<string, string>;
   /** Variable name → latest test value (persisted across sessions). */
   test_values: Record<string, string>;
+  /**
+   * Optional FK to agent_logins.id — the login profile whose authenticated
+   * session this script needs. When set:
+   *   • The agent executor seeds the script's browser context from this
+   *     login's storage_state (regardless of agent step ordering).
+   *   • The script editor offers an in-window "Log in" button that runs
+   *     the linked login's auto-login script in the test session.
+   *   • Adding this script as an agent action auto-adds a paired login step.
+   */
+  login_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -186,6 +196,8 @@ export async function updateScript(
     steps: RecordedStep[];
     parameters: Record<string, string>;
     test_values: Record<string, string>;
+    /** Pass a uuid to set, null to clear the link. Omit to leave unchanged. */
+    login_id: string | null;
   }>
 ): Promise<BrowserScript> {
   const res = await agentClient.patch<BrowserScript>(
@@ -373,6 +385,59 @@ export async function syncStepRunSteps(orgId: string, runId: string, steps: Reco
 
 export async function startStepRunRecording(orgId: string, runId: string): Promise<StepRun & { recordingActive: boolean }> {
   const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/record-start`);
+  return res.data;
+}
+
+/**
+ * Trigger the script's linked login's auto-login flow inside the editor's
+ * current browser session. Doesn't disturb the recorded steps — only sets
+ * cookies/localStorage so subsequent step tests run authenticated.
+ * Backend resolves credentials + auto-login script from script.login_id.
+ */
+export async function runLinkedLoginInStepRun(
+  orgId: string,
+  runId: string,
+  scriptId: string,
+): Promise<{ ok: true; login_name: string; steps_run: number }> {
+  const res = await agentClient.post(
+    `/api/admin/${orgId}/step-runs/${runId}/run-linked-login`,
+    { script_id: scriptId },
+    { timeout: 5 * 60 * 1000 }, // matches the worker's 5-min budget
+  );
+  return res.data;
+}
+
+/**
+ * Distinct-agent count for a script — drives the "This script is used
+ * by N agents. Continue?" confirm before propagating a login change.
+ */
+export async function getScriptAgentUsage(
+  orgId: string,
+  scriptId: string,
+): Promise<{ count: number }> {
+  const res = await agentClient.get(`/api/admin/${orgId}/scripts/${scriptId}/agent-usage`);
+  return res.data;
+}
+
+/**
+ * Insert / replace / remove the paired login step on every agent that
+ * currently uses this script. login_id=null clears the pairing on all
+ * agents. Idempotent.
+ */
+export async function propagateScriptLogin(
+  orgId: string,
+  scriptId: string,
+  loginId: string | null,
+): Promise<{
+  agents_touched: number;
+  actions_added: number;
+  actions_removed: number;
+  affected_agent_ids: string[];
+}> {
+  const res = await agentClient.post(
+    `/api/admin/${orgId}/scripts/${scriptId}/propagate-login`,
+    { login_id: loginId },
+  );
   return res.data;
 }
 

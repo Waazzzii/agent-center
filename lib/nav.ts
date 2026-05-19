@@ -22,6 +22,7 @@ export const orgMainNavItems: NavItem[] = [
       { label: 'AI Steps',        href: '/actions/ai-steps',        permissionKeys: ['agent_center_user'] },
       { label: 'Logins',          href: '/actions/logins',          permissionKeys: ['agent_center_user'] },
       { label: 'Browser Scripts', href: '/actions/browser-scripts', permissionKeys: ['agent_center_user'] },
+      { label: 'Approvals',       href: '/actions/approvals',       permissionKeys: ['agent_center_user'] },
     ],
   },
   { label: 'Executions',   href: '/agent-history',   permissionKeys: ['agent_center_user'] },

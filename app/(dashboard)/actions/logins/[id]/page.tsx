@@ -38,7 +38,7 @@ import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  ArrowLeft, Loader2, LogIn, Save, Trash2,
+  Loader2, LogIn, Save, Trash2,
   CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
   Sparkles, Plus, X as XIcon, Eye, EyeOff, KeyRound,
 } from 'lucide-react';
@@ -501,7 +501,6 @@ export default function EditLoginPage() {
   if (!login) {
     return (
       <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-        <Link href="/actions/logins" className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"><ArrowLeft className="h-3.5 w-3.5" /> Back</Link>
         <p className="text-sm text-muted-foreground">Login not found.</p>
       </div>
     );
@@ -513,16 +512,11 @@ export default function EditLoginPage() {
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" asChild>
-            <Link href="/actions/logins"><ArrowLeft className="h-4 w-4" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <LogIn className="h-5 w-5 text-brand" /> {login.name}
-            </h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Edit login profile</p>
-          </div>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <LogIn className="h-5 w-5 text-brand" /> {login.name}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Edit login profile</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">

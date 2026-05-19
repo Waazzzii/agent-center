@@ -10,7 +10,6 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
-import { ArrowLeft } from 'lucide-react';
 
 export default function CreateSkillPage() {
   const router = useRouter();
@@ -38,10 +37,6 @@ export default function CreateSkillPage() {
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div className="flex items-center gap-4">
-        <Button variant="ghost" size="sm" onClick={() => router.push('/skills')}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back
-        </Button>
         <h1 className="text-2xl font-bold tracking-tight">New Skill</h1>
       </div>
 

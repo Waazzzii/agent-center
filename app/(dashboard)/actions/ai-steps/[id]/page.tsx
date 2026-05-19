@@ -2,7 +2,6 @@
 
 import { useEffect, useState, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
@@ -15,7 +14,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { ArrowLeft, Loader2, Sparkles, Save, Trash2 } from 'lucide-react';
+import { Loader2, Sparkles, Save, Trash2 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
 
@@ -115,7 +114,6 @@ export default function EditAiStepPage() {
   if (!step) {
     return (
       <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-        <Link href="/actions/ai-steps" className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"><ArrowLeft className="h-3.5 w-3.5" /> Back</Link>
         <p className="text-sm text-muted-foreground">AI step not found.</p>
       </div>
     );
@@ -125,16 +123,11 @@ export default function EditAiStepPage() {
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" asChild>
-            <Link href="/actions/ai-steps"><ArrowLeft className="h-4 w-4" /></Link>
-          </Button>
-          <div>
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Sparkles className="h-5 w-5 text-brand" /> {step.name}
-            </h1>
-            <p className="text-sm text-muted-foreground mt-0.5">Edit AI step configuration</p>
-          </div>
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+            <Sparkles className="h-5 w-5 text-brand" /> {step.name}
+          </h1>
+          <p className="text-sm text-muted-foreground mt-0.5">Edit AI step configuration</p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">

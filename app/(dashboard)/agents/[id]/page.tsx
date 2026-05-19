@@ -5,20 +5,20 @@ import { useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import {
-  getAgent, updateAgent, deleteAgent,
+  getAgent, updateAgent, deleteAgent, runAgent,
   getActions, createAction, updateAction, deleteAction, reorderActions,
   createTrigger, deleteTrigger,
   generateWebhookKey, getWebhookKey,
-  getApprovals, getValidSubAgents,
+  getValidSubAgents,
   type Agent, type AgentDetail, type AgentAction, type AgentTrigger, type AgentWebhookKey,
 } from '@/lib/api/agents';
 import { getConnectors } from '@/lib/api/connectors';
 import { getSkills, type Skill } from '@/lib/api/skills';
 import { listScripts, type BrowserScript } from '@/lib/api/scripts';
 import { listAiSteps, createAiStep, type AiStep } from '@/lib/api/ai-steps';
+import { listApprovalSteps, createApprovalStep, type ApprovalStep } from '@/lib/api/approval-steps';
 import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
 import { listLogins, type Login } from '@/lib/api/logins';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
 import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
 import { AiStepPreview } from '@/components/actions/AiStepPreview';
 import { LoginPreview } from '@/components/actions/LoginPreview';
@@ -44,13 +44,13 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { MultiSelectTags } from '@/components/ui/multi-select-tags';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  ArrowLeft, Plus, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
+  Plus, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
   Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Monitor,
-  LogIn, GitBranch, Settings, CircleDot, AlertTriangle, Globe, Users,
+  LogIn, GitBranch, Settings, CircleDot, AlertTriangle, Globe, Users, Link as LinkIcon,
+  Bot,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -175,7 +175,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [actions, setActions] = useState<AgentAction[]>([]);
   const [triggers, setTriggers] = useState<AgentTrigger[]>([]);
-  const [pendingHitlCount, setPendingHitlCount] = useState(0);
   const [connectors, setConnectors] = useState<OrganizationConnector[]>([]);
   const [skills, setSkills] = useState<Skill[]>([]);
   const [browserScripts, setBrowserScripts] = useState<BrowserScript[]>([]);
@@ -186,24 +185,23 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [actionDialogOpen, setActionDialogOpen] = useState(false);
   const [editingAction, setEditingAction] = useState<AgentAction | null>(null);
   const [actionForm, setActionForm] = useState({
-    name: '',
+    // No display name in form state — derived from the linked
+    // library entity at render time (server returns name via
+    // COALESCE over the entity joins). See migration 209.
     action_type: 'agent' as 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent',
-    approval_instructions: '',
     aiStepId: '',
     loginId: '',
     scriptId: '',
+    approvalStepId: '',
     targetAgentId: '',
     maxConcurrent: 3,
     batchSize: 1,
     maxRetries: 0,
     accessGroupIds: [] as string[],
-    // Per-action Slack notification channel override. Only surfaces in
-    // the UI for approval-type actions; other types ignore it. Empty
-    // string = "no override; fall through to program or stay silent".
-    notificationSlackChannelId: '',
   });
   const [aiSteps, setAiSteps] = useState<AiStep[]>([]);
   const [logins, setLogins] = useState<Login[]>([]);
+  const [approvalSteps, setApprovalSteps] = useState<ApprovalStep[]>([]);
   const [validSubAgents, setValidSubAgents] = useState<Agent[]>([]);
   const [savingAction, setSavingAction] = useState(false);
   const [actionTypeModalOpen, setActionTypeModalOpen] = useState(false);
@@ -218,6 +216,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [newAiStepForm, setNewAiStepForm] = useState<AiStepFormData>({
     name: '', description: '', prompt: '', model: 'claude-sonnet-4-6',
     connector_ids: [], outputs: [], skill_ids: [],
+  });
+
+  // Inline "create approval step" — same pattern as AI step.
+  const [newApprovalStepOpen, setNewApprovalStepOpen] = useState(false);
+  const [savingNewApprovalStep, setSavingNewApprovalStep] = useState(false);
+  const [newApprovalStepForm, setNewApprovalStepForm] = useState({
+    name: '',
+    instructions: '',
+    notificationSlackChannelId: '',
   });
 
   // Trigger dialog
@@ -239,6 +246,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [agentRequiresBrowser, setAgentRequiresBrowser] = useState(false);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
+  // "Run now" button state — spinner while the trigger is in flight.
+  // Mirrors the runningId pattern from the agent list page.
+  const [runningAgent, setRunningAgent] = useState(false);
+  // Settings modal replaces the old Settings tab so the agent editor
+  // is one focused workflow view. Opened from the gear icon in the
+  // header action cluster.
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Access groups (used in action dialogs for approval group assignment)
   const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
@@ -252,16 +266,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      let [agentData, actionsData, connData, hitlData, skillsData, allGroupsData, scriptsData, aiStepsData, loginsData] = await Promise.all([
+      let [agentData, actionsData, connData, skillsData, allGroupsData, scriptsData, aiStepsData, loginsData, approvalStepsData] = await Promise.all([
         getAgent(selectedOrgId, agentId),
         getActions(selectedOrgId, agentId),
         getConnectors(selectedOrgId),
-        getApprovals(selectedOrgId),
         getSkills(selectedOrgId),
         getAgentAccessGroups(selectedOrgId),
         listScripts(selectedOrgId),
         listAiSteps(selectedOrgId).catch(() => [] as AiStep[]),
         listLogins(selectedOrgId).catch(() => [] as Login[]),
+        listApprovalSteps(selectedOrgId).catch(() => [] as ApprovalStep[]),
       ]);
       if ((agentData.triggers ?? []).length === 0) {
         await createTrigger(selectedOrgId, agentId, { trigger_type: 'manual' });
@@ -283,8 +297,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setBrowserScripts(scriptsData.scripts ?? []);
       setAiSteps(aiStepsData);
       setLogins(loginsData);
+      setApprovalSteps(approvalStepsData);
       setAllGroups(allGroupsData);
-      setPendingHitlCount(hitlData.items.filter((h) => h.agent_id === agentId && h.status === 'awaiting_approval').length);
     } catch (err: any) {
       toast.error('Failed to load agent');
       router.push('/agents');
@@ -310,34 +324,28 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, actions]);
 
-  // Realtime: silently refresh when executions or logins change for this org
-  const agentDetailRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEventStream({
-    topics: selectedOrgId ? [`org:${selectedOrgId}:executions`, `org:${selectedOrgId}:logins`] : [],
-    enabled: !!selectedOrgId,
-    onEvent: () => {
-      if (agentDetailRefresh.current) clearTimeout(agentDetailRefresh.current);
-      agentDetailRefresh.current = setTimeout(() => loadAll(), 500);
-    },
-  });
+  // No realtime refresh on this page — it's purely an editor view.
+  // The previous SSE → loadAll() loop fired on every execution event
+  // org-wide, which caused the page to visibly redraw whenever any
+  // agent ran (including the one you JUST clicked Run on). Anything
+  // that actually changes during a run lives on the History page;
+  // jump there if you want to watch it live.
 
   // ── Actions ──
 
   const openNewAction = (type: 'agent' | 'approval' | 'login' | 'browser_script' | 'sub_agent') => {
     setEditingAction(null);
     setActionForm({
-      name: '',
       action_type: type,
-      approval_instructions: '',
       aiStepId: '',
       loginId: '',
       scriptId: '',
+      approvalStepId: '',
       targetAgentId: '',
       maxConcurrent: 3,
       batchSize: 1,
       maxRetries: 0,
       accessGroupIds: [],
-      notificationSlackChannelId: '',
     });
     if (type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -348,18 +356,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const openEditAction = (action: AgentAction) => {
     setEditingAction(action);
     setActionForm({
-      name: action.name,
       action_type: action.action_type,
-      approval_instructions: action.approval_instructions ?? '',
       aiStepId: action.ai_step_id ?? '',
       loginId: action.login_id ?? '',
       scriptId: action.script_id ?? '',
+      approvalStepId: action.approval_step_id ?? '',
       targetAgentId: action.target_agent_id ?? '',
       maxConcurrent: action.max_concurrent ?? 3,
       batchSize: action.batch_size ?? 1,
       maxRetries: action.max_retries ?? 0,
       accessGroupIds: [],
-      notificationSlackChannelId: action.notification_slack_channel_id ?? '',
     });
     if (action.action_type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -419,55 +425,73 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
+  /** Same pattern as handleCreateAiStepInline, but for approval steps. */
+  const handleCreateApprovalStepInline = async () => {
+    if (!selectedOrgId) return;
+    if (!newApprovalStepForm.name.trim()) return;
+    setSavingNewApprovalStep(true);
+    try {
+      const slackCh = newApprovalStepForm.notificationSlackChannelId.trim();
+      const created = await createApprovalStep(selectedOrgId, {
+        name: newApprovalStepForm.name.trim(),
+        instructions: newApprovalStepForm.instructions,
+        notification_slack_channel_id: slackCh || null,
+      });
+      setApprovalSteps((prev) => [created, ...prev]);
+      setActionForm((f) => ({ ...f, approvalStepId: created.id }));
+      setNewApprovalStepForm({ name: '', instructions: '', notificationSlackChannelId: '' });
+      setNewApprovalStepOpen(false);
+      toast.success(`Created "${created.name}" and selected for this action`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to create approval step');
+    } finally {
+      setSavingNewApprovalStep(false);
+    }
+  };
+
   const handleSaveAction = async () => {
     if (!selectedOrgId) return;
-    // Approval is the only action type that requires a manually-entered name.
-    // All others derive it from the selected entity.
-    if (actionForm.action_type === 'approval' && !actionForm.name.trim()) return;
+    // All action types now reference a library entity; the name comes
+    // from that entity, never a free-text field. Require the picker
+    // to have a selection.
+    if (actionForm.action_type === 'approval' && !actionForm.approvalStepId) return;
     try {
       setSavingAction(true);
+      // Display name is now derived server-side from the linked
+      // library entity (migration 209 dropped agent_actions.name),
+      // so the create/update payload no longer carries a `name`
+      // field. Just the orchestration fields: action_type, the FK,
+      // and per-workflow tuning.
       let payload: Record<string, unknown>;
       if (actionForm.action_type === 'agent') {
-        const selectedStep = aiSteps.find((s) => s.id === actionForm.aiStepId);
         payload = {
-          name: selectedStep?.name ?? 'AI Step',
           action_type: 'agent',
           ai_step_id: actionForm.aiStepId || null,
         };
       } else if (actionForm.action_type === 'login') {
-        const selectedLogin = logins.find((l) => l.id === actionForm.loginId);
         payload = {
-          name: selectedLogin?.name ?? 'Login',
           action_type: 'login',
           login_id: actionForm.loginId || null,
         };
       } else if (actionForm.action_type === 'browser_script') {
-        const selectedScript = browserScripts.find((s) => s.id === actionForm.scriptId);
         payload = {
-          name: selectedScript?.name ?? 'Browser Script',
           action_type: 'browser_script',
           script_id: actionForm.scriptId,
           max_retries: actionForm.maxRetries,
         };
       } else if (actionForm.action_type === 'sub_agent') {
-        const selectedAgent = validSubAgents.find((a) => a.id === actionForm.targetAgentId);
         payload = {
-          name: selectedAgent?.name ?? 'Sub-agent',
           action_type: 'sub_agent',
           target_agent_id: actionForm.targetAgentId,
           max_concurrent: actionForm.maxConcurrent,
           batch_size: actionForm.batchSize,
         };
       } else {
-        // Approval action. notification_slack_channel_id is sent as either
-        // a non-empty string (set/replace) or null (clear). undefined means
-        // "leave alone" but for create we always send it explicitly.
-        const slackCh = actionForm.notificationSlackChannelId.trim();
+        // Approval action — references a library row; instructions +
+        // Slack channel live on agent_approval_steps.
         payload = {
-          name: actionForm.name.trim(),
           action_type: 'approval',
-          approval_instructions: actionForm.approval_instructions.trim(),
-          notification_slack_channel_id: slackCh ? slackCh : null,
+          approval_step_id: actionForm.approvalStepId || null,
         };
       }
       let savedActionId: string;
@@ -476,6 +500,26 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         savedActionId = editingAction.id;
         toast.success('Action updated');
       } else {
+        // When adding a browser_script whose script has a linked login,
+        // auto-create the paired login action immediately before it.
+        // Skipped if the immediately-prior action is already a login
+        // targeting the same login_id — operators who explicitly added
+        // the login first don't get a duplicate.
+        if (actionForm.action_type === 'browser_script' && actionForm.scriptId) {
+          const selectedScript = browserScripts.find((s) => s.id === actionForm.scriptId);
+          const requiredLoginId = selectedScript?.login_id ?? null;
+          if (requiredLoginId) {
+            const lastAction = actions[actions.length - 1];
+            const alreadyHasMatchingLogin =
+              lastAction?.action_type === 'login' && lastAction?.login_id === requiredLoginId;
+            if (!alreadyHasMatchingLogin) {
+              await createAction(selectedOrgId, agentId, {
+                action_type: 'login',
+                login_id: requiredLoginId,
+              });
+            }
+          }
+        }
         const created = await createAction(selectedOrgId, agentId, payload);
         savedActionId = created?.id;
         toast.success('Action added');
@@ -500,13 +544,55 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     }
   };
 
+  // ── Login ↔ Script pairing ─────────────────────────────────────
+  // A login action is "paired" with the browser_script action right
+  // after it when:
+  //   • The script's row has a non-null login_id
+  //   • That login_id matches the login action's login_id
+  //
+  // Paired actions get a chain-link visual treatment and are
+  // deleted as a unit. The pairing is purely positional + matching FK
+  // — moving the script away from its login (drag-reorder) silently
+  // breaks the pair, which is the correct semantic.
+  const actionPairs = useMemo(() => {
+    const m = new Map<string, { partnerId: string; role: 'login' | 'script' }>();
+    for (let i = 0; i < actions.length - 1; i++) {
+      const cur = actions[i];
+      const next = actions[i + 1];
+      if (cur.action_type !== 'login' || next.action_type !== 'browser_script') continue;
+      const nextScript = browserScripts.find((s) => s.id === next.script_id);
+      if (!nextScript?.login_id) continue;
+      if (cur.login_id !== nextScript.login_id) continue;
+      m.set(cur.id,  { partnerId: next.id, role: 'login'  });
+      m.set(next.id, { partnerId: cur.id,  role: 'script' });
+    }
+    return m;
+  }, [actions, browserScripts]);
+
   const handleDeleteAction = async (actionId: string, name: string) => {
     if (!selectedOrgId) return;
-    const confirmed = await confirm({ title: 'Delete Action', description: `Delete "${name}"?`, confirmText: 'Delete', cancelText: 'Cancel', variant: 'destructive' });
+    const pair = actionPairs.get(actionId);
+    const description = pair
+      ? `"${name}" is paired with its linked login step — both will be removed together.`
+      : `Delete "${name}"?`;
+    const confirmed = await confirm({
+      title: 'Delete Action',
+      description,
+      confirmText: 'Delete',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
     if (!confirmed) return;
     try {
+      // Paired delete: remove the partner first, then this action.
+      // Order doesn't matter functionally (independent rows) but doing
+      // partner-first avoids a brief inconsistent state where the
+      // script is gone but its login lingers.
+      if (pair) {
+        await deleteAction(selectedOrgId, agentId, pair.partnerId);
+      }
       await deleteAction(selectedOrgId, agentId, actionId);
-      toast.success('Action deleted');
+      toast.success(pair ? 'Linked login + script deleted' : 'Action deleted');
       await loadAll();
     } catch (err: any) {
       toast.error(err.message || 'Failed to delete action');
@@ -568,18 +654,40 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   // ── Settings ──
 
-  const handleSaveSettings = async () => {
-    if (!selectedOrgId) return;
+  // Returns true on success so the settings modal can close itself
+  // without waiting for a state re-render to observe settingsDirty.
+  const handleSaveSettings = async (): Promise<boolean> => {
+    if (!selectedOrgId) return false;
     try {
       setSavingSettings(true);
       await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined, is_active: agentActive, requires_browser: agentRequiresBrowser });
       toast.success('Agent updated');
       setSettingsDirty(false);
       await loadAll();
+      return true;
     } catch (err: any) {
       toast.error(err.message || 'Failed to update agent');
+      return false;
     } finally {
       setSavingSettings(false);
+    }
+  };
+
+  // Manually trigger this agent (header Run button). Same code path
+  // as the list page's per-row Run — fires a manual trigger via the
+  // backend and toasts the outcome. No navigation — the SSE stream
+  // already drives the page state so the new run shows up under
+  // History without leaving the editor.
+  const handleRunAgent = async () => {
+    if (!selectedOrgId || !agent || runningAgent) return;
+    try {
+      setRunningAgent(true);
+      await runAgent(selectedOrgId, agentId);
+      toast.success(`"${agent.name}" triggered`);
+    } catch (err: any) {
+      toast.error(err.response?.data?.message || err.message || 'Failed to run agent');
+    } finally {
+      setRunningAgent(false);
     }
   };
 
@@ -588,11 +696,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const triggerIcon = { webhook: <Webhook className="h-4 w-4" />, cron: <Clock className="h-4 w-4" />, manual: <Play className="h-4 w-4" /> };
   const triggerLabel = { webhook: 'Webhook', cron: 'Cron Schedule', manual: 'Manual Only' };
   const trigger = triggers.find(t => t.trigger_type !== 'manual') ?? triggers.find(t => t.trigger_type === 'manual') ?? null;
-
-  /** Append a template token to a form field (used by VariableChips). */
-  const insertToken = (field: 'approval_instructions', token: string) => {
-    setActionForm((f) => ({ ...f, [field]: `${f[field] ?? ''}${token}` }));
-  };
 
   /**
    * Variables available to the currently-edited action.
@@ -625,11 +728,73 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     return Array.from(new Set(names));
   }, [actions, editingAction, browserScripts]);
 
+  /**
+   * Drag-and-drop reorder with pair awareness.
+   *
+   * A "drag block" is the slice of actions that moves together:
+   *   • Unpaired card → block of 1
+   *   • Either half of a login↔browser_script pair → block of 2
+   *
+   * Drop position is then snapped so we never split another pair —
+   * if the operator drops onto the script-half of a target pair, we
+   * land after that pair instead of between its login and script.
+   *
+   * This way the chain icon between paired cards is also a real
+   * invariant, not just a render-time hint.
+   */
   const handleDropAction = async (dropIdx: number) => {
     if (dragIndex === null || dragIndex === dropIdx) return;
+
+    // 1. Figure out the drag block — pull the dragged card AND its
+    //    pair partner (if any). Always ordered [login, script] so
+    //    splice/insert math stays simple.
+    const dragged = actions[dragIndex];
+    if (!dragged) return;
+    const dragPair = actionPairs.get(dragged.id);
+    let blockStart: number;
+    let blockLen: number;
+    if (dragPair) {
+      const partnerIdx = actions.findIndex((a) => a.id === dragPair.partnerId);
+      if (partnerIdx === -1) {
+        blockStart = dragIndex;
+        blockLen = 1;
+      } else {
+        blockStart = Math.min(dragIndex, partnerIdx);
+        blockLen = 2;
+      }
+    } else {
+      blockStart = dragIndex;
+      blockLen = 1;
+    }
+
+    // 2. Snap the drop target so we don't split another pair. If the
+    //    target is the script-half of a pair, bump the drop index to
+    //    point AFTER the pair so the inserted block lands cleanly
+    //    below both halves.
+    let targetIdx = dropIdx;
+    const targetAction = actions[targetIdx];
+    if (targetAction) {
+      const targetPair = actionPairs.get(targetAction.id);
+      if (targetPair && targetPair.role === 'script') {
+        // Land after the script half → after the pair as a whole.
+        targetIdx = targetIdx + 1;
+      }
+    }
+
+    // 3. Splice the block out, adjusting the target index for any
+    //    shift caused by the removal.
     const newActions = [...actions];
-    const [dragged] = newActions.splice(dragIndex, 1);
-    newActions.splice(dropIdx, 0, dragged!);
+    const moved = newActions.splice(blockStart, blockLen);
+    if (targetIdx > blockStart) targetIdx -= blockLen;
+    newActions.splice(targetIdx, 0, ...moved);
+
+    // 4. If neither end of the block moved, bail — no-op reorder.
+    if (newActions.every((a, i) => a.id === actions[i]?.id)) {
+      setDragIndex(null);
+      setDropIndex(null);
+      return;
+    }
+
     setActions(newActions);
     setDragIndex(null);
     setDropIndex(null);
@@ -651,16 +816,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      {/* Header */}
+      {/* Header — no Back button. The sidebar is always present and
+          browser-back covers the "return to list" case. */}
       <div className="flex items-start gap-3">
-        <Button variant="ghost" size="sm" onClick={() => router.push('/agents')} className="shrink-0 mt-0.5">
-          <ArrowLeft className="mr-2 h-4 w-4" />
-          Back
-        </Button>
-
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-2xl font-bold">{agent.name}</h1>
+            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
+              <Bot className="h-5 w-5 text-brand" />
+              {agent.name}
+            </h1>
             <Badge variant={agent.is_active ? 'default' : 'secondary'}>{agent.is_active ? 'Active' : 'Inactive'}</Badge>
             {agent.requires_browser && (
               <Badge variant="outline" className="gap-1 border-info/40 text-info">
@@ -699,43 +863,56 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           )}
         </div>
 
-        {/* Quick links */}
-        <div className="flex items-center gap-2 shrink-0">
-          <Link
-            href={`/approvals?agent_id=${agentId}`}
-            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted/50 transition-colors"
+        {/* Action cluster — three icon buttons with hover-title
+            tooltips: Run · History · Settings. All same shape (icon-only
+            ghost buttons in a bordered group) so they read as a
+            coherent toolbar rather than competing primary actions.
+            Run is highlighted with the success-green icon to give it a
+            slight visual lead — it's the most common reason an
+            operator opens this page beyond initial setup. */}
+        <div className="flex items-center rounded-md border shrink-0 divide-x">
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-none rounded-l-md disabled:opacity-50"
+            onClick={handleRunAgent}
+            disabled={runningAgent || !agent.is_active}
+            title={
+              !agent.is_active
+                ? 'Agent is inactive — activate it in Settings before running'
+                : runningAgent
+                  ? 'Triggering…'
+                  : 'Run agent now'
+            }
           >
-            <CheckCircle2 className="h-3.5 w-3.5 text-orange-500" />
-            View Approvals
-            {pendingHitlCount > 0 && (
-              <Badge variant="destructive" className="ml-0.5 h-4 px-1 text-xs">{pendingHitlCount}</Badge>
-            )}
-          </Link>
-          <Link
-            href={`/agent-history?agent_id=${agentId}`}
-            className="flex items-center gap-1.5 rounded-md border px-3 py-1.5 text-xs font-medium hover:bg-muted/50 transition-colors"
+            {runningAgent
+              ? <RefreshCw className="h-4 w-4 animate-spin" />
+              : <Play className={cn('h-4 w-4', agent.is_active && 'text-success')} />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-none"
+            onClick={() => router.push(`/agent-history?agent_id=${agentId}`)}
+            title="View execution history"
           >
-            <History className="h-3.5 w-3.5 text-muted-foreground" />
-            History
-          </Link>
+            <History className="h-4 w-4 text-muted-foreground" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="h-9 w-9 rounded-none rounded-r-md"
+            onClick={() => setSettingsOpen(true)}
+            title="Agent settings"
+          >
+            <Settings className="h-4 w-4 text-muted-foreground" />
+          </Button>
         </div>
       </div>
 
-      {/* ── Tabs ─────────────────────────────────────────────── */}
-      <Tabs defaultValue="workflow">
-        <TabsList className="grid w-full max-w-xs grid-cols-2">
-          <TabsTrigger value="workflow">
-            <GitBranch className="h-4 w-4 mr-2" />
-            Workflow
-          </TabsTrigger>
-          <TabsTrigger value="settings">
-            <Settings className="h-4 w-4 mr-2" />
-            Settings
-          </TabsTrigger>
-        </TabsList>
-
-        {/* ── Workflow Tab ──────────────────────────────────── */}
-        <TabsContent value="workflow" className="mt-4">
+      {/* ── Workflow (no longer behind a tab — settings moved to a
+          modal triggered by the gear icon in the header cluster). */}
+      <div className="mt-2">
           <div className="max-w-2xl space-y-0">
 
             {/* Trigger */}
@@ -845,13 +1022,49 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </div>
 
               <div>
-                {actions.map((action, idx) => (
-                  <div key={action.id}>
+                {actions.map((action, idx) => {
+                  // Paired login + browser_script render as one visual
+                  // unit. Both cards adopt the browser_script (violet)
+                  // color treatment, sit flush together with no gap,
+                  // and share a chain-icon overlay positioned over the
+                  // seam between them. The login keeps its own LogIn
+                  // glyph + label so the operator still understands
+                  // what each step actually does inside the pair.
+                  const pair = actionPairs.get(action.id);
+                  const isPaired = !!pair;
+                  const pairColorOverride = isPaired;
+                  const effectiveColorType: typeof action.action_type =
+                    pairColorOverride ? 'browser_script' : action.action_type;
+                  // Layout overrides for paired cards:
+                  //   login half  → rounded only on top, no bottom border (seam)
+                  //   script half → rounded only on bottom, lifts up via -mt
+                  // The connector slot below the login half is suppressed
+                  // entirely so the two cards meet exactly. A separate
+                  // absolutely-positioned chain icon overlays the seam.
+                  const pairCardClass = !isPaired ? '' :
+                    pair.role === 'login'
+                      ? 'rounded-b-none border-b-0'
+                      : 'rounded-t-none -mt-px';
+
+                  // Both halves of a pair light up as "dragging" when
+                  // either one is grabbed, so the user sees the unit
+                  // moving rather than just half of it.
+                  const draggedAction = dragIndex !== null ? actions[dragIndex] : null;
+                  const draggedPartnerId = draggedAction
+                    ? actionPairs.get(draggedAction.id)?.partnerId
+                    : undefined;
+                  const isBeingDragged = dragIndex === idx
+                    || (draggedPartnerId !== undefined && draggedPartnerId === action.id);
+
+                  return (
+                  <div key={action.id} className={cn(isPaired && 'relative')}>
                     <Card
                       className={cn(
                         'group transition-all duration-150 cursor-pointer',
-                        dragIndex === idx && 'opacity-40 scale-[0.98]',
-                        dropIndex === idx && dragIndex !== idx && 'ring-2 ring-primary ring-offset-1',
+                        isBeingDragged && 'opacity-40 scale-[0.98]',
+                        dropIndex === idx && !isBeingDragged && 'ring-2 ring-primary ring-offset-1',
+                        isPaired && 'border-violet-300/70 dark:border-violet-700/50',
+                        pairCardClass,
                       )}
                       draggable
                       onDragStart={() => setDragIndex(idx)}
@@ -867,15 +1080,23 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                           </div>
                           <div className={cn(
                             'w-8 h-8 rounded-full flex items-center justify-center shrink-0 text-sm font-bold select-none',
-                            action.action_type === 'approval'
+                            // Each action type gets a distinct tailwind hue so the
+                            // five step kinds are visually separable at a glance.
+                            // Light-mode: 100-bg / 700-fg. Dark-mode: 900/30-bg / 400-fg.
+                            //   approval        → orange
+                            //   login           → sky        (light blue)
+                            //   browser_script  → violet
+                            //   sub_agent       → amber/yellow
+                            //   agent (AI step) → blue-700   (dark blue)
+                            effectiveColorType === 'approval'
                               ? 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
-                              : action.action_type === 'login'
+                              : effectiveColorType === 'login'
                               ? 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400'
-                              : action.action_type === 'browser_script'
+                              : effectiveColorType === 'browser_script'
                               ? 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400'
-                              : action.action_type === 'sub_agent'
-                              ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-                              : 'bg-brand/10 text-brand'
+                              : effectiveColorType === 'sub_agent'
+                              ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'
+                              : 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
                           )}>
                             {action.action_type === 'login' ? <LogIn className="h-3.5 w-3.5" />
                               : action.action_type === 'browser_script' ? <CircleDot className="h-3.5 w-3.5" />
@@ -884,49 +1105,144 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                               : idx + 1}
                           </div>
                           <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="font-medium text-sm">{action.name}</span>
-                              <Badge
-                                variant={action.action_type === 'agent' ? 'secondary' : 'outline'}
-                                className={cn('text-xs',
-                                  action.action_type === 'approval' && 'border-orange-400 text-orange-600',
-                                  action.action_type === 'login' && 'border-info/40 text-info',
-                                  action.action_type === 'browser_script' && 'border-brand/40 text-brand',
-                                  action.action_type === 'sub_agent' && 'border-brand/40 text-brand',
-                                )}
-                              >
-                                {action.action_type === 'approval' ? 'Human Review'
-                                  : action.action_type === 'login' ? 'Browser Login'
-                                  : action.action_type === 'browser_script' ? 'Browser Script'
-                                  : action.action_type === 'sub_agent' ? 'Run Agent'
-                                  : 'AI Step'}
-                              </Badge>
-                            </div>
-                            <p className="text-xs text-muted-foreground mt-0.5 truncate">
-                              {action.action_type === 'login'
-                                ? `→ ${action.login_name ?? '(no login selected)'}`
-                                : action.action_type === 'agent'
-                                ? `→ ${action.ai_step_name ?? '(no AI step selected)'}`
-                                : action.action_type === 'browser_script'
-                                ? `→ ${action.script_name ?? '(no script selected)'}${(action.max_retries ?? 0) > 0 ? ` · ${action.max_retries} ${action.max_retries === 1 ? 'retry' : 'retries'}` : ''}`
-                                : action.action_type === 'sub_agent'
-                                ? `→ ${action.target_agent_name ?? 'Unknown agent'}${(action.batch_size ?? 1) > 1 ? ` · batch ${action.batch_size}` : ''} · ×${action.max_concurrent ?? 3} concurrent`
-                                : (action.approval_instructions ?? '—')}
-                            </p>
+                            {/* Display name comes ENTIRELY from the
+                                linked library entity now. Renaming an
+                                AI step / login / browser script /
+                                target agent / approval step
+                                propagates here automatically on next
+                                reload. No more "action.name → entity"
+                                double label. */}
+                            {(() => {
+                              const displayName =
+                                action.action_type === 'login'          ? action.login_name :
+                                action.action_type === 'agent'          ? action.ai_step_name :
+                                action.action_type === 'browser_script' ? action.script_name :
+                                action.action_type === 'sub_agent'      ? action.target_agent_name :
+                                action.action_type === 'approval'       ? action.approval_step_name :
+                                null;
+                              const placeholder =
+                                action.action_type === 'login'          ? '(no login selected)' :
+                                action.action_type === 'agent'          ? '(no AI step selected)' :
+                                action.action_type === 'browser_script' ? '(no script selected)' :
+                                action.action_type === 'sub_agent'      ? '(no target agent)' :
+                                action.action_type === 'approval'       ? '(no approval step selected)' :
+                                '—';
+                              return (
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <span className={cn(
+                                    'font-medium text-sm',
+                                    !displayName && 'text-muted-foreground italic'
+                                  )}>
+                                    {displayName ?? placeholder}
+                                  </span>
+                                  <Badge
+                                    variant="outline"
+                                    className={cn('text-xs',
+                                      action.action_type === 'approval' && 'border-orange-400 text-orange-600 dark:text-orange-400',
+                                      action.action_type === 'login' && !isPaired && 'border-sky-400/60 text-sky-700 dark:text-sky-400',
+                                      action.action_type === 'login' && isPaired && 'border-violet-400/40 text-violet-600 dark:text-violet-400',
+                                      action.action_type === 'browser_script' && 'border-violet-400/60 text-violet-700 dark:text-violet-400',
+                                      action.action_type === 'sub_agent' && 'border-amber-400/60 text-amber-700 dark:text-amber-400',
+                                      action.action_type === 'agent' && 'border-blue-500/60 text-blue-700 dark:text-blue-400',
+                                    )}
+                                  >
+                                    {action.action_type === 'approval' ? 'Human Review'
+                                      : action.action_type === 'login' ? 'Browser Login'
+                                      : action.action_type === 'browser_script' ? 'Browser Script'
+                                      : action.action_type === 'sub_agent' ? 'Run Agent'
+                                      : 'AI Step'}
+                                  </Badge>
+                                  {isPaired && (
+                                    <span
+                                      className="inline-flex items-center gap-1 text-[10px] text-violet-600 dark:text-violet-400 font-medium"
+                                      title={pair.role === 'login'
+                                        ? 'Paired with the browser script below — deletes together.'
+                                        : 'Paired with the login above — deletes together.'}
+                                    >
+                                      <LinkIcon className="h-2.5 w-2.5" />
+                                      Linked
+                                    </span>
+                                  )}
+                                </div>
+                              );
+                            })()}
+                            {/* Tuning summary line — only shows when
+                                there's something interesting to surface
+                                (retries set, batch size > 1, etc.).
+                                Most rows now skip this line entirely
+                                so cards stay vertically compact. */}
+                            {(() => {
+                              const bits: string[] = [];
+                              if (action.action_type === 'browser_script' && (action.max_retries ?? 0) > 0) {
+                                bits.push(`${action.max_retries} ${action.max_retries === 1 ? 'retry' : 'retries'}`);
+                              }
+                              if (action.action_type === 'sub_agent') {
+                                if ((action.batch_size ?? 1) > 1) bits.push(`batch ${action.batch_size}`);
+                                bits.push(`×${action.max_concurrent ?? 3} concurrent`);
+                              }
+                              if (bits.length === 0) return null;
+                              return (
+                                <p className="text-xs text-muted-foreground mt-0.5 truncate">
+                                  {bits.join(' · ')}
+                                </p>
+                              );
+                            })()}
                           </div>
                           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
-                            <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e) => { e.stopPropagation(); handleDeleteAction(action.id, action.name); }}>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                // Resolve the display name the same way the
+                                // card title does — entity name, never the
+                                // stale action.name column.
+                                const displayName =
+                                  action.action_type === 'login'          ? action.login_name :
+                                  action.action_type === 'agent'          ? action.ai_step_name :
+                                  action.action_type === 'browser_script' ? action.script_name :
+                                  action.action_type === 'sub_agent'      ? action.target_agent_name :
+                                  action.action_type === 'approval'       ? action.approval_step_name :
+                                  null;
+                                handleDeleteAction(action.id, displayName ?? 'this step');
+                              }}
+                            >
                               <Trash2 className="h-3.5 w-3.5 text-destructive" />
                             </Button>
                           </div>
                         </div>
                       </CardContent>
                     </Card>
-                    <div className="flex justify-center py-1">
-                      <div className="w-px h-4 bg-border" />
-                    </div>
+                    {/* Connector between this card and the next.
+                        Paired login → script: no connector at all (the
+                        two cards meet flush), and the chain icon below
+                        is absolutely positioned over the seam.
+                        Paired script → next: regular vertical line
+                        (the pair is over; the script connects to
+                        whatever comes after normally). */}
+                    {!(isPaired && pair.role === 'login') && (
+                      <div className="flex justify-center py-1">
+                        <div className="w-px h-4 bg-border" />
+                      </div>
+                    )}
+                    {/* Chain-link badge overlaid on the seam between
+                        the login and script halves. Pointer-events:none
+                        so clicks pass through to the cards underneath
+                        (which both open their own edit dialogs). */}
+                    {isPaired && pair.role === 'login' && (
+                      <div
+                        className="absolute left-1/2 -translate-x-1/2 -bottom-3 z-10 pointer-events-none"
+                        title="Linked login + script"
+                      >
+                        <div className="h-6 w-6 rounded-full bg-violet-500 text-white shadow-md flex items-center justify-center ring-2 ring-background">
+                          <LinkIcon className="h-3 w-3" />
+                        </div>
+                      </div>
+                    )}
                   </div>
-                ))}
+                  );
+                })}
 
                 {/* Add Step card */}
                 <button
@@ -944,89 +1260,107 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             </div>
           </div>
-        </TabsContent>
+      </div>
 
-        {/* ── Settings Tab ──────────────────────────────────── */}
-        <TabsContent value="settings" className="mt-4">
-          <div className="max-w-md space-y-4">
-            <Card>
-              <CardContent className="pt-6 space-y-4">
-                <div className="space-y-1.5">
-                  <Label htmlFor="agent-name">Name <span className="text-destructive">*</span></Label>
-                  <Input
-                    id="agent-name"
-                    value={agentName}
-                    onChange={(e) => { setAgentName(e.target.value); setSettingsDirty(true); }}
-                    placeholder="Agent name"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="agent-desc">Description</Label>
-                  <Textarea
-                    id="agent-desc"
-                    value={agentDesc}
-                    onChange={(e) => { setAgentDesc(e.target.value); setSettingsDirty(true); }}
-                    placeholder="Optional description…"
-                    rows={3}
-                  />
-                </div>
+      {/* ── Settings Modal ──────────────────────────────────────
+          Replaces the old Settings tab. Same fields, same dirty
+          tracking and Save semantics — just gated behind the gear
+          icon in the header cluster so the page stays focused on
+          the workflow editor by default. */}
+      <Dialog
+        open={settingsOpen}
+        onOpenChange={(open) => {
+          // Block close while a save is in flight (avoids dropping
+          // an in-progress request and re-opening with stale state).
+          if (!open && savingSettings) return;
+          setSettingsOpen(open);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Agent Settings</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="agent-name">Name <span className="text-destructive">*</span></Label>
+              <Input
+                id="agent-name"
+                value={agentName}
+                onChange={(e) => { setAgentName(e.target.value); setSettingsDirty(true); }}
+                placeholder="Agent name"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="agent-desc">Description</Label>
+              <Textarea
+                id="agent-desc"
+                value={agentDesc}
+                onChange={(e) => { setAgentDesc(e.target.value); setSettingsDirty(true); }}
+                placeholder="Optional description…"
+                rows={3}
+              />
+            </div>
 
-                {/* Active toggle */}
-                <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
-                  <div>
-                    <p className="text-sm font-medium">Status</p>
-                    <p className="text-xs text-muted-foreground">
-                      {agentActive ? 'Agent is active and will run triggers' : 'Agent is inactive and will not run'}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => { setAgentActive((v) => !v); setSettingsDirty(true); }}
-                    className={cn(
-                      'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
-                      agentActive ? 'bg-brand' : 'bg-muted-foreground/30'
-                    )}
-                  >
-                    <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentActive ? 'translate-x-5' : 'translate-x-0.5')} />
-                  </button>
-                </div>
+            {/* Active toggle */}
+            <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+              <div>
+                <p className="text-sm font-medium">Status</p>
+                <p className="text-xs text-muted-foreground">
+                  {agentActive ? 'Agent is active and will run triggers' : 'Agent is inactive and will not run'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setAgentActive((v) => !v); setSettingsDirty(true); }}
+                className={cn(
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
+                  agentActive ? 'bg-brand' : 'bg-muted-foreground/30'
+                )}
+              >
+                <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentActive ? 'translate-x-5' : 'translate-x-0.5')} />
+              </button>
+            </div>
 
-                {/* Browser toggle */}
-                <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
-                  <div>
-                    <p className="text-sm font-medium flex items-center gap-1.5">
-                      <Monitor className="h-3.5 w-3.5 text-sky-500" />Requires Browser
-                    </p>
-                    <p className="text-xs text-muted-foreground">
-                      {agentRequiresBrowser ? 'Browser tools available to all actions in this agent' : 'No browser — enable to use browser tools or login steps'}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => { setAgentRequiresBrowser((v) => !v); setSettingsDirty(true); }}
-                    className={cn(
-                      'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
-                      agentRequiresBrowser ? 'bg-sky-500' : 'bg-muted-foreground/30'
-                    )}
-                  >
-                    <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentRequiresBrowser ? 'translate-x-5' : 'translate-x-0.5')} />
-                  </button>
-                </div>
-
-                <div className="flex justify-end pt-1">
-                  <Button
-                    onClick={handleSaveSettings}
-                    disabled={!settingsDirty || !agentName.trim() || savingSettings}
-                  >
-                    {savingSettings ? 'Saving…' : 'Save Changes'}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
+            {/* Browser toggle */}
+            <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
+              <div>
+                <p className="text-sm font-medium flex items-center gap-1.5">
+                  <Monitor className="h-3.5 w-3.5 text-sky-500" />Requires Browser
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  {agentRequiresBrowser ? 'Browser tools available to all actions in this agent' : 'No browser — enable to use browser tools or login steps'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => { setAgentRequiresBrowser((v) => !v); setSettingsDirty(true); }}
+                className={cn(
+                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
+                  agentRequiresBrowser ? 'bg-sky-500' : 'bg-muted-foreground/30'
+                )}
+              >
+                <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentRequiresBrowser ? 'translate-x-5' : 'translate-x-0.5')} />
+              </button>
+            </div>
           </div>
-        </TabsContent>
-
-      </Tabs>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setSettingsOpen(false)} disabled={savingSettings}>
+              Close
+            </Button>
+            <Button
+              onClick={async () => {
+                const ok = await handleSaveSettings();
+                // Close on success; on failure the modal stays open
+                // with the dirty form so the operator can retry.
+                if (ok) setSettingsOpen(false);
+              }}
+              disabled={!settingsDirty || !agentName.trim() || savingSettings}
+            >
+              {savingSettings ? 'Saving…' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Action Dialog ─────────────────────────────────────── */}
       <Dialog open={actionDialogOpen} onOpenChange={setActionDialogOpen}>
@@ -1042,13 +1376,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             </DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
-            {actionForm.action_type === 'approval' && (
-              <div className="space-y-1">
-                <Label>Name <span className="text-destructive">*</span></Label>
-                <Input placeholder="Action name" value={actionForm.name} onChange={(e) => setActionForm(f => ({ ...f, name: e.target.value }))} />
-              </div>
-            )}
-
             {actionForm.action_type === 'agent' && (
               <>
                 <div className="space-y-1">
@@ -1161,16 +1488,57 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
             {actionForm.action_type === 'approval' && (
               <>
-                <div className="space-y-1">
-                  <Label>Instructions for Approver</Label>
-                  <Textarea placeholder="Describe what the approver needs to review and decide…" value={actionForm.approval_instructions} onChange={(e) => setActionForm(f => ({ ...f, approval_instructions: e.target.value }))} rows={4} className="text-sm" />
-                  <VariableChips vars={availableVars} onInsert={(t) => insertToken('approval_instructions', t)} />
-                </div>
-                <ApprovalPreview
-                  instructions={actionForm.approval_instructions}
-                  availableVars={availableVars}
+                <EntityPreviewNotice
+                  entityLabel="approval step"
+                  editHref="/actions/approvals"
+                  editLabel="Approval Steps"
                 />
-                {/* Access groups — who can approve */}
+                <div className="space-y-1">
+                  <Label>Approval Step <span className="text-destructive">*</span></Label>
+                  <div className="flex items-center gap-2">
+                    <Select value={actionForm.approvalStepId} onValueChange={(v) => setActionForm(f => ({ ...f, approvalStepId: v }))}>
+                      <SelectTrigger className="flex-1"><SelectValue placeholder="Select an approval step…" /></SelectTrigger>
+                      <SelectContent>
+                        {approvalSteps.length === 0 ? (
+                          <SelectItem value="_none" disabled>No approval steps yet — click + to create one</SelectItem>
+                        ) : (
+                          approvalSteps.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)
+                        )}
+                      </SelectContent>
+                    </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="icon"
+                      className="h-9 w-9 shrink-0"
+                      onClick={() => setNewApprovalStepOpen(true)}
+                      title="Create a new approval step inline"
+                    >
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+                {(() => {
+                  const selected = approvalSteps.find((s) => s.id === actionForm.approvalStepId);
+                  return selected ? (
+                    <div className="rounded-md border bg-muted/20 p-3 space-y-2">
+                      <div>
+                        <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1">Instructions preview</p>
+                        <p className="text-xs whitespace-pre-wrap leading-relaxed">
+                          {selected.instructions || <span className="italic text-muted-foreground">No instructions configured yet — edit on the Approval Steps page.</span>}
+                        </p>
+                      </div>
+                      {selected.notification_slack_channel_id && (
+                        <p className="text-[10px] text-muted-foreground">
+                          Slack channel override: <code className="font-mono">{selected.notification_slack_channel_id}</code>
+                        </p>
+                      )}
+                    </div>
+                  ) : null;
+                })()}
+                {/* Access groups — who can approve. Per-action because
+                    different agents using the same approval step may
+                    want different reviewer audiences. */}
                 <div className="space-y-2">
                   <Label>Approval Groups</Label>
                   <MultiSelectTags
@@ -1195,14 +1563,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </div>
                   )}
                 </div>
-                {/* Slack notification override — when this approval HITL-pauses,
-                    the notify-on-pause service uses this channel before falling
-                    back to the program / org-default cascade. Empty = no override. */}
-                <SlackChannelInput
-                  scope="approval"
-                  value={actionForm.notificationSlackChannelId}
-                  onChange={(v) => setActionForm((f) => ({ ...f, notificationSlackChannelId: v }))}
-                />
               </>
             )}
 
@@ -1348,7 +1708,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               onClick={handleSaveAction}
               disabled={
                 savingAction ||
-                (actionForm.action_type === 'approval' && !actionForm.name.trim()) ||
+                (actionForm.action_type === 'approval' && !actionForm.approvalStepId) ||
                 (actionForm.action_type === 'agent' && !actionForm.aiStepId) ||
                 (actionForm.action_type === 'login' && !actionForm.loginId) ||
                 (actionForm.action_type === 'browser_script' && !actionForm.scriptId) ||
@@ -1422,8 +1782,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
               onClick={() => { setActionTypeModalOpen(false); openNewAction('agent'); }}
             >
-              <div className="p-2 rounded-lg bg-brand/10 shrink-0">
-                <PlayCircle className="h-4 w-4 text-brand" />
+              <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30 shrink-0">
+                <PlayCircle className="h-4 w-4 text-blue-700 dark:text-blue-400" />
               </div>
               <div>
                 <p className="font-medium text-sm">AI Step</p>
@@ -1457,8 +1817,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   onClick={() => { if (!disabled) { setActionTypeModalOpen(false); openNewAction('sub_agent'); } }}
                   disabled={disabled}
                 >
-                  <div className="p-2 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 shrink-0">
-                    <GitBranch className="h-4 w-4 text-brand" />
+                  <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/30 shrink-0">
+                    <GitBranch className="h-4 w-4 text-amber-700 dark:text-amber-400" />
                   </div>
                   <div>
                     <p className="font-medium text-sm">Run Agent</p>
@@ -1474,36 +1834,26 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               );
             })()}
 
-            {/* Browser steps — gated on requires_browser */}
+            {/* Browser Script — gated on requires_browser.
+                Standalone Browser Login is intentionally NOT an option:
+                a login by itself does nothing. The login step gets
+                auto-added when a browser_script that's linked to a
+                login is added; remove the script and the paired login
+                goes with it. */}
             {agentRequiresBrowser ? (
-              <>
-                <button
-                  type="button"
-                  className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
-                  onClick={() => { setActionTypeModalOpen(false); openNewAction('login'); }}
-                >
-                  <div className="p-2 rounded-lg bg-sky-100 dark:bg-sky-900/30 shrink-0">
-                    <LogIn className="h-4 w-4 text-info" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm">Browser Login</p>
-                    <p className="text-xs text-muted-foreground">Verify browser login before running browser steps</p>
-                  </div>
-                </button>
-                <button
-                  type="button"
-                  className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
-                  onClick={() => { setActionTypeModalOpen(false); openNewAction('browser_script'); }}
-                >
-                  <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0">
-                    <CircleDot className="h-4 w-4 text-brand" />
-                  </div>
-                  <div>
-                    <p className="font-medium text-sm">Browser Script</p>
-                    <p className="text-xs text-muted-foreground">Execute a recorded browser automation script</p>
-                  </div>
-                </button>
-              </>
+              <button
+                type="button"
+                className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
+                onClick={() => { setActionTypeModalOpen(false); openNewAction('browser_script'); }}
+              >
+                <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0">
+                  <CircleDot className="h-4 w-4 text-violet-700 dark:text-violet-400" />
+                </div>
+                <div>
+                  <p className="font-medium text-sm">Browser Script</p>
+                  <p className="text-xs text-muted-foreground">Execute a recorded browser automation script (login step auto-added when linked)</p>
+                </div>
+              </button>
             ) : (
               <div className="rounded-lg border border-dashed p-3 space-y-2.5 mt-0.5">
                 <div className="flex items-center gap-2">
@@ -1599,6 +1949,60 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               disabled={savingNewAiStep || !newAiStepForm.name.trim() || !newAiStepForm.prompt.trim()}
             >
               {savingNewAiStep ? <RefreshCw className="mr-1 h-4 w-4 animate-spin" /> : <Plus className="mr-1 h-4 w-4" />}
+              Create &amp; select
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Inline approval-step creation. Mirrors the AI step dialog
+          structure for consistency. Smaller dialog than AI step
+          because approvals only have three fields. */}
+      <Dialog open={newApprovalStepOpen} onOpenChange={setNewApprovalStepOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>New Approval Step</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1">
+              <Label>Name <span className="text-destructive">*</span></Label>
+              <Input
+                placeholder="e.g. Confirm contract submission"
+                value={newApprovalStepForm.name}
+                onChange={(e) => setNewApprovalStepForm((f) => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Instructions for Approver</Label>
+              <Textarea
+                placeholder="Describe what the approver needs to review and decide. Supports {{variable}} templates."
+                value={newApprovalStepForm.instructions}
+                onChange={(e) => setNewApprovalStepForm((f) => ({ ...f, instructions: e.target.value }))}
+                rows={5}
+                className="text-sm"
+              />
+            </div>
+            <SlackChannelInput
+              scope="approval"
+              value={newApprovalStepForm.notificationSlackChannelId}
+              onChange={(v) => setNewApprovalStepForm((f) => ({ ...f, notificationSlackChannelId: v }))}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setNewApprovalStepOpen(false)}
+              disabled={savingNewApprovalStep}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateApprovalStepInline}
+              disabled={savingNewApprovalStep || !newApprovalStepForm.name.trim()}
+            >
+              {savingNewApprovalStep
+                ? <RefreshCw className="mr-1 h-4 w-4 animate-spin" />
+                : <Plus className="mr-1 h-4 w-4" />}
               Create &amp; select
             </Button>
           </DialogFooter>

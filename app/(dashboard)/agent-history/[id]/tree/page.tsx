@@ -10,7 +10,6 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { toast } from 'sonner';
 import {
-  ArrowLeft,
   Loader2,
   CheckCircle2,
   XCircle,
@@ -173,13 +172,6 @@ export default function ExecutionTreePage() {
 
   return (
     <div className="flex flex-col gap-5 p-6 max-w-6xl mx-auto">
-
-      {/* Back */}
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" size="sm" asChild className="gap-1.5 -ml-2 w-fit text-muted-foreground">
-          <Link href={`/agent-history/${id}`}><ArrowLeft className="h-4 w-4" />Back to run details</Link>
-        </Button>
-      </div>
 
       {/* Header */}
       <div className="flex items-center gap-3 flex-wrap">

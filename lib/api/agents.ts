@@ -30,6 +30,13 @@ export interface AgentAction {
   login_name?: string | null;
   script_id?: string | null;
   script_name?: string | null;
+  approval_step_id?: string | null;
+  approval_step_name?: string | null;
+  /** Resolved instructions from the linked approval_step row.
+   *  Falls back to the legacy inline approval_instructions column
+   *  via COALESCE on the backend. */
+  approval_step_instructions?: string | null;
+  approval_step_slack_channel?: string | null;
   target_agent_id?: string | null;
   target_agent_name?: string | null;
   /** sub_agent tuning */

@@ -187,11 +187,14 @@ export function LogViewer({ steps, loading }: LogViewerProps) {
               <span className="text-muted-foreground truncate flex-1 font-mono">
                 {getPreview(step)}
               </span>
-
-              {/* Sequence badge */}
-              <span className="text-muted-foreground/30 tabular-nums shrink-0">
-                #{step.sequence}
-              </span>
+              {/* Sequence badge removed — agent_execution_steps.sequence is no
+                  longer a reliable ordering signal (see agent-backend's
+                  recordScriptStep docstring). Chronological order comes from
+                  rendering position, which matches the API's ORDER BY
+                  created_at ASC. The visible #N values that used to render
+                  here were the collision artifact of two writers each
+                  maintaining their own counter, and were the source of
+                  operator confusion ("why are these grouped?"). */}
             </div>
 
             {/* Expanded payload */}
