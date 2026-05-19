@@ -535,6 +535,16 @@ export interface FullTreeNode {
   /** Resolved input the action received (JSON string when structured). */
   input?: string | null;
   output?: string | null;
+  /**
+   * Signed GCS URL of a screenshot captured during this action. Populated
+   * for browser_script and login (auto-login) actions — success-time
+   * shows the final page state, failure-time shows the moment-of-failure
+   * page. Null for AI-only steps, approvals, sub-agent dispatches, and
+   * any action where no screenshot was taken. The URL is short-lived
+   * (~7 day TTL) — operators clicking on stale runs may need to refresh
+   * if it 404s.
+   */
+  screenshot_url?: string | null;
   batch_item_count?: number;
   batch_item_index?: number | null;
   // Children

@@ -26,7 +26,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner';
 import {
   Loader2, Zap, LogIn, Play, GitBranch, PauseCircle,
-  AlertCircle, Copy, Hash, Bot, History, ChevronRight,
+  AlertCircle, Copy, Hash, Bot, History, ChevronRight, ImageIcon, ExternalLink,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
@@ -428,6 +428,86 @@ function PayloadView({
 }
 
 /**
+ * Screenshot tab — shows a click-to-zoom thumbnail of the page state
+ * captured during the action. Populated for browser_script and login
+ * (auto-login) actions by the screenshot upload pipeline; null for
+ * AI-only steps, approvals, etc.
+ *
+ * Two-level rendering:
+ *   1. Inline thumbnail at modest size (h-[28rem] container) so the
+ *      operator gets the gist without leaving the tab.
+ *   2. Click → modal at near-full-screen so they can read URLs in the
+ *      address bar, error messages, form field labels, etc.
+ *
+ * URL note: signed GCS URLs have a ~7-day TTL. Older runs may return
+ * 403; we render an `<img>` so the browser handles that naturally
+ * (broken image icon). A more polished version would detect onError
+ * and show a "screenshot expired" placeholder, but the broken image
+ * is already a clear-enough affordance that the operator knows to
+ * look elsewhere.
+ */
+function ScreenshotPanel({ url, actionLabel }: { url: string; actionLabel: string }) {
+  const [zoomOpen, setZoomOpen] = useState(false);
+  return (
+    <>
+      <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden h-[28rem] bg-card">
+        <div className="flex items-center justify-between px-3 py-1.5 bg-muted/20 border-b border-border/30 shrink-0 text-[10px] text-muted-foreground">
+          <span>Click to enlarge</span>
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-foreground flex items-center gap-1"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <ExternalLink className="h-3 w-3" /> Open original
+          </a>
+        </div>
+        <button
+          type="button"
+          className="flex-1 min-h-0 overflow-hidden bg-muted/10 hover:bg-muted/20 transition-colors p-2"
+          onClick={() => setZoomOpen(true)}
+          aria-label="Enlarge screenshot"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={url}
+            alt={`Screenshot from ${actionLabel}`}
+            className="w-full h-full object-contain"
+          />
+        </button>
+      </div>
+      <Dialog open={zoomOpen} onOpenChange={setZoomOpen}>
+        <DialogContent className="max-w-[95vw] sm:max-w-[95vw] max-h-[95vh] p-2 sm:p-4">
+          <DialogHeader className="px-2 pt-1">
+            <DialogTitle className="text-sm font-medium truncate flex items-center gap-2">
+              <ImageIcon className="h-4 w-4" />
+              <span className="truncate">{actionLabel}</span>
+              <a
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-auto text-[10px] font-normal text-muted-foreground hover:text-foreground flex items-center gap-1 shrink-0"
+              >
+                <ExternalLink className="h-3 w-3" /> Open original
+              </a>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="overflow-auto max-h-[calc(95vh-4rem)] bg-muted/10 rounded">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={url}
+              alt={`Screenshot from ${actionLabel}`}
+              className="w-full h-auto"
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+/**
  * Action detail viewer.  Every action type renders the same three-tab
  * layout — Input / Output / Logs — so operators get a consistent
  * triage experience regardless of whether the step is an AI prompt, a
@@ -513,6 +593,14 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
     action.action_type === 'approval' ? 'Approval steps do not emit logs.' :
     'No log entries recorded.';
 
+  // Conditionally render the Screenshot tab when a screenshot URL is
+  // populated. Captured by the upload pipeline for browser_script and
+  // auto-login actions (success-time on done, failure-time on throw).
+  // Operators triaging "login timed out waiting for the field" or
+  // "script reported success but extracted nothing useful" can see
+  // exactly what the page looked like at the moment of capture.
+  const hasScreenshot = !!action.screenshot_url;
+
   return (
     <div className="space-y-3">
       {action.error_message && (
@@ -534,6 +622,12 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
               </span>
             )}
           </TabsTrigger>
+          {hasScreenshot && (
+            <TabsTrigger value="screenshot">
+              <ImageIcon className="h-3 w-3 mr-1" />
+              Screenshot
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="input">
@@ -560,6 +654,12 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
             </div>
           )}
         </TabsContent>
+
+        {hasScreenshot && (
+          <TabsContent value="screenshot">
+            <ScreenshotPanel url={action.screenshot_url!} actionLabel={action.label} />
+          </TabsContent>
+        )}
       </Tabs>
     </div>
   );
