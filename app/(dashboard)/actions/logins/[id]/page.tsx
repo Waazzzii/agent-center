@@ -54,6 +54,10 @@ const TERMINAL = new Set(['completed', 'failed', 'aborted']);
 function StatusPill({ status }: { status: Login['status'] }) {
   if (status === 'valid') return <Badge variant="success" className="gap-1"><CheckCircle2 className="h-3 w-3" />Logged In</Badge>;
   if (status === 'needs_login') return <Badge variant="warning" className="gap-1"><AlertCircle className="h-3 w-3" />Not Logged In</Badge>;
+  // 'verifying' is an intermediate state — see Login['status'] docstring.
+  // Spinner + "Verifying..." makes it visually obvious that we're
+  // mid-check, so operators don't read it as a settled outcome.
+  if (status === 'verifying') return <Badge variant="neutral" className="gap-1"><Loader2 className="h-3 w-3 animate-spin" />Verifying…</Badge>;
   return <Badge variant="neutral" className="gap-1"><HelpCircle className="h-3 w-3" />Not Yet Checked</Badge>;
 }
 

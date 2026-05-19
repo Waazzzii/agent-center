@@ -11,7 +11,26 @@ export interface Login {
   last_checked_at: string | null;
   /** Last time the session was confirmed / refreshed valid. */
   last_logged_in_at: string | null;
-  status: 'valid' | 'needs_login' | 'unknown';
+  // Login profile status lifecycle:
+  //   valid       — the saved session has been verified (recently or
+  //                 just now) to authenticate against the site.
+  //   needs_login — the saved session doesn't authenticate (expired,
+  //                 logged out, never set up, etc.) and a human needs
+  //                 to log in via the "Log In" button.
+  //   verifying   — INTERMEDIATE: the user clicked Done after a
+  //                 manual login / completed HITL, and a background
+  //                 verify is in flight to confirm the saved state.
+  //                 Transitions to valid or needs_login when the
+  //                 verify finishes (~5s typical). The UI renders this
+  //                 with a spinner so the operator knows we don't yet
+  //                 know the outcome. Without this state, the previous
+  //                 design optimistically wrote 'valid' on Done click
+  //                 and reverted to 'needs_login' once verify failed —
+  //                 a stale-valid window operators occasionally caught
+  //                 in flight and made decisions on.
+  //   unknown     — never been checked (fresh login profile, no verify
+  //                 has run yet).
+  status: 'valid' | 'needs_login' | 'verifying' | 'unknown';
   /** Optional browser script that the agent executor will attempt before
    *  falling through to HITL when verification fails. Auto-login is only
    *  attempted when BOTH this AND credentials_secret_id are set. */
