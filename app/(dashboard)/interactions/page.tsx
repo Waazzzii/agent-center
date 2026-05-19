@@ -333,37 +333,62 @@ export default function InteractionsPage() {
         </Card>
       )}
 
-      {/* Approval review modal */}
+      {/* Approval review modal.
+          - max-w-3xl (768px) gives wide content room for instructions + the
+            prior step's output (often a multi-line JSON dump).
+          - h-[80vh] + flex column lets the header/footer pin while the body
+            scrolls. Without this the inner output panel was capped at
+            ~256px and clipped real content.
+          - p-0 on DialogContent so the header / body / footer manage their
+            own padding and the body can scroll edge-to-edge. */}
       <Dialog open={!!viewItem && viewItem.action_type !== 'login'} onOpenChange={(open) => { if (!open) setViewItem(null); }}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
+        <DialogContent className="sm:max-w-3xl h-[80vh] flex flex-col p-0 gap-0 overflow-hidden">
+          <DialogHeader className="px-6 pt-6 pb-4 border-b shrink-0">
             <DialogTitle>Review Approval</DialogTitle>
           </DialogHeader>
           {viewItem && (
-            <div className="space-y-3 text-sm">
-              <div>
-                <div className="text-xs text-muted-foreground mb-0.5">Agent</div>
-                <div className="font-medium">{viewItem.agent_name}</div>
-              </div>
-              <div>
-                <div className="text-xs text-muted-foreground mb-0.5">Step</div>
-                <div>{viewItem.action_name}</div>
+            <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4 text-sm min-h-0">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <div className="text-xs text-muted-foreground mb-0.5">Agent</div>
+                  <div className="font-medium truncate">{viewItem.agent_name}</div>
+                </div>
+                <div>
+                  <div className="text-xs text-muted-foreground mb-0.5">Step</div>
+                  <div className="truncate">{viewItem.action_name}</div>
+                </div>
               </div>
               {viewItem.approval_instructions && (
                 <div>
-                  <div className="text-xs text-muted-foreground mb-0.5">Instructions</div>
-                  <div className="whitespace-pre-wrap bg-muted/50 rounded-md p-2 text-xs">{viewItem.approval_instructions}</div>
+                  <div className="text-xs text-muted-foreground mb-1">Instructions</div>
+                  <div className="whitespace-pre-wrap bg-muted/50 rounded-md p-3 text-xs leading-relaxed">
+                    {viewItem.approval_instructions}
+                  </div>
                 </div>
               )}
               {viewItem.output && (
                 <div>
-                  <div className="text-xs text-muted-foreground mb-0.5">Previous output</div>
-                  <div className="whitespace-pre-wrap bg-muted/50 rounded-md p-2 text-xs font-mono max-h-64 overflow-auto">{viewItem.output}</div>
+                  <div className="text-xs text-muted-foreground mb-1">Previous output</div>
+                  <pre className="whitespace-pre-wrap break-words bg-muted/50 rounded-md p-3 text-xs font-mono leading-relaxed">
+                    {(() => {
+                      // Pretty-print JSON if the prior step emitted one;
+                      // fall back to raw text otherwise. Same convention
+                      // the execution detail page uses so operators see
+                      // identical formatting in both places.
+                      try { return JSON.stringify(JSON.parse(viewItem.output), null, 2); }
+                      catch { return viewItem.output; }
+                    })()}
+                  </pre>
                 </div>
+              )}
+              {!viewItem.approval_instructions && !viewItem.output && (
+                <p className="text-xs text-muted-foreground italic py-4">
+                  No instructions or upstream output recorded for this approval.
+                </p>
               )}
             </div>
           )}
-          <DialogFooter>
+          <DialogFooter className="px-6 py-4 border-t shrink-0">
             {viewItem && (
               <>
                 <Button variant="destructive" onClick={() => handleDeny(viewItem)} disabled={!!deciding[viewItem.id]}>
