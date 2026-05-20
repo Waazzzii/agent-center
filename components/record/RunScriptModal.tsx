@@ -771,12 +771,24 @@ export function RunScriptModal({
     }
   };
 
+  // AbortController for the in-flight step execution request. Shared by
+  // both single-step (handleExecuteStep) and auto-run (handleRunAll) —
+  // they're mutually exclusive (the Stop button replaces the Run button
+  // while either is running), so reusing one ref keeps the abort plumbing
+  // simple. Clicking Stop aborts the in-flight HTTP request; the worker
+  // keeps grinding the current Playwright action to completion (no mid-
+  // action interrupt exists yet) but the UI returns immediately and the
+  // backend session stays alive for the next click.
+  const autoRunAbortRef = useRef<AbortController | null>(null);
+
   const handleExecuteStep = async () => {
     if (!runId || !orgId || !stepRunState) return;
+    const controller = new AbortController();
+    autoRunAbortRef.current = controller;
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
     try {
-      const res = await executeStepRunStep(orgId, runId, params);
+      const res = await executeStepRunStep(orgId, runId, params, controller.signal);
       setStepRunState((s) => {
         // Merge the executed step back so auto-locked selectors are reflected
         const steps = [...(s?.steps ?? [])];
@@ -803,17 +815,23 @@ export function RunScriptModal({
       }
       if (res.done) toast.success('All steps completed!');
     } catch (err: any) {
+      // User clicked Stop mid-request — flip the UI back to waiting
+      // without painting it as an error. Same convention as the auto-run
+      // loop a few lines below; both can be cancelled by the same Stop
+      // button.
+      if (err?.name === 'AbortError' || err?.name === 'CanceledError') {
+        setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
+        toast.info('Step stopped');
+        return;
+      }
       const screenshot = err?.response?.data?.screenshot ?? null;
       const msg = err?.response?.data?.error || err?.message || 'Step failed';
       setStepRunState((s) => s ? { ...s, status: 'error', screenshot: screenshot ?? s.screenshot } : s);
       setError(msg);
+    } finally {
+      autoRunAbortRef.current = null;
     }
   };
-
-  // AbortController for the in-flight step execution request.  When the
-  // user clicks Stop, we abort the HTTP request AND tell the backend to
-  // halt the step run — the browser stops mid-action immediately.
-  const autoRunAbortRef = useRef<AbortController | null>(null);
 
   const handleRunAll = async () => {
     if (!runId || !orgId || !stepRunState || stepRunState.done) return;
@@ -1939,9 +1957,14 @@ export function RunScriptModal({
           {runId && (
             <>
               <div className="w-px h-5 bg-border mx-0.5" />
-              {/* Stop button — visible during auto-run.  Cancels the in-flight
-                  HTTP request AND tells the backend to halt the step run. */}
-              {isExecuting && autoMode ? (
+              {/* Stop button — visible whenever a step OR auto-run is
+                  in flight. Aborts the in-flight HTTP request so the
+                  UI returns immediately; the backend session stays
+                  alive so the user can click another step / edit /
+                  re-run. Worker keeps grinding the current Playwright
+                  action until it completes (no mid-action interrupt),
+                  but for typical steps that's a sub-second wait. */}
+              {isExecuting ? (
                 <Button
                   variant="destructive"
                   size="sm"

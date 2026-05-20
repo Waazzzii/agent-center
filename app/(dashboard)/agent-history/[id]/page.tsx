@@ -26,10 +26,11 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner';
 import {
   Loader2, Zap, LogIn, Play, GitBranch, PauseCircle,
-  AlertCircle, Copy, Hash, Bot, History, ChevronRight, ImageIcon, ExternalLink,
+  AlertCircle, Copy, Hash, Bot, History, ChevronRight, ChevronLeft,
+  ImageIcon, ExternalLink,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
+import { getActionBatchItems, getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
 import { useEventStream } from '@/lib/hooks/use-event-stream';
 import { LogViewer } from '@/components/execution/LogViewer';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
@@ -446,6 +447,174 @@ function PayloadView({
  * is already a clear-enough affordance that the operator knows to
  * look elsewhere.
  */
+/**
+ * Multi-screenshot gallery — used when a batch action has per-iteration
+ * screenshots. Left/right nav cycles through the set; the metadata strip
+ * surfaces _input_id (the batch correlation id, set on each item's
+ * input) so operators can tie a screenshot back to a specific row in
+ * their source data without leaving the modal.
+ *
+ * Each shot still reuses the same enlarge-on-click + open-original
+ * affordances as the single-image ScreenshotPanel, just wrapped in a
+ * controlled carousel.
+ */
+type GalleryShot = {
+  /** Per-item action_log id — used as React key. */
+  id: string;
+  /** Signed GCS URL. 7-day TTL — see ScreenshotPanel doc comment. */
+  url: string;
+  /** batch_item_index, 0-based. Drives the "N of M" label. */
+  index: number;
+  /** _input_id from the per-item input row, when the agent's input
+   *  format included one. Surfaces in the metadata strip so operators
+   *  can correlate to source data / logs. */
+  inputId: string | null;
+};
+
+function ScreenshotGallery({
+  shots,
+  actionLabel,
+}: {
+  shots: GalleryShot[];
+  actionLabel: string;
+}) {
+  const [cursor, setCursor] = useState(0);
+  const [zoomOpen, setZoomOpen] = useState(false);
+  const total = shots.length;
+  // Clamp on shrinking sets (rare, but safe under realtime updates).
+  const safeCursor = Math.min(cursor, Math.max(0, total - 1));
+  const current = shots[safeCursor];
+
+  // Keyboard navigation — arrows step through the carousel anywhere
+  // (including inside the zoom modal, since both share this handler).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (total <= 1) return;
+      if (e.key === 'ArrowLeft')  setCursor((c) => (c <= 0 ? total - 1 : c - 1));
+      if (e.key === 'ArrowRight') setCursor((c) => (c >= total - 1 ? 0 : c + 1));
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [total]);
+
+  if (total === 0 || !current) {
+    return (
+      <div className="rounded-lg border border-border/50 bg-card px-4 py-6">
+        <p className="text-xs text-muted-foreground italic">No screenshots captured for this batch.</p>
+      </div>
+    );
+  }
+
+  const captionLabel = current.inputId
+    ? `Input ${current.inputId}`
+    : `Item #${current.index}`;
+  const fullLabel = `${actionLabel} — ${captionLabel}`;
+
+  return (
+    <>
+      <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden h-[28rem] bg-card">
+        {/* Toolbar — preset chips, position, open-original link */}
+        <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-muted/20 border-b border-border/30 shrink-0 text-[10px] text-muted-foreground">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="tabular-nums shrink-0">{safeCursor + 1} / {total}</span>
+            <span className="truncate font-mono text-foreground/80" title={captionLabel}>
+              {captionLabel}
+            </span>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <span>Click to enlarge</span>
+            <a
+              href={current.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground flex items-center gap-1"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <ExternalLink className="h-3 w-3" /> Open original
+            </a>
+          </div>
+        </div>
+
+        {/* Image + side nav buttons */}
+        <div className="relative flex-1 min-h-0 overflow-hidden bg-muted/10">
+          <button
+            type="button"
+            className="absolute inset-0 flex items-center justify-center p-2 hover:bg-muted/20 transition-colors"
+            onClick={() => setZoomOpen(true)}
+            aria-label="Enlarge screenshot"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              key={current.id}
+              src={current.url}
+              alt={`Screenshot ${captionLabel}`}
+              className="max-w-full max-h-full object-contain"
+            />
+          </button>
+
+          {total > 1 && (
+            <>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCursor((c) => (c <= 0 ? total - 1 : c - 1));
+                }}
+                className="absolute left-1 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-background/85 border border-border/60 shadow flex items-center justify-center hover:bg-background"
+                aria-label="Previous screenshot"
+              >
+                <ChevronLeft className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setCursor((c) => (c >= total - 1 ? 0 : c + 1));
+                }}
+                className="absolute right-1 top-1/2 -translate-y-1/2 h-9 w-9 rounded-full bg-background/85 border border-border/60 shadow flex items-center justify-center hover:bg-background"
+                aria-label="Next screenshot"
+              >
+                <ChevronRight className="h-4 w-4" />
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      <Dialog open={zoomOpen} onOpenChange={setZoomOpen}>
+        <DialogContent className="max-w-[95vw] sm:max-w-[95vw] max-h-[95vh] p-2 sm:p-4">
+          <DialogHeader className="px-2 pt-1">
+            <DialogTitle className="text-sm font-medium truncate flex items-center gap-2">
+              <ImageIcon className="h-4 w-4" />
+              <span className="truncate">{fullLabel}</span>
+              <span className="ml-2 text-[10px] font-normal text-muted-foreground tabular-nums">
+                {safeCursor + 1} / {total}
+              </span>
+              <a
+                href={current.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="ml-auto text-[10px] font-normal text-muted-foreground hover:text-foreground flex items-center gap-1 shrink-0"
+              >
+                <ExternalLink className="h-3 w-3" /> Open original
+              </a>
+            </DialogTitle>
+          </DialogHeader>
+          <div className="overflow-auto max-h-[calc(95vh-4rem)] bg-muted/10 rounded">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              key={current.id}
+              src={current.url}
+              alt={`Screenshot ${captionLabel}`}
+              className="w-full h-auto"
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
 function ScreenshotPanel({ url, actionLabel }: { url: string; actionLabel: string }) {
   const [zoomOpen, setZoomOpen] = useState(false);
   return (
@@ -593,13 +762,80 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
     action.action_type === 'approval' ? 'Approval steps do not emit logs.' :
     'No log entries recorded.';
 
-  // Conditionally render the Screenshot tab when a screenshot URL is
-  // populated. Captured by the upload pipeline for browser_script and
-  // auto-login actions (success-time on done, failure-time on throw).
-  // Operators triaging "login timed out waiting for the field" or
-  // "script reported success but extracted nothing useful" can see
-  // exactly what the page looked like at the moment of capture.
-  const hasScreenshot = !!action.screenshot_url;
+  // Screenshot tab gating + data prep.
+  //
+  // Three cases:
+  //   1. Non-batch action with screenshot_url → single image view.
+  //   2. Batch parent (batch_item_count > 0) → fetch per-item rows and
+  //      render a gallery cycling through every captured shot. We light
+  //      the tab even when the parent action_log itself has no
+  //      screenshot_url (batches don't capture an aggregate shot — only
+  //      per-item ones).
+  //   3. Batch item (one of the children) → its own single shot via
+  //      case 1.
+  //
+  // The fetch is gated by tab activation (state in `screenshotTab` so
+  // we don't spam the API on every render). Same `getActionBatchItems`
+  // endpoint the tree expansion uses — request shape mirrors there.
+  const isBatchParent = (action.batch_item_count ?? 0) > 0;
+  const hasScreenshot = !!action.screenshot_url || isBatchParent;
+  const [batchShots, setBatchShots] = useState<GalleryShot[] | null>(null);
+  const [batchShotsLoading, setBatchShotsLoading] = useState(false);
+
+  useEffect(() => {
+    // Clear when switching to a different action so we don't flash stale
+    // shots from the previous selection.
+    setBatchShots(null);
+    setBatchShotsLoading(false);
+  }, [action.id]);
+
+  // Lazy-load batch screenshots the first time the tab needs them.
+  // Triggered when `isBatchParent && batchShots === null` and the
+  // Screenshot tab content actually mounts (TabsContent only renders
+  // its children when active in shadcn's Radix-backed Tabs). We
+  // duplicate the effect's trigger in `loadBatchShots` so a tab change
+  // re-checks rather than relying on a fragile mount hook.
+  const loadBatchShots = useCallback(async () => {
+    if (!isBatchParent || batchShots !== null || batchShotsLoading) return;
+    if (!orgId || !executionId) return;
+    setBatchShotsLoading(true);
+    try {
+      const res = await getActionBatchItems(orgId, executionId, action.id);
+      const shots: GalleryShot[] = res.items
+        .filter((item) => typeof item.screenshot_url === 'string' && item.screenshot_url)
+        .map((item) => {
+          // _input_id comes off the per-item input JSON. The structure is
+          // `[{ _input_id, ...sourceFields }]` (single-element array per
+          // batch iteration — see agent-executor's per-item flow). We
+          // parse defensively because input is TEXT in the DB and might
+          // not always be valid JSON for legacy rows.
+          let inputId: string | null = null;
+          if (item.input) {
+            try {
+              const parsed = typeof item.input === 'string' ? JSON.parse(item.input) : item.input;
+              const first = Array.isArray(parsed) ? parsed[0] : parsed;
+              if (first && typeof first === 'object' && '_input_id' in first) {
+                const v = (first as Record<string, unknown>)._input_id;
+                if (typeof v === 'string' || typeof v === 'number') inputId = String(v);
+              }
+            } catch { /* ignore malformed input */ }
+          }
+          return {
+            id: item.id,
+            url: item.screenshot_url as string,
+            index: item.batch_item_index ?? 0,
+            inputId,
+          };
+        })
+        .sort((a, b) => a.index - b.index);
+      setBatchShots(shots);
+    } catch {
+      // Silent — operator can switch tabs and back to retry.
+      setBatchShots([]);
+    } finally {
+      setBatchShotsLoading(false);
+    }
+  }, [isBatchParent, batchShots, batchShotsLoading, orgId, executionId, action.id]);
 
   return (
     <div className="space-y-3">
@@ -656,8 +892,45 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
         </TabsContent>
 
         {hasScreenshot && (
-          <TabsContent value="screenshot">
-            <ScreenshotPanel url={action.screenshot_url!} actionLabel={action.label} />
+          <TabsContent
+            value="screenshot"
+            // Lazy-load batch shots on first activation of this tab.
+            // Radix only renders TabsContent when active, so this hook
+            // fires exactly when the gallery becomes visible.
+            onFocus={loadBatchShots}
+            onMouseEnter={loadBatchShots}
+          >
+            {isBatchParent ? (
+              batchShotsLoading ? (
+                <div className="flex items-center justify-center h-[28rem] rounded-lg border border-border/50 bg-card">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : batchShots && batchShots.length > 0 ? (
+                <ScreenshotGallery shots={batchShots} actionLabel={action.label} />
+              ) : batchShots && batchShots.length === 0 ? (
+                <div className="rounded-lg border border-border/50 bg-card px-4 py-6">
+                  <p className="text-xs text-muted-foreground italic">
+                    No screenshots captured for the items in this batch.
+                  </p>
+                </div>
+              ) : (
+                // batchShots === null and not loading — kick the fetch
+                // on next render (clicking the tab triggers onMouseEnter).
+                <div className="flex items-center justify-center h-[28rem] rounded-lg border border-border/50 bg-card">
+                  <button
+                    type="button"
+                    onClick={loadBatchShots}
+                    className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+                  >
+                    Load screenshots
+                  </button>
+                </div>
+              )
+            ) : (
+              action.screenshot_url && (
+                <ScreenshotPanel url={action.screenshot_url} actionLabel={action.label} />
+              )
+            )}
           </TabsContent>
         )}
       </Tabs>

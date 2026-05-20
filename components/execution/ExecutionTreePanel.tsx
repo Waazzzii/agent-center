@@ -115,12 +115,20 @@ function TreeNodeRow({
             ? new Date(item.completed_at).getTime() - new Date(item.started_at).getTime()
             : null,
           action_type: item.action_type,
+          // input is carried through so the action detail can show
+          // per-iteration variables (and so the Screenshot tab can
+          // surface _input_id for correlation back to source data).
+          input: item.input,
           output: item.output,
           error_message: item.error_message,
           tokens_input: item.tokens_input,
           tokens_output: item.tokens_output,
           model: item.model,
           batch_item_index: item.batch_item_index,
+          // Per-item screenshot URL — without this, the Screenshot tab
+          // never lights up for batch_item nodes because the gating
+          // boolean (hasScreenshot) reads action.screenshot_url.
+          screenshot_url: item.screenshot_url ?? null,
         }));
         setBatchItems(items);
       } catch {
