@@ -31,6 +31,7 @@ import {
   startStepRun,
   getStepRun,
   executeStepRunStep,
+  interruptStepRun,
   jumpStepRunToIndex,
   abortStepRun,
   startStepRunRecording,
@@ -789,6 +790,15 @@ export function RunScriptModal({
     setError(null);
     try {
       const res = await executeStepRunStep(orgId, runId, params, controller.signal);
+      // Worker returned 200 with interrupted=true — operator's Stop
+      // signaled the worker BEFORE the HTTP abort raced it. The worker
+      // has already flipped status back to 'waiting' and didn't
+      // advance currentIndex, so we just confirm the cancel in the UI.
+      if (res.interrupted) {
+        setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
+        toast.info('Step stopped');
+        return;
+      }
       setStepRunState((s) => {
         // Merge the executed step back so auto-locked selectors are reflected
         const steps = [...(s?.steps ?? [])];
@@ -897,19 +907,36 @@ export function RunScriptModal({
     }
   };
 
-  /** Stop button handler — cancels the auto-run loop but keeps the step
-   *  run alive so the user can click individual steps, re-run, edit, etc.
-   *  Only the in-flight HTTP request is aborted (so we don't wait for the
-   *  current step to finish). The backend session stays intact. */
+  /** Stop button handler — cancels the auto-run loop AND the in-flight
+   *  per-step Playwright action. Two-pronged because each side does
+   *  half the work:
+   *    1. autoRunAbortRef.current.abort() — drops the in-flight HTTP
+   *       request so the UI's `await` returns immediately. Without
+   *       this the spinner would hang until the worker responded.
+   *    2. interruptStepRun(...) — tells the worker to abort the
+   *       per-execute AbortController in its step-run state machine,
+   *       which races the Playwright primitive to an AbortError and
+   *       flips the run's status back to 'waiting'. Without this the
+   *       worker keeps the orphan action running and the next step
+   *       click goes nowhere because the session is still "running".
+   *
+   *  The backend session itself stays alive — abortStepRun is the
+   *  full-teardown call we explicitly DON'T want here. */
   const handleStopAutoRun = () => {
     cancelAutoRunRef.current = true;
-    // Abort the in-flight HTTP request so the await returns immediately
+    // 1. Abort the HTTP request so the UI returns immediately.
     if (autoRunAbortRef.current) {
       autoRunAbortRef.current.abort();
       autoRunAbortRef.current = null;
     }
-    // Don't call abortStepRun — that kills the backend session and makes
-    // all subsequent step clicks return "step run not found".
+    // 2. Tell the worker to drop the Playwright primitive. Fire-and-
+    // forget — if the network call fails, the local abort above still
+    // protects the UI, and the worker's own timeouts will eventually
+    // free the session. We don't surface errors here because clicking
+    // Stop should never feel like it failed.
+    if (orgId && runId) {
+      void interruptStepRun(orgId, runId).catch(() => { /* silent */ });
+    }
   };
 
   const handleJumpToStep = async (targetIndex: number) => {

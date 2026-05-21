@@ -325,8 +325,24 @@ export async function executeStepRunStep(
   runId: string,
   params?: Record<string, string>,
   signal?: AbortSignal,
-): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep; pageUrl?: string | null }> {
+): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep; pageUrl?: string | null; interrupted?: boolean }> {
   const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/execute`, params ? { params } : undefined, { signal });
+  return res.data;
+}
+
+/**
+ * Interrupt the in-flight step on the worker. Sibling to executeStepRunStep
+ * — operator's Stop button fires this so the running step gives up its
+ * Playwright primitive and the session state flips back to "waiting" so
+ * the operator can click another step right away (vs the old behavior:
+ * worker keeps running the orphan action, session locks up until
+ * timeout).
+ */
+export async function interruptStepRun(
+  orgId: string,
+  runId: string,
+): Promise<{ interrupted: boolean; status?: string; reason?: string }> {
+  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/interrupt`);
   return res.data;
 }
 
