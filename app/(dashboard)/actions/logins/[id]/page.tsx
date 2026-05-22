@@ -156,7 +156,7 @@ export default function EditLoginPage() {
         limit:  RUNS_PER_PAGE,
         offset: page * RUNS_PER_PAGE,
       });
-      setRecentRunsTotal(res.total);
+      setRecentRunsTotal((prev) => (prev === res.total ? prev : res.total));
       // If the total shrank below the current page (rare — cascade delete
       // or admin cleanup), snap back to the last valid page. Skip the
       // rows update so we don't briefly flash an empty table; the snap
@@ -166,7 +166,28 @@ export default function EditLoginPage() {
         setRecentRunsPage(maxPage);
         return;
       }
-      setRecentRuns(res.rows);
+      // Reference-stable update — SSE breadcrumbs during a long run cause
+      // this to refetch repeatedly even though the audit list rarely
+      // changes mid-run. Replacing the array on every fetch was forcing
+      // the table to re-render and the page to "bounce". Only swap in
+      // the new array when the shape OR content of any row differs.
+      setRecentRuns((prev) => {
+        if (prev.length !== res.rows.length) return res.rows;
+        for (let i = 0; i < prev.length; i++) {
+          const a = prev[i];
+          const b = res.rows[i];
+          if (
+            a.id !== b.id
+            || a.status !== b.status
+            || a.outcome !== b.outcome
+            || a.error_message !== b.error_message
+            || a.started_at !== b.started_at
+          ) {
+            return res.rows;
+          }
+        }
+        return prev;
+      });
     } catch {
       // Best-effort — don't toast on this one, it's a secondary panel.
     }
@@ -314,8 +335,29 @@ export default function EditLoginPage() {
       if (silent) {
         // Lightweight refresh — just pull the login row. Status / pill /
         // last_checked_at flip in place; nothing else moves.
+        //
+        // Reference-stable update: SSE breadcrumbs during a verify/login
+        // run fire this many times in quick succession. Replacing the
+        // `login` object on every call forced every Card on the page to
+        // re-render (the form, scripts panel, recent runs — anything that
+        // closes over `login`) and produced a "bouncing page" feel. Only
+        // swap in the new object when a display-relevant field actually
+        // changed.
         const loginData = await getLogin(selectedOrgId, id);
-        setLogin(loginData);
+        setLogin((prev) => {
+          if (!prev) return loginData;
+          const changed =
+            prev.status !== loginData.status
+            || prev.last_checked_at !== loginData.last_checked_at
+            || prev.last_logged_in_at !== loginData.last_logged_in_at
+            || prev.credentials_secret_id !== loginData.credentials_secret_id
+            || prev.auto_login_script_id !== loginData.auto_login_script_id
+            || prev.notification_slack_channel_id !== loginData.notification_slack_channel_id
+            || prev.name !== loginData.name
+            || prev.url !== loginData.url
+            || prev.verify_text !== loginData.verify_text;
+          return changed ? loginData : prev;
+        });
         return;
       }
       const [loginData, groups, loginGroups, scriptsData] = await Promise.all([
@@ -423,8 +465,34 @@ export default function EditLoginPage() {
       // for an active run we're tracking). Silent refresh so the form,
       // credentials editor, and script picker don't re-render.
       if (!eventForThisLogin && !ev.type?.startsWith('login_run.')) return;
+      // Filter breadcrumbs: events that don't carry a state change
+      // (per-step log entries, progress pings) shouldn't trigger a
+      // refresh at all — the status pill and timestamps won't change,
+      // and refetching the audit list just rewrites identical rows. We
+      // only refresh on event types that are *terminal-shaped* (started,
+      // completed, failed, aborted, status_changed) or that explicitly
+      // signal a status flip on the login row. Breadcrumb/log/progress
+      // events get dropped here.
+      //
+      // The reference-stable setLogin / setRecentRuns updates below mean
+      // even if a stray refresh slips through, it won't actually
+      // re-render anything when the data hasn't changed.
+      const t = ev.type ?? '';
+      const isStateChange =
+        t.endsWith('.started')
+        || t.endsWith('.completed')
+        || t.endsWith('.failed')
+        || t.endsWith('.aborted')
+        || t.endsWith('.status_changed')
+        || t === 'login.updated'
+        || t === 'login.status_changed';
+      if (!isStateChange) return;
+      // Debounce to 600ms so a burst of near-simultaneous terminal
+      // events (e.g. login_run.completed + login.status_changed firing
+      // back-to-back at end of a run) coalesces into a single fetch
+      // rather than two flashes.
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
-      refreshTimer.current = setTimeout(() => { load(true); loadRecentRuns(); }, 150);
+      refreshTimer.current = setTimeout(() => { load(true); loadRecentRuns(); }, 600);
     },
   });
 
