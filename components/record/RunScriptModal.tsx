@@ -14,7 +14,7 @@ import {
 } from '@/components/ui/dialog';
 import {
   CheckCircle2, ChevronRight, ChevronsRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
-  CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, GripVertical, PanelRightClose, PanelRightOpen,
+  CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
   Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, ListTodo, LogIn, KeyRound,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
@@ -95,6 +95,7 @@ function autoStepLabel(step: RecordedStep): string {
     case 'close_tab':  return 'Close tab';
     case 'wait_for':     return `Wait: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? 'element'}`;
     case 'wait_for_tab': return `Wait for new tab${step.selector ? `: ${step.waitFor?.description ?? step.selector}` : ''}`;
+    case 'pause':        return `Pause ${typeof step.duration_ms === 'number' ? `${step.duration_ms}ms` : ''}`.trim();
     default:           return step.action;
   }
 }
@@ -1127,6 +1128,47 @@ export function RunScriptModal({
     }
   };
 
+  // ── Add pause step — pure time-based delay, no element picker ──
+  // Drops a `pause` step after the current cursor position. Sleeps
+  // `duration_ms` on the worker before the next step runs. Useful for
+  // the "next step's target needs longer to settle than wait_for can
+  // reliably detect" case (e.g. a button whose `disabled` flips ~7s
+  // after a prior click without a DOM mutation we can target).
+  const handleAddPauseStep = async () => {
+    if (!runId || !orgId || !stepRunState) return;
+    // Prompt for a duration; default to 5s as a reasonable starting point
+    // for "the next step's target needs a moment to settle." Worker
+    // caps anything > 5min on its side, so we just validate as a
+    // positive integer here.
+    const raw = typeof window !== "undefined"
+      ? window.prompt("Pause duration in milliseconds:", "5000")
+      : null;
+    if (raw === null) return; // operator cancelled
+    const parsed = parseInt(raw, 10);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      toast.error("Enter a positive number of milliseconds");
+      return;
+    }
+    const pauseStep: RecordedStep = {
+      action: "pause",
+      duration_ms: parsed,
+    };
+    const idx = stepRunState.currentIndex + 1;
+    const newSteps = [...(stepRunState.steps ?? [])];
+    newSteps.splice(idx, 0, pauseStep);
+    setStepRunState((s) => s ? {
+      ...s,
+      steps: newSteps,
+      totalSteps: newSteps.length,
+      step: pauseStep,
+    } : s);
+    setEditedStep(JSON.stringify(pauseStep, null, 2));
+    setNewStepIndices((prev) => new Set([...prev, idx]));
+    setHasChanges(true);
+    await syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+    toast.success(`Pause step added (${parsed}ms)`);
+  };
+
   // ── Add extract step — triggers element picker, then inserts ──
   const handleAddExtractStep = async () => {
     if (!runId || !orgId || !stepRunState || isCapturingExtract) return;
@@ -1953,6 +1995,7 @@ export function RunScriptModal({
                 cancelStepRunWaitForCapture(orgId!, runId!).catch(() => {});
                 setIsCapturingWaitFor(false);
               } : handleAddWaitStep}
+              onSelectAddPause={handleAddPauseStep}
               onSelectExtractElement={isCapturingExtract ? () => {
                 captureExtractAbortRef.current?.abort();
                 captureExtractAbortRef.current = null;
@@ -2633,6 +2676,12 @@ interface ModeDropdownProps {
   onSelectAuto: () => void;
   onSelectRecordInteractions: () => void;
   onSelectRecordWait: () => void;
+  /** Insert a pure time-based pause step at the current cursor. Unlike
+   *  Record Wait, this doesn't need an element — useful when the next
+   *  step's target needs longer to settle than wait_for can reliably
+   *  detect (e.g. a button whose `disabled` flips ~7s after a prior
+   *  click without any DOM mutation we can hook on). */
+  onSelectAddPause: () => void;
   onSelectExtractElement: () => void;
   onSelectExtractUrl: () => void | Promise<void>;
   onSelectCopyPage: () => void | Promise<void>;
@@ -2641,6 +2690,7 @@ interface ModeDropdownProps {
 function ModeDropdown({
   autoMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
   onSelectStep, onSelectAuto, onSelectRecordInteractions, onSelectRecordWait,
+  onSelectAddPause,
   onSelectExtractElement, onSelectExtractUrl, onSelectCopyPage,
 }: ModeDropdownProps) {
   // Compute the current mode label + icon. Capture states take
@@ -2729,6 +2779,19 @@ function ModeDropdown({
             <div className="font-medium">{isCapturingWaitFor ? 'Cancel Wait Capture' : 'Record Wait'}</div>
             <div className="text-muted-foreground text-[10px]">
               {isCapturingWaitFor ? 'Stop waiting for the next click' : 'Click an element to insert a wait-for step'}
+            </div>
+          </div>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className="gap-2 cursor-pointer"
+          onClick={onSelectAddPause}
+          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
+        >
+          <Hourglass className="h-3.5 w-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">Add Pause</div>
+            <div className="text-muted-foreground text-[10px]">
+              Fixed-duration delay before the next step (no element required)
             </div>
           </div>
         </DropdownMenuItem>

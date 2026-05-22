@@ -26,6 +26,7 @@ import {
   Layers,
   X,
   Timer,
+  Hourglass,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { RecordedStep } from '@/lib/api/scripts';
@@ -63,6 +64,7 @@ const ACTION_ICONS: Record<ActionType, React.ReactNode> = {
   close_tab:  <X className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
   wait_for:     <Timer className="h-3.5 w-3.5 text-indigo-400 shrink-0" />,
   wait_for_tab: <Layers className="h-3.5 w-3.5 text-blue-400 shrink-0" />,
+  pause:        <Hourglass className="h-3.5 w-3.5 text-indigo-400 shrink-0" />,
 };
 
 function StepDescription({ step }: { step: RecordedStep }) {
@@ -193,6 +195,16 @@ function StepDescription({ step }: { step: RecordedStep }) {
               {step.waitFor?.description ?? step.selector}
             </span>
           )}
+        </span>
+      );
+    case 'pause':
+      return (
+        <span className="flex items-center gap-1.5 text-sm flex-wrap">
+          {ACTION_ICONS.pause}
+          <span className="text-muted-foreground">Pause</span>
+          <span className="font-mono text-xs text-indigo-400">
+            {typeof step.duration_ms === 'number' ? `${step.duration_ms}ms` : '0ms'}
+          </span>
         </span>
       );
     default:
@@ -446,6 +458,7 @@ const ACTION_LABELS: Record<ActionType, string> = {
   close_tab:  'Close Tab',
   wait_for:     'Wait For',
   wait_for_tab: 'Wait For Tab',
+  pause:        'Pause',
 };
 
 function AddStepForm({ onAdd, onCancel }: { onAdd: (step: RecordedStep) => void; onCancel: () => void }) {
