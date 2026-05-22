@@ -85,8 +85,15 @@ export default function EditLoginPage() {
 
   const [form, setForm] = useState<LoginFormData>({ name: '', url: '', verify_text: '' });
 
-  // Verify / login session state
-  const [isStarting, setIsStarting] = useState(false);
+  // Verify / login session state. `startingAction` tracks WHICH button
+  // was just clicked so we only spin the one that's actually starting up
+  // — a single `isStarting` boolean would spin every button (Verify and
+  // Log Out share the row, so the wrong icon would animate). All buttons
+  // remain disabled while any action is in flight to prevent the operator
+  // from kicking off two browser-slot sessions at once.
+  type StartingAction = 'verify' | 'login' | 'logout' | null;
+  const [startingAction, setStartingAction] = useState<StartingAction>(null);
+  const isStarting = startingAction !== null;
   const [activeSession, setActiveSessionState] = useState<ActiveVerifySession | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
 
@@ -564,7 +571,7 @@ export default function EditLoginPage() {
 
   const handleVerify = async () => {
     if (!selectedOrgId) return;
-    setIsStarting(true);
+    setStartingAction('verify');
     try {
       const result = await verifyLogin(selectedOrgId, id);
       setActiveVerifySession({
@@ -578,13 +585,13 @@ export default function EditLoginPage() {
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to start verify');
     } finally {
-      setIsStarting(false);
+      setStartingAction(null);
     }
   };
 
   const handleLogin = async () => {
     if (!selectedOrgId) return;
-    setIsStarting(true);
+    setStartingAction('login');
     try {
       const result = await startLogin(selectedOrgId, id);
       setActiveVerifySession({
@@ -598,7 +605,7 @@ export default function EditLoginPage() {
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to start login');
     } finally {
-      setIsStarting(false);
+      setStartingAction(null);
     }
   };
 
@@ -609,7 +616,7 @@ export default function EditLoginPage() {
   // currently valid; the button is hidden in the 'needs_login' state.
   const handleLogout = async () => {
     if (!selectedOrgId) return;
-    setIsStarting(true);
+    setStartingAction('logout');
     try {
       const result = await startLogout(selectedOrgId, id);
       setActiveVerifySession({
@@ -623,7 +630,7 @@ export default function EditLoginPage() {
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to start logout');
     } finally {
-      setIsStarting(false);
+      setStartingAction(null);
     }
   };
 
@@ -683,21 +690,30 @@ export default function EditLoginPage() {
               {needsLogin ? (
                 <Button size="sm" onClick={handleLogin} disabled={isStarting || !!activeSession}
                   className="bg-warning hover:bg-warning/90 text-white text-xs">
-                  {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
+                  {startingAction === 'login' ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
                   <span className="ml-1">Log In</span>
                 </Button>
               ) : (
                 <>
+                  {/* Spinner only when THIS button is the one starting up
+                      (startingAction === 'verify') or there's a live
+                      verify session running. If the operator clicked Log
+                      Out, Verify just shows as disabled with its normal
+                      icon — no misleading animation. */}
                   <Button variant="outline" size="sm" onClick={handleVerify} disabled={isStarting || !!activeSession} className="text-xs">
-                    {isStarting || activeSession ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
-                    <span className="ml-1">{activeSession ? 'Verifying...' : 'Verify'}</span>
+                    {startingAction === 'verify' || (activeSession && activeSession.kind === 'login_verify')
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <ShieldCheck className="h-3 w-3" />}
+                    <span className="ml-1">
+                      {activeSession && activeSession.kind === 'login_verify' ? 'Verifying...' : 'Verify'}
+                    </span>
                   </Button>
                   {/* Logout — interactive HITL session so the operator can
                       manually click "log out" in the app, then hit Done to
                       persist the now-logged-out state. Only meaningful when
                       the profile is currently valid; hidden in needs_login. */}
                   <Button variant="outline" size="sm" onClick={handleLogout} disabled={isStarting || !!activeSession} className="text-xs">
-                    {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
+                    {startingAction === 'logout' ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
                     <span className="ml-1">Log Out</span>
                   </Button>
                 </>
