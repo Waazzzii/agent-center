@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
-  getLogin, updateLogin, deleteLogin, verifyLogin, startLogin,
+  getLogin, updateLogin, deleteLogin, verifyLogin, startLogin, startLogout,
   setLoginCredentials, clearLoginCredentials, testAutoLogin,
   listLoginRuns,
   type Login, type LoginRunAudit,
@@ -38,7 +38,7 @@ import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  Loader2, LogIn, Save, Trash2,
+  Loader2, LogIn, LogOut, Save, Trash2,
   CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
   Sparkles, Plus, X as XIcon, Eye, EyeOff, KeyRound,
 } from 'lucide-react';
@@ -113,8 +113,17 @@ export default function EditLoginPage() {
   // Auto-login TEST state — driven by `login.test_phase` SSE events. No
   // browser viewer; the operator gets live status text + a final outcome
   // message inline in the card.
+  //
+  // `testRunId` is the executionLogId returned by POST /test-auto-login.
+  // It exists purely as a polling fallback: if the terminal SSE event is
+  // lost (tab backgrounded → browser throttles SSE, network blip, server
+  // hiccup), the button would otherwise stay stuck in "Auto-login
+  // proceeding…" forever. While testRunId is set, we poll the run's
+  // terminal status the same way activeSession polling does and force-
+  // reset testPhase when it goes terminal.
   type TestPhase = 'idle' | 'verifying_initial' | 'running_script' | 'verifying_after_script';
   const [testPhase, setTestPhase] = useState<TestPhase>('idle');
+  const [testRunId, setTestRunId] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<{
     kind: 'success' | 'info' | 'error';
     message: string;
@@ -190,6 +199,95 @@ export default function EditLoginPage() {
     return () => { if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; } };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSession?.logId, id, selectedOrgId]);
+
+  // Poll the auto-login TEST run for terminal status as an SSE-loss
+  // fallback. Same shape as the activeSession poll above but keyed off
+  // testRunId. SSE remains the primary signal (it carries the per-phase
+  // breadcrumbs that drive the rotating button label); this poll only
+  // exists so that if the SSE terminal event is missed — tab in the
+  // background and the browser throttled the EventSource, server hiccup,
+  // network blip — the button doesn't stay stuck in "Auto-login
+  // proceeding…" forever. On terminal status with no SSE-driven
+  // testResult set, we render a generic success/failure outcome so the
+  // operator gets visible confirmation without needing to refresh.
+  const testPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (!testRunId) {
+      if (testPollRef.current) { clearInterval(testPollRef.current); testPollRef.current = null; }
+      return;
+    }
+    const tick = async () => {
+      try {
+        const status = await getBrowserRunStatus(testRunId);
+        if (TERMINAL.has(status.status)) {
+          setTestRunId(null);
+          setTestPhase('idle');
+          // Only fill in a fallback result if SSE didn't beat us to it.
+          setTestResult((prev) => prev ?? {
+            kind: status.status === 'completed' ? 'success' : 'error',
+            message:
+              status.status === 'completed'
+                ? 'Test completed.'
+                : status.status === 'aborted'
+                  ? 'Test was aborted.'
+                  : 'Auto-login test failed.',
+          });
+          // Pull the latest login row + audit list so the status pill and
+          // recent-runs table reflect reality. Silent: don't blow away
+          // the form.
+          if (selectedOrgId) { load(true); loadRecentRuns(); }
+        }
+      } catch {
+        // Treat fetch failures as terminal — better to unstick the UI and
+        // let the operator retry than to spin forever on a 404/transient.
+        setTestRunId(null);
+        setTestPhase('idle');
+        setTestResult((prev) => prev ?? {
+          kind: 'error',
+          message: 'Lost track of the auto-login test — refresh to see the latest status.',
+        });
+      }
+    };
+    void tick();
+    testPollRef.current = setInterval(tick, 4000);
+    return () => { if (testPollRef.current) { clearInterval(testPollRef.current); testPollRef.current = null; } };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testRunId, selectedOrgId]);
+
+  // Visibility-change reconcile: when the operator returns to a tab that
+  // was backgrounded long enough for the browser to throttle/kill the
+  // SSE stream, force an immediate silent reload + a poll-tick for any
+  // in-flight test run. Without this, the button can stay stuck in
+  // "Auto-login proceeding…" until the next 4s interval fires.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      if (selectedOrgId) load(true);
+      if (testRunId) {
+        // Fire-and-forget — the polling effect will resync state on the
+        // very next tick regardless, this just hurries it along.
+        getBrowserRunStatus(testRunId).then((status) => {
+          if (TERMINAL.has(status.status)) {
+            setTestRunId(null);
+            setTestPhase('idle');
+            setTestResult((prev) => prev ?? {
+              kind: status.status === 'completed' ? 'success' : 'error',
+              message:
+                status.status === 'completed'
+                  ? 'Test completed.'
+                  : status.status === 'aborted'
+                    ? 'Test was aborted.'
+                    : 'Auto-login test failed.',
+            });
+            if (selectedOrgId) { load(true); loadRecentRuns(); }
+          }
+        }).catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [testRunId, selectedOrgId]);
 
   /**
    * Two flavors of load:
@@ -285,6 +383,7 @@ export default function EditLoginPage() {
         };
         if (phase === 'completed') {
           setTestPhase('idle');
+          setTestRunId(null);
           // Already-logged-in is informational (not a success in the
           // "we exercised the script" sense), everything else is a real
           // pass. UI palette differs accordingly.
@@ -300,6 +399,7 @@ export default function EditLoginPage() {
         }
         if (phase === 'failed') {
           setTestPhase('idle');
+          setTestRunId(null);
           setTestResult({ kind: 'error', message: message ?? 'Auto-login test failed.' });
           if (refreshTimer.current) clearTimeout(refreshTimer.current);
           refreshTimer.current = setTimeout(() => { load(true); loadRecentRuns(); }, 150);
@@ -405,10 +505,16 @@ export default function EditLoginPage() {
     // moment but it avoids a flash of "Test auto-login" while the
     // request is still in flight.
     setTestPhase('verifying_initial');
+    setTestRunId(null);
     try {
-      await testAutoLogin(selectedOrgId, id);
+      const result = await testAutoLogin(selectedOrgId, id);
+      // Capture the runId so the polling fallback (below) can reconcile
+      // testPhase if the terminal SSE event never arrives. Without this,
+      // a backgrounded tab or dropped SSE leaves the button stuck.
+      setTestRunId(result.executionLogId);
     } catch (err: any) {
       setTestPhase('idle');
+      setTestRunId(null);
       setTestResult({
         kind: 'error',
         message: err.response?.data?.error || 'Failed to start auto-login test',
@@ -496,6 +602,31 @@ export default function EditLoginPage() {
     }
   };
 
+  // Manual logout — mirrors the list-page flow. Spins up an interactive
+  // HITL session so the operator can click "log out" in the app UI; when
+  // they hit Done the post-logout state is persisted and the profile
+  // status flips back to 'needs_login'. Only useful when the profile is
+  // currently valid; the button is hidden in the 'needs_login' state.
+  const handleLogout = async () => {
+    if (!selectedOrgId) return;
+    setIsStarting(true);
+    try {
+      const result = await startLogout(selectedOrgId, id);
+      setActiveVerifySession({
+        entityId: id,
+        kind: 'login_logout',
+        logId: result.executionLogId,
+        label: `Log out: ${login?.name}`,
+        mode: 'interactive',
+      });
+      setDialogOpen(true);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to start logout');
+    } finally {
+      setIsStarting(false);
+    }
+  };
+
   if (!allowed) return <NoPermissionContent />;
 
   if (loading) {
@@ -556,10 +687,20 @@ export default function EditLoginPage() {
                   <span className="ml-1">Log In</span>
                 </Button>
               ) : (
-                <Button variant="outline" size="sm" onClick={handleVerify} disabled={isStarting || !!activeSession} className="text-xs">
-                  {isStarting || activeSession ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
-                  <span className="ml-1">{activeSession ? 'Verifying...' : 'Verify'}</span>
-                </Button>
+                <>
+                  <Button variant="outline" size="sm" onClick={handleVerify} disabled={isStarting || !!activeSession} className="text-xs">
+                    {isStarting || activeSession ? <Loader2 className="h-3 w-3 animate-spin" /> : <ShieldCheck className="h-3 w-3" />}
+                    <span className="ml-1">{activeSession ? 'Verifying...' : 'Verify'}</span>
+                  </Button>
+                  {/* Logout — interactive HITL session so the operator can
+                      manually click "log out" in the app, then hit Done to
+                      persist the now-logged-out state. Only meaningful when
+                      the profile is currently valid; hidden in needs_login. */}
+                  <Button variant="outline" size="sm" onClick={handleLogout} disabled={isStarting || !!activeSession} className="text-xs">
+                    {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
+                    <span className="ml-1">Log Out</span>
+                  </Button>
+                </>
               )}
               {activeSession && (
                 <Button variant="outline" size="sm" className="text-xs" onClick={() => setDialogOpen(true)}>
