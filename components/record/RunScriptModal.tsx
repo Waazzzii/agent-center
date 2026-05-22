@@ -15,7 +15,7 @@ import {
 import {
   CheckCircle2, ChevronRight, ChevronsRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
   CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
-  Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, ListTodo, LogIn, KeyRound,
+  Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, ListTodo, LogIn, KeyRound, Zap,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -31,6 +31,7 @@ import {
   startStepRun,
   getStepRun,
   executeStepRunStep,
+  runRemainingStepsAgentMode,
   interruptStepRun,
   jumpStepRunToIndex,
   abortStepRun,
@@ -172,7 +173,21 @@ export function RunScriptModal({
   const [inlineRenameIndex, setInlineRenameIndex] = useState<number | null>(null);
   const [inlineRenameValue, setInlineRenameValue] = useState('');
   const [jumpingTo, setJumpingTo]       = useState<number | null>(null);
-  const [autoMode, setAutoMode]         = useState(false);
+  // Three test-execution modes:
+  //   • 'step'  — Run one step at a time (client-driven, slow pacing).
+  //   • 'auto'  — Client-side loop firing executeStep over HTTP (Auto
+  //               Test). 50-200ms gaps between steps from network RTT.
+  //   • 'agent' — Server-side loop on the worker, one HTTP call.
+  //               No inter-step network latency — matches the agent
+  //               runtime's pacing. Used to reproduce timing-sensitive
+  //               failures that auto mode masks. UI polls /state at
+  //               500ms intervals for live progress.
+  // Legacy `autoMode` boolean kept as a derived value so the existing
+  // mode-dropdown label/icon logic doesn't need to be touched in this
+  // diff.
+  type RunMode = 'step' | 'auto' | 'agent';
+  const [runMode, setRunMode] = useState<RunMode>('step');
+  const autoMode = runMode === 'auto';
 
   // ── Hybrid record+replay (within test mode) ───────────────────
   const [isRecording, setIsRecording]           = useState(false);
@@ -272,7 +287,7 @@ export function RunScriptModal({
     setStepEditError('');
     setHoveredStep(null);
     setJumpingTo(null);
-    setAutoMode(false);
+    setRunMode('step');
     setIsRecording(false);
     setLiveRecordedSteps([]);
     setNewStepIndices(new Set());
@@ -905,6 +920,87 @@ export function RunScriptModal({
       cancelAutoRunRef.current = false;
       setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
       toast.info('Auto-run stopped');
+    }
+  };
+
+  /**
+   * Agent-timing Run All. Sends ONE HTTP request to the backend that
+   * loops every remaining step on the worker, with no editor-side
+   * network latency between iterations. Polls /state every 500ms in
+   * parallel so the UI shows live progress (currentIndex, step list
+   * positions, last screenshot).
+   *
+   * Used to reproduce timing-sensitive failures the editor's Auto Test
+   * masks — e.g. a button whose `disabled` flips a few seconds after a
+   * prior click, where Auto Test's ~150ms inter-step gap is enough for
+   * the page to settle but the agent runtime outruns the settle.
+   */
+  const handleRunAgentMode = async () => {
+    if (!runId || !orgId || !stepRunState || stepRunState.done) return;
+    cancelAutoRunRef.current = false;
+    const controller = new AbortController();
+    autoRunAbortRef.current = controller;
+    setStepRunState((s) => s ? { ...s, status: 'running' } : s);
+    setError(null);
+
+    // Poll /state every 500ms during the long-running request so the
+    // step list advances live. Worker updates stepRuns.currentIndex
+    // synchronously between steps, so this snapshot follows along.
+    // Polling is best-effort — silent failures are tolerated since
+    // the main call's return will overwrite the final state anyway.
+    const pollId = window.setInterval(async () => {
+      try {
+        const snap = await getStepRun(orgId, runId);
+        setStepRunState((s) => s ? {
+          ...s,
+          currentIndex: snap.currentIndex,
+          totalSteps:   snap.totalSteps,
+          step:         snap.step,
+          // Don't overwrite steps[] from the snapshot — auto-locked
+          // selectors are persisted on the final return, and pulling
+          // them mid-run can race with edits the operator made in
+          // the inspector since the run started.
+          screenshot:   snap.lastScreenshot ?? s.screenshot,
+          extracted:    snap.extracted ?? s.extracted,
+          pageUrl:      snap.pageUrl ?? s.pageUrl ?? null,
+        } : s);
+      } catch { /* swallow — see comment above */ }
+    }, 500);
+
+    try {
+      const res = await runRemainingStepsAgentMode(orgId, runId, params, controller.signal);
+      // Final state — the snapshot poll's steps[] mid-run is best-effort;
+      // this is the authoritative final result with auto-locked selectors
+      // already merged into the run's stepRuns state on the worker side.
+      setStepRunState((s) => s ? {
+        currentIndex: res.currentIndex,
+        totalSteps:   res.totalSteps,
+        step:         res.step,
+        steps:        s.steps,
+        screenshot:   res.screenshot,
+        extracted:    res.extracted,
+        done:         res.done,
+        status:       res.done ? 'waiting' : (res.interrupted ? 'waiting' : 'error'),
+        pageUrl:      res.pageUrl ?? s.pageUrl ?? null,
+      } : s);
+      if (res.extracted && Object.keys(res.extracted).length > 0) {
+        setParams((p) => ({ ...p, ...res.extracted }));
+      }
+      if (res.done) toast.success('All steps completed (agent timing)!');
+      else if (res.interrupted) toast.info('Agent run stopped');
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || err?.name === 'CanceledError' || cancelAutoRunRef.current) {
+        setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
+        toast.info('Agent run stopped');
+        return;
+      }
+      const screenshot = err?.response?.data?.screenshot ?? null;
+      const msg = err?.response?.data?.error || err?.message || 'Run failed';
+      setStepRunState((s) => s ? { ...s, status: 'error', screenshot: screenshot ?? s.screenshot } : s);
+      setError(msg);
+    } finally {
+      window.clearInterval(pollId);
+      autoRunAbortRef.current = null;
     }
   };
 
@@ -1981,13 +2077,15 @@ export function RunScriptModal({
           {runId && (
             <ModeDropdown
               autoMode={autoMode}
+              runMode={runMode}
               isRecording={isRecording}
               isCapturingWaitFor={isCapturingWaitFor}
               isCapturingExtract={isCapturingExtract}
               isExecuting={isExecuting}
               disabled={starting}
-              onSelectStep={() => setAutoMode(false)}
-              onSelectAuto={() => setAutoMode(true)}
+              onSelectStep={() => setRunMode('step')}
+              onSelectAuto={() => setRunMode('auto')}
+              onSelectAgent={() => setRunMode('agent')}
               onSelectRecordInteractions={isRecordMode && isRecording ? handleStopRecordSession : handleToggleRecording}
               onSelectRecordWait={isCapturingWaitFor ? () => {
                 captureAbortRef.current?.abort();
@@ -2045,7 +2143,11 @@ export function RunScriptModal({
                 </Button>
               ) : (
                 <Button
-                  onClick={autoMode ? handleRunAll : handleExecuteStep}
+                  onClick={
+                    runMode === 'auto'  ? handleRunAll
+                    : runMode === 'agent' ? handleRunAgentMode
+                    : handleExecuteStep
+                  }
                   disabled={
                     isExecuting ||
                     isCapturingWaitFor ||
@@ -2064,11 +2166,11 @@ export function RunScriptModal({
                 >
                   {isExecuting
                     ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    : autoMode
-                      ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
-                      : <Play className="mr-1.5 h-3 w-3 fill-current" />
+                    : runMode === 'auto'  ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
+                    : runMode === 'agent' ? <Zap className="mr-1.5 h-3.5 w-3.5" />
+                    : <Play className="mr-1.5 h-3 w-3 fill-current" />
                   }
-                  {autoMode ? 'Run All' : 'Run Step'}
+                  {runMode === 'auto' ? 'Run All' : runMode === 'agent' ? 'Run as Agent' : 'Run Step'}
                 </Button>
               )}
             </>
@@ -2666,7 +2768,13 @@ export function RunScriptModal({
 // picking Step / Auto Test just toggles the Run button behavior.
 
 interface ModeDropdownProps {
+  /** Legacy boolean — true when runMode === 'auto'. Kept for the
+   *  existing label/icon logic that distinguishes Auto Test from Step
+   *  Test in the trigger button. */
   autoMode: boolean;
+  /** Current run mode, used for menu-item highlighting across all
+   *  three modes (step / auto / agent). */
+  runMode: 'step' | 'auto' | 'agent';
   isRecording: boolean;
   isCapturingWaitFor: boolean;
   isCapturingExtract: boolean;
@@ -2674,6 +2782,9 @@ interface ModeDropdownProps {
   disabled: boolean;
   onSelectStep: () => void;
   onSelectAuto: () => void;
+  /** Server-side Run All — matches the agent runtime's back-to-back
+   *  step pacing (no editor-side network gap between steps). */
+  onSelectAgent: () => void;
   onSelectRecordInteractions: () => void;
   onSelectRecordWait: () => void;
   /** Insert a pure time-based pause step at the current cursor. Unlike
@@ -2688,16 +2799,22 @@ interface ModeDropdownProps {
 }
 
 function ModeDropdown({
-  autoMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
-  onSelectStep, onSelectAuto, onSelectRecordInteractions, onSelectRecordWait,
+  autoMode, runMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
+  onSelectStep, onSelectAuto, onSelectAgent, onSelectRecordInteractions, onSelectRecordWait,
   onSelectAddPause,
   onSelectExtractElement, onSelectExtractUrl, onSelectCopyPage,
 }: ModeDropdownProps) {
   // Compute the current mode label + icon. Capture states take
   // precedence over the test-mode toggle so the operator can tell at a
   // glance what the next click on the page will do.
-  let label = autoMode ? 'Auto Test' : 'Step Test';
-  let Icon: React.ComponentType<{ className?: string }> = autoMode ? ChevronsRight : Play;
+  let label =
+    runMode === 'auto' ? 'Auto Test' :
+    runMode === 'agent' ? 'Agent Timing' :
+    'Step Test';
+  let Icon: React.ComponentType<{ className?: string }> =
+    runMode === 'auto' ? ChevronsRight :
+    runMode === 'agent' ? Zap :
+    Play;
   let accent = 'text-muted-foreground';
   if (isRecording) {
     label = 'Recording…';
@@ -2733,7 +2850,7 @@ function ModeDropdown({
       <DropdownMenuContent align="end" className="min-w-[240px]">
         <div className={sectionLabelClass}>Test</div>
         <DropdownMenuItem
-          className={cn('gap-2 cursor-pointer', !autoMode && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
+          className={cn('gap-2 cursor-pointer', runMode === 'step' && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
           onClick={onSelectStep}
           disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
         >
@@ -2744,14 +2861,27 @@ function ModeDropdown({
           </div>
         </DropdownMenuItem>
         <DropdownMenuItem
-          className={cn('gap-2 cursor-pointer', autoMode && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
+          className={cn('gap-2 cursor-pointer', runMode === 'auto' && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
           onClick={onSelectAuto}
           disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
         >
           <ChevronsRight className="h-3.5 w-3.5 shrink-0" />
           <div>
             <div className="font-medium">Auto Test</div>
-            <div className="text-muted-foreground text-[10px]">Run all remaining steps in sequence</div>
+            <div className="text-muted-foreground text-[10px]">Run all remaining steps in sequence (editor-paced)</div>
+          </div>
+        </DropdownMenuItem>
+        <DropdownMenuItem
+          className={cn('gap-2 cursor-pointer', runMode === 'agent' && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
+          onClick={onSelectAgent}
+          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
+        >
+          <Zap className="h-3.5 w-3.5 shrink-0" />
+          <div>
+            <div className="font-medium">Agent Timing</div>
+            <div className="text-muted-foreground text-[10px]">
+              Server-side loop — same back-to-back pacing the agent runtime uses. Reproduces timing-sensitive failures Auto Test masks.
+            </div>
           </div>
         </DropdownMenuItem>
 

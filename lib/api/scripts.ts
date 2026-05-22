@@ -323,6 +323,27 @@ export async function getStepRun(orgId: string, runId: string): Promise<StepRun>
   return res.data;
 }
 
+/**
+ * Run every remaining step server-side in one HTTP request, matching
+ * agent-runtime pacing (no inter-step network latency). Long-running —
+ * the request stays open until the script completes, fails, or is
+ * interrupted. UI should poll getStepRun() in parallel for live
+ * progress updates.
+ */
+export async function runRemainingStepsAgentMode(
+  orgId: string,
+  runId: string,
+  params?: Record<string, string>,
+  signal?: AbortSignal,
+): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep; pageUrl?: string | null; interrupted?: boolean }> {
+  const res = await agentClient.post(
+    `/api/admin/${orgId}/step-runs/${runId}/run-remaining`,
+    params ? { params } : undefined,
+    { signal, timeout: 15 * 60 * 1000 },
+  );
+  return res.data;
+}
+
 export async function executeStepRunStep(
   orgId: string,
   runId: string,
