@@ -1220,6 +1220,11 @@ export default function EditLoginPage() {
           runId={activeSession.logId}
           agentName={activeSession.label}
           mode={activeSession.mode}
+          // Drives "Awaiting Login" vs "Awaiting Logout" copy in the
+          // dialog's pill and banner. Matches the list-page mapping —
+          // 'login_logout' is the only kind that flips this to logout
+          // wording; login_verify and login_manual both stay 'login'.
+          purpose={activeSession.kind === 'login_logout' ? 'logout' : 'login'}
         />
       )}
 
