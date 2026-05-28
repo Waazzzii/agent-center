@@ -281,8 +281,17 @@ export default function InteractionsPage() {
                       <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(primary.started_at)}</td>
                       <td className="px-4 py-2.5 text-right">
                         {active ? (
+                          // Two states share this branch:
+                          //   login_manual  → dialog is open, user is logging in
+                          //   login_verify  → Done was clicked, post-login verify
+                          //                   is running in the background
+                          // Both render as a disabled spinner button so the row
+                          // doesn't bounce back to a clickable "Log In" between
+                          // Done and verify-completion. Label differs so the
+                          // operator knows which phase we're in.
                           <Button size="sm" disabled className="bg-warning/60 text-white disabled:opacity-100 text-xs">
-                            <Loader2 className="h-3 w-3 animate-spin mr-1" /> Logging in...
+                            <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                            {active.kind === 'login_verify' ? 'Verifying...' : 'Logging in...'}
                           </Button>
                         ) : (
                           <Button size="sm" onClick={() => handleOpenBrowser(loginId, primary.login_name ?? 'Login')}
@@ -417,6 +426,25 @@ export default function InteractionsPage() {
           runId={activeLoginSessions[viewingLoginId].logId}
           agentName={activeLoginSessions[viewingLoginId].label}
           mode={activeLoginSessions[viewingLoginId].mode}
+          // After Done on a manual login, the backend kicks off an
+          // independent verify run. Swap the active session for this
+          // loginId to track THAT run's id so the row stays in the
+          // "Verifying..." state instead of bouncing back to a
+          // clickable "Log In" button between Done and verify-completion.
+          // The polling effect above keys off the active session's
+          // logId — it'll pick up the new id, poll to terminal, and
+          // then clear, refreshing the row to its final state.
+          onVerifyStarted={(verifyRunId) => {
+            const loginId = viewingLoginId;
+            const label = activeLoginSessions[loginId]?.label ?? 'Verifying login';
+            setActiveVerifySession({
+              entityId: loginId,
+              kind: 'login_verify',
+              logId: verifyRunId,
+              label,
+              mode: 'observe',
+            });
+          }}
         />
       )}
     </div>
