@@ -9,7 +9,7 @@ import {
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Trash2, Pencil, Copy } from 'lucide-react';
-import { listScripts, deleteScript, createScript, type BrowserScript } from '@/lib/api/scripts';
+import { listScripts, deleteScript, createScript, getScriptLoginUsage, type BrowserScript } from '@/lib/api/scripts';
 import { RunScriptModal } from './RunScriptModal';
 
 interface ScriptsListProps {
@@ -24,6 +24,11 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const [runModalScript, setRunModalScript] = useState<BrowserScript | null>(null);
   const [scriptToDelete, setScriptToDelete] = useState<BrowserScript | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  // Login-usage check for the delete-confirmation dialog. Set when the
+  // dialog opens, used to render the "in use by N logins" warning and
+  // gate the Delete button. null = loading; { verify: 0, auto_login: 0 } =
+  // safe to delete; either count > 0 = blocked.
+  const [deleteUsage, setDeleteUsage] = useState<{ verify: number; auto_login: number } | null>(null);
   // Per-script "currently being duplicated" state so the action button can
   // show a busy state without blocking the rest of the table.
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
@@ -83,6 +88,21 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
     }
   };
 
+  // Fetch login-usage when the delete dialog opens so we can show the
+  // "this script is in use" warning before the operator attempts delete.
+  useEffect(() => {
+    if (!orgId || !scriptToDelete) {
+      setDeleteUsage(null);
+      return;
+    }
+    let cancelled = false;
+    setDeleteUsage(null);
+    getScriptLoginUsage(orgId, scriptToDelete.id)
+      .then((usage) => { if (!cancelled) setDeleteUsage(usage); })
+      .catch(() => { if (!cancelled) setDeleteUsage({ verify: 0, auto_login: 0 }); });
+    return () => { cancelled = true; };
+  }, [orgId, scriptToDelete]);
+
   const handleDeleteConfirm = async () => {
     if (!orgId || !scriptToDelete) return;
     setIsDeleting(true);
@@ -92,7 +112,24 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
       setScriptToDelete(null);
       await load();
     } catch (err: any) {
-      toast.error(err?.message || 'Failed to delete script');
+      // Backend returns 409 + { usage: { verify, auto_login } } when a login
+      // still references this script. Surface that to the operator with a
+      // clear message — they need to reassign those logins first.
+      const usage = err?.response?.data?.usage;
+      if (err?.response?.status === 409 && usage) {
+        const verify = usage.verify ?? 0;
+        const autoLogin = usage.auto_login ?? 0;
+        const parts: string[] = [];
+        if (verify > 0)    parts.push(`${verify} login${verify === 1 ? '' : 's'} as verify script`);
+        if (autoLogin > 0) parts.push(`${autoLogin} login${autoLogin === 1 ? '' : 's'} as auto-login script`);
+        toast.error(
+          `Cannot delete — this script is in use by ${parts.join(' and ')}. ` +
+          `Edit those logins and pick a different script first.`,
+          { duration: 8000 }
+        );
+      } else {
+        toast.error(err?.response?.data?.error || err?.message || 'Failed to delete script');
+      }
     } finally {
       setIsDeleting(false);
     }
@@ -213,12 +250,46 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
               <strong className="text-foreground">{scriptToDelete?.name}</strong> will be permanently deleted. This cannot be undone.
             </DialogDescription>
           </DialogHeader>
+
+          {/* In-use warning. Renders when at least one login references the
+              script (verify or auto-login). Delete button is disabled so the
+              operator can't even attempt the destructive call — they must
+              first unlink the script from those logins. */}
+          {deleteUsage && (deleteUsage.verify > 0 || deleteUsage.auto_login > 0) && (
+            <div className="rounded-md border border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 p-3 text-xs text-amber-900 dark:text-amber-200">
+              <p className="font-medium mb-1">This script is in use and cannot be deleted</p>
+              <ul className="list-disc pl-4 space-y-0.5">
+                {deleteUsage.verify > 0 && (
+                  <li>{deleteUsage.verify} login{deleteUsage.verify === 1 ? '' : 's'} use it as the <strong>verify script</strong></li>
+                )}
+                {deleteUsage.auto_login > 0 && (
+                  <li>{deleteUsage.auto_login} login{deleteUsage.auto_login === 1 ? '' : 's'} use it as the <strong>auto-login script</strong></li>
+                )}
+              </ul>
+              <p className="mt-2 opacity-80">Edit those logins and select a different script first, then come back to delete.</p>
+            </div>
+          )}
+
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => setScriptToDelete(null)} disabled={isDeleting}>
               Cancel
             </Button>
-            <Button variant="destructive" size="sm" onClick={handleDeleteConfirm} disabled={isDeleting}>
-              {isDeleting ? 'Deleting…' : 'Delete'}
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleDeleteConfirm}
+              disabled={
+                isDeleting
+                || deleteUsage === null  // still checking
+                || (deleteUsage.verify > 0 || deleteUsage.auto_login > 0)
+              }
+              title={
+                deleteUsage && (deleteUsage.verify > 0 || deleteUsage.auto_login > 0)
+                  ? 'Script is in use — reassign affected logins first'
+                  : undefined
+              }
+            >
+              {isDeleting ? 'Deleting…' : deleteUsage === null ? 'Checking…' : 'Delete'}
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -5,7 +5,15 @@ export interface Login {
   organization_id: string;
   name: string;
   url: string;
+  /** @deprecated — superseded by verify_script_id. Kept in the type only
+   *  because the column still exists in the DB until a future migration
+   *  drops it. No UI surface reads this anymore. */
   verify_text: string;
+  /** Browser script that proves the session is logged in. Required for new
+   *  logins (enforced at API + UI). Running the script to completion = valid;
+   *  any step error or timeout = needs_login. ON DELETE RESTRICT: the script
+   *  cannot be deleted while any login still references it here. */
+  verify_script_id: string | null;
   browser_session_id: string | null;
   /** Any time we ran a verify (regardless of outcome). */
   last_checked_at: string | null;
@@ -50,20 +58,23 @@ export interface Login {
 export interface LoginInput {
   name: string;
   url: string;
-  verify_text: string;
+  /** Required: browser-script ID that verifies the login state. */
+  verify_script_id: string;
 }
 
-/** Patch payload for updateLogin. auto_login_script_id semantics:
+/** Patch payload for updateLogin.
  *   undefined → leave unchanged
- *   null      → explicitly clear the script link
- *   <uuid>    → set to that script
+ *   null      → explicitly clear (only for fields that allow clearing —
+ *               verify_script_id does NOT allow null, the API rejects it)
+ *   <uuid>    → set to that value
  *  (Credentials use the dedicated setLoginCredentials / clearLoginCredentials
  *   endpoints — never set them via patch since they need encryption.) */
 export interface LoginPatch {
   name?: string;
   url?: string;
-  verify_text?: string;
   auto_login_script_id?: string | null;
+  /** Required field — can be replaced but not cleared. API rejects null. */
+  verify_script_id?: string;
   /** undefined = leave alone, null = clear, string = set. Empty string is
    *  treated as null at the API call site. */
   notification_slack_channel_id?: string | null;

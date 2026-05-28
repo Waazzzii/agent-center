@@ -52,6 +52,15 @@ interface Props {
    * 'login' since the vast majority of interactive flows are logins.
    */
   purpose?: 'login' | 'logout';
+  /**
+   * Fires when the user clicks Done for a manual-login flow and the backend
+   * has kicked off the independent post-login verify run. The caller (login
+   * details page) uses this id to subscribe to the verify's status so the
+   * "Verifying..." spinner can flip to its terminal state when verify
+   * completes. Not fired for logout flows or when the backend doesn't
+   * return a verifyRunId.
+   */
+  onVerifyStarted?: (verifyRunId: string) => void;
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -79,7 +88,7 @@ function StatusPill({ status, purpose = 'login' }: { status: BrowserRunStatus['s
   );
 }
 
-export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe', purpose = 'login' }: Props) {
+export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe', purpose = 'login', onVerifyStarted }: Props) {
   // postDone = the user has clicked the Done button and we've handed off
   // to the backend for session-save + (for logins) post-Done verification.
   // The original browser slot is being torn down; a fresh one may be
@@ -252,7 +261,7 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
   const handleDone = async () => {
     setResuming(true);
     try {
-      await resumeBrowserRun(runId);
+      const { verifyRunId } = await resumeBrowserRun(runId);
       // For logins, the server kicks off an independent background verify
       // (separate logId) right after the save — its result will reflect
       // on the Logins list row, not this dialog. For logouts, the save
@@ -276,6 +285,13 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
       }
       setNovnc(null);
       onOpenChange(false);
+      // Hand the verify run's id to the caller AFTER closing the dialog,
+      // so the parent's activeSession swap doesn't briefly re-render this
+      // dialog with the new runId during teardown. Logouts and agent-
+      // action resumes return null here.
+      if (verifyRunId && purpose !== 'logout') {
+        onVerifyStarted?.(verifyRunId);
+      }
     } catch (err: any) {
       // Real failure (e.g. resume route rejected) — keep the dialog open
       // so the user can see what happened.

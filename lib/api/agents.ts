@@ -452,9 +452,19 @@ export async function getBrowserRunStatus(runId: string): Promise<BrowserRunStat
 /**
  * Resume an agent run that is paused waiting for a browser login.
  * Call this after the human has logged in via the noVNC iframe.
+ *
+ * For manual-login login runs (kind='manual'), the backend kicks off an
+ * independent post-login verify run and returns its id as `verifyRunId`.
+ * Callers can use that to subscribe to the verify's status — drives the
+ * "Verifying..." spinner on the login details page back to a settled
+ * state once the verify completes. Returns `null` for non-manual flows
+ * (e.g. logout, or agent-action resumes that don't spawn a verify).
  */
-export async function resumeBrowserRun(runId: string): Promise<void> {
-  await agentClient.post(`/agent/run/${runId}/resume`);
+export async function resumeBrowserRun(runId: string): Promise<{ verifyRunId: string | null }> {
+  const res = await agentClient.post<{ ok: boolean; verifyRunId?: string | null }>(
+    `/agent/run/${runId}/resume`,
+  );
+  return { verifyRunId: res.data?.verifyRunId ?? null };
 }
 
 /**

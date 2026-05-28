@@ -83,7 +83,7 @@ export default function EditLoginPage() {
   const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
   const [loginGroupIds, setLoginGroupIds] = useState<string[]>([]);
 
-  const [form, setForm] = useState<LoginFormData>({ name: '', url: '', verify_text: '' });
+  const [form, setForm] = useState<LoginFormData>({ name: '', url: '', verify_script_id: null });
 
   // Verify / login session state. `startingAction` tracks WHICH button
   // was just clicked so we only spin the one that's actually starting up
@@ -355,7 +355,7 @@ export default function EditLoginPage() {
             || prev.notification_slack_channel_id !== loginData.notification_slack_channel_id
             || prev.name !== loginData.name
             || prev.url !== loginData.url
-            || prev.verify_text !== loginData.verify_text;
+            || prev.verify_script_id !== loginData.verify_script_id;
           return changed ? loginData : prev;
         });
         return;
@@ -367,7 +367,7 @@ export default function EditLoginPage() {
         listScripts(selectedOrgId).catch(() => ({ scripts: [] as BrowserScript[] })),
       ]);
       setLogin(loginData);
-      setForm({ name: loginData.name, url: loginData.url, verify_text: loginData.verify_text });
+      setForm({ name: loginData.name, url: loginData.url, verify_script_id: loginData.verify_script_id ?? null });
       setAllGroups(groups);
       setLoginGroupIds(loginGroups.map((g) => g.id));
       setScripts(scriptsData.scripts ?? []);
@@ -508,6 +508,9 @@ export default function EditLoginPage() {
       // patch. null tells the backend to unset the FK; undefined
       // (= "not provided") would leave it alone.
       const scriptChanged = scriptId !== (login?.auto_login_script_id ?? null);
+      // verify_script_id is required (route-layer rejects nulls). Only send
+      // the field when it changed — otherwise leave the existing value alone.
+      const verifyScriptChanged = form.verify_script_id !== (login?.verify_script_id ?? null);
       // Same explicit-set vs leave-alone semantics for the Slack channel
       // override. Empty string in the UI maps to null in the patch
       // (explicit clear); only send the field if it actually changed.
@@ -516,8 +519,15 @@ export default function EditLoginPage() {
       await updateLogin(selectedOrgId, id, {
         name: form.name.trim(),
         url: form.url.trim(),
-        verify_text: form.verify_text.trim(),
         ...(scriptChanged ? { auto_login_script_id: scriptId } : {}),
+        // verify_script_id is non-null here — the Save button is disabled
+        // when form.verify_script_id is falsy, so we can't reach this point
+        // with a null. Guard at the spread anyway to satisfy the typed
+        // patch shape (LoginPatch.verify_script_id is `string | undefined`,
+        // not nullable — the API rejects null).
+        ...(verifyScriptChanged && form.verify_script_id
+          ? { verify_script_id: form.verify_script_id }
+          : {}),
         ...(slackChanged ? { notification_slack_channel_id: normalizedSlack } : {}),
       });
       await setLoginAccessGroups(selectedOrgId, id, loginGroupIds).catch(() => {});
@@ -732,7 +742,7 @@ export default function EditLoginPage() {
           <Button variant="outline" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
             <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim() || !form.verify_text.trim()}>
+          <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim() || !form.verify_script_id}>
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Save className="h-3.5 w-3.5 mr-1" />}
             Save
           </Button>
@@ -799,7 +809,11 @@ export default function EditLoginPage() {
       {/* Form */}
       <Card>
         <CardContent className="py-3 px-5">
-          <LoginFormBody form={form} setForm={setForm} />
+          <LoginFormBody
+            form={form}
+            setForm={setForm}
+            verifyScriptOptions={scripts.map((s) => ({ id: s.id, name: s.name }))}
+          />
         </CardContent>
       </Card>
 
@@ -1225,6 +1239,21 @@ export default function EditLoginPage() {
           // 'login_logout' is the only kind that flips this to logout
           // wording; login_verify and login_manual both stay 'login'.
           purpose={activeSession.kind === 'login_logout' ? 'logout' : 'login'}
+          // After Done on a manual login, the backend kicks off an
+          // independent verify run. Swap the activeSession to track THAT
+          // run's id so the existing polling effect drives the
+          // "Verifying..." pill back to a settled state ('valid' or
+          // 'needs_login') when it completes. Without this, the post-Done
+          // verify was invisible to the UI and the spinner stayed stuck.
+          onVerifyStarted={(verifyRunId) => {
+            setActiveVerifySession({
+              entityId: id,
+              kind: 'login_verify',
+              logId: verifyRunId,
+              label: `Verifying: ${login?.name}`,
+              mode: 'observe',
+            });
+          }}
         />
       )}
 

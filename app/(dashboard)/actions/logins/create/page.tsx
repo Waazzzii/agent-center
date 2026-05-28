@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { createLogin } from '@/lib/api/logins';
+import { listScripts, type BrowserScript } from '@/lib/api/scripts';
 import {
   getAgentAccessGroups,
   setLoginAccessGroups,
@@ -27,20 +28,27 @@ export default function CreateLoginPage() {
   const [saving, setSaving] = useState(false);
   const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
   const [loginGroupIds, setLoginGroupIds] = useState<string[]>([]);
-  const [form, setForm] = useState<LoginFormData>({ name: '', url: '', verify_text: '' });
+  const [scripts, setScripts] = useState<BrowserScript[]>([]);
+  const [form, setForm] = useState<LoginFormData>({ name: '', url: '', verify_script_id: null });
 
   useEffect(() => {
-    if (selectedOrgId) getAgentAccessGroups(selectedOrgId).then(setAllGroups).catch(() => {});
+    if (!selectedOrgId) return;
+    getAgentAccessGroups(selectedOrgId).then(setAllGroups).catch(() => {});
+    listScripts(selectedOrgId).then((d) => setScripts(d.scripts ?? [])).catch(() => {});
   }, [selectedOrgId]);
 
   const handleSave = async () => {
     if (!selectedOrgId) return;
+    if (!form.verify_script_id) {
+      toast.error('Pick a verify script before saving');
+      return;
+    }
     setSaving(true);
     try {
       const created = await createLogin(selectedOrgId, {
         name: form.name.trim(),
         url: form.url.trim(),
-        verify_text: form.verify_text.trim(),
+        verify_script_id: form.verify_script_id,
       });
       // Save access groups
       if (loginGroupIds.length > 0) {
@@ -67,7 +75,7 @@ export default function CreateLoginPage() {
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">Create a reusable login profile for agent workflows</p>
         </div>
-        <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim() || !form.verify_text.trim()}>
+        <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim() || !form.verify_script_id}>
           {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Save className="h-3.5 w-3.5 mr-1" />}
           Create
         </Button>
@@ -76,7 +84,11 @@ export default function CreateLoginPage() {
       {/* Form */}
       <Card>
         <CardContent className="p-5">
-          <LoginFormBody form={form} setForm={setForm} />
+          <LoginFormBody
+            form={form}
+            setForm={setForm}
+            verifyScriptOptions={scripts.map((s) => ({ id: s.id, name: s.name }))}
+          />
         </CardContent>
       </Card>
 

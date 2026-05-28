@@ -2,26 +2,36 @@
 
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Textarea } from '@/components/ui/textarea';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { InputsList, parseVarsAcross } from './InputsList';
 
 export interface LoginFormData {
   name: string;
   url: string;
-  verify_text: string;
+  /** Browser-script ID that verifies the login state. Required. */
+  verify_script_id: string | null;
+}
+
+export interface VerifyScriptOption {
+  id: string;
+  name: string;
 }
 
 interface Props {
   form: LoginFormData;
   setForm: (updater: (f: LoginFormData) => LoginFormData) => void;
+  /** All available browser scripts for the org — used to populate the
+   *  verify-script dropdown. The current value must be present in the list
+   *  for the dropdown to render its name correctly. */
+  verifyScriptOptions?: VerifyScriptOption[];
   readOnly?: boolean;
   availableVars?: string[];
   /** Optional footer content rendered after the form (e.g. last checked timestamps). */
   footer?: React.ReactNode;
 }
 
-export function LoginFormBody({ form, setForm, readOnly = false, availableVars, footer }: Props) {
-  const inputs = parseVarsAcross(form.url, form.verify_text);
+export function LoginFormBody({ form, setForm, verifyScriptOptions = [], readOnly = false, availableVars, footer }: Props) {
+  const inputs = parseVarsAcross(form.url);
 
   return (
     <div className="space-y-3">
@@ -49,17 +59,30 @@ export function LoginFormBody({ form, setForm, readOnly = false, availableVars, 
       </div>
 
       <div className="space-y-1">
-        <Label>Verification Text {!readOnly && <span className="text-destructive">*</span>}</Label>
-        <Textarea
-          rows={3}
-          value={form.verify_text}
-          onChange={(e) => setForm((f) => ({ ...f, verify_text: e.target.value }))}
-          placeholder="Text or element that indicates the user is logged in, e.g. 'Dashboard'"
+        <Label>Verify Script {!readOnly && <span className="text-destructive">*</span>}</Label>
+        <Select
+          value={form.verify_script_id ?? '__none__'}
+          onValueChange={(v) => setForm((f) => ({ ...f, verify_script_id: v === '__none__' ? null : v }))}
           disabled={readOnly}
-          className="text-xs"
-        />
+        >
+          <SelectTrigger className="text-xs">
+            <SelectValue placeholder="Select a browser script that proves logged-in state" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__" disabled>
+              Select a verify script…
+            </SelectItem>
+            {verifyScriptOptions.map((s) => (
+              <SelectItem key={s.id} value={s.id}>
+                {s.name}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
         {!readOnly && (
-          <p className="text-xs text-muted-foreground">The agent will check for this to confirm login succeeded.</p>
+          <p className="text-xs text-muted-foreground">
+            Required. The agent runs this script to confirm the session is logged in. Successful run = logged in; any step failure or timeout = not logged in. Same engine as auto-login scripts.
+          </p>
         )}
       </div>
 

@@ -460,6 +460,23 @@ export async function getScriptAgentUsage(
 }
 
 /**
+ * Returns the count of logins that reference this script in each role:
+ *   - verify     — how many logins use it as their verify script
+ *   - auto_login — how many use it as their auto-login script
+ *
+ * If either count > 0, the script CANNOT be deleted (FK is ON DELETE
+ * RESTRICT in the DB). Use this to gate the delete UI and show a
+ * "in use by N logins" warning before the operator clicks Delete.
+ */
+export async function getScriptLoginUsage(
+  orgId: string,
+  scriptId: string,
+): Promise<{ verify: number; auto_login: number }> {
+  const res = await agentClient.get(`/api/admin/${orgId}/scripts/${scriptId}/login-usage`);
+  return res.data;
+}
+
+/**
  * Insert / replace / remove the paired login step on every agent that
  * currently uses this script. login_id=null clears the pairing on all
  * agents. Idempotent.
