@@ -332,11 +332,16 @@ export function RunScriptModal({
         setScriptName(script?.name ?? '');
         setScriptDescription(script?.description ?? '');
         setLinkedLoginId(script?.login_id ?? null);
-        // Pre-seed: recording defaults from parameters, then override with
-        // persisted test_values (user's latest test overrides survive sessions)
-        if (script?.parameters && typeof script.parameters === 'object') {
-          setParams({ ...script.parameters, ...(script.test_values ?? {}) });
-        }
+        // Variables start BLANK every session — the operator must enter
+        // current values for the specific run they're doing. Persisting
+        // values across sessions was actively dangerous: agents picked
+        // them up as defaults and ran scripts against last-week's test
+        // data when upstream context didn't supply the live values, which
+        // looked like a success in the logs but wrote to the wrong row.
+        // The schema (which variables exist) still comes from
+        // script.parameters keys via the Variables Panel — we just don't
+        // import the values.
+        setParams({});
         // Always auto-start — variables are editable inline in the Variables Panel
         handleStartStepRun();
       }
@@ -491,29 +496,27 @@ export function RunScriptModal({
   };
 
   /**
-   * Build the parameters object for saving: { name: defaultValue }.
-   * Default values come from the current test values (params state),
-   * so whatever the user typed during recording becomes the default.
+   * Build the parameters object for saving: { name: "" } for every
+   * variable the script references.
+   *
+   * Schema only — values are always blank. We used to bake the current
+   * test-input value (or the recording-time default) in here as the
+   * default, which meant agents picked them up later if upstream
+   * context didn't supply the variable. Wrong defaults silently filled
+   * in for missing runtime data and the script "succeeded" against
+   * stale/test data — invisible until someone noticed the wrong row
+   * had been touched downstream.
+   *
+   * Now the agent-side validator (extractRequiredScriptVars +
+   * findMissingScriptVars in agent-executor.service.js) fails fast when
+   * a required variable isn't in context, so we don't need defaults to
+   * paper over missing data. Test runs in the editor enter values
+   * fresh every session (see setParams({}) on modal open).
    */
   const buildParameters = (steps: RecordedStep[]): Record<string, string> => {
     const vars = analyzeVariables(steps);
     const result: Record<string, string> = {};
-    // Build a map of _defaultValue from steps for fallback
-    const defaults: Record<string, string> = {};
-    for (const s of steps) {
-      if (s._defaultValue) {
-        if (s.action === 'fill' && s.value) {
-          const match = s.value.match(/^\{\{(\w+)\}\}$/);
-          if (match) defaults[match[1]] = s._defaultValue;
-        }
-        if (s.action === 'extract' && s.field_name) {
-          defaults[s.field_name] = s._defaultValue;
-        }
-      }
-    }
-    for (const name of vars.keys()) {
-      result[name] = params[name] || defaults[name] || '';
-    }
+    for (const name of vars.keys()) result[name] = '';
     return result;
   };
 
@@ -1693,10 +1696,10 @@ export function RunScriptModal({
 
         if (tempScriptId) {
           // Already saved once — update in place
-          await updateScript(orgId, tempScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: params });
+          await updateScript(orgId, tempScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {} });
         } else {
           // First save — create the script now
-          const created = await createScript(orgId, { name, steps, parameters, test_values: params });
+          const created = await createScript(orgId, { name, steps, parameters, test_values: {} });
           setTempScriptId(created.id);
         }
         // Sync steps to the worker so jumps/executions use the saved version
@@ -1713,7 +1716,7 @@ export function RunScriptModal({
       if (!script) return;
       const steps = stepRunState?.steps ?? [];
       try {
-        await updateScript(orgId, script.id, { steps, parameters: buildParameters(steps), test_values: params, description: scriptDescription || undefined });
+        await updateScript(orgId, script.id, { steps, parameters: buildParameters(steps), test_values: {}, description: scriptDescription || undefined });
         // Sync steps to the worker so jumps/executions use the saved version
         if (runId) await syncStepRunSteps(orgId, runId, steps).catch(() => {});
         setHasChanges(false);
@@ -1762,7 +1765,8 @@ export function RunScriptModal({
       setOrphanSession(null);
       if (mode === 'record') handleStartRecordSession();
       else if (script) {
-        if (script.parameters && typeof script.parameters === 'object') setParams({ ...script.parameters, ...(script.test_values ?? {}) });
+        // Blank params every session — see startFresh() for rationale.
+        setParams({});
         handleStartStepRun();
       }
     } finally {
@@ -1784,7 +1788,8 @@ export function RunScriptModal({
     else {
       setScriptName(script?.name ?? '');
       if (script) {
-        if (script.parameters && typeof script.parameters === 'object') setParams({ ...script.parameters, ...(script.test_values ?? {}) });
+        // Blank params every session — see startFresh() for rationale.
+        setParams({});
         handleStartStepRun();
       }
     }
@@ -2650,7 +2655,7 @@ export function RunScriptModal({
               await updateScript(orgId, targetScriptId, {
                 steps: newSteps,
                 parameters: buildParameters(newSteps),
-                test_values: params,
+                test_values: {},
               });
               // Clear the dirty flag — what was in memory now matches the
               // DB row. The session-level Save button visibly hides itself

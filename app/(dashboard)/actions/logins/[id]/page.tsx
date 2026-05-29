@@ -766,10 +766,30 @@ export default function EditLoginPage() {
             </div>
             <div className="flex items-center gap-2">
               {needsLogin ? (
+                // Two distinct in-flight states share this button:
+                //   startingAction === 'login' → request to /startLogin is
+                //     in flight (brief, pre-dialog)
+                //   activeSession.kind === 'login_verify' → user clicked
+                //     Done in the HITL dialog and the post-Done verify is
+                //     running in the background. The login row's status
+                //     is mid-flip from 'needs_login' → 'verifying' (SSE
+                //     hasn't arrived yet), so we'd otherwise still render
+                //     the "Log In" affordance even though there's nothing
+                //     to click. Show "Verifying..." so the operator knows
+                //     it's working.
+                // Once SSE / poll updates login.status to 'verifying',
+                // needsLogin flips false and the else branch (Verify +
+                // Log Out) takes over — its Verify button has the same
+                // login_verify-aware label, so the transition reads as
+                // a continuous "Verifying..." state across button swaps.
                 <Button size="sm" onClick={handleLogin} disabled={isStarting || !!activeSession}
                   className="bg-warning hover:bg-warning/90 text-white text-xs">
-                  {startingAction === 'login' ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
-                  <span className="ml-1">Log In</span>
+                  {startingAction === 'login' || (activeSession && activeSession.kind === 'login_verify')
+                    ? <Loader2 className="h-3 w-3 animate-spin" />
+                    : <LogIn className="h-3 w-3" />}
+                  <span className="ml-1">
+                    {activeSession && activeSession.kind === 'login_verify' ? 'Verifying...' : 'Log In'}
+                  </span>
                 </Button>
               ) : (
                 <>
