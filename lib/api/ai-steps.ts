@@ -5,6 +5,17 @@ export interface AiStepOutput {
   key: string;
   /** Human-readable description of what goes in this key. Sent to Claude. */
   description: string;
+  /**
+   * When false, the executor's declared_outputs verifier will NOT flip
+   * the item's `_status='failed'` if this key is missing or null/empty.
+   * Defaults to required (true) — absent / true on legacy rows means
+   * "must be present, non-null, non-blank" exactly as before.
+   *
+   * Use case: a field that only applies to certain scenarios (e.g.
+   * `cancellation_reason` on a status field that's sometimes "active").
+   * The model can omit it / return null without failing the whole step.
+   */
+  required?: boolean;
 }
 
 /**
@@ -44,8 +55,14 @@ export function buildOutputInstructionBlock(outputs: AiStepOutput[]): string {
     ].join('\n');
   }
   const schemaLines = usable
-    .map((o) => `    "${o.key.trim()}": ${JSON.stringify(o.description ?? '')}`)
+    .map((o) => {
+      // Required by default; only annotate when explicitly optional so
+      // existing prompts don't drift.
+      const optionalMarker = o.required === false ? ' [optional]' : '';
+      return `    "${o.key.trim()}": ${JSON.stringify((o.description ?? '') + optionalMarker)}`;
+    })
     .join(',\n');
+  const hasOptional = usable.some((o) => o.required === false);
   return [
     '',
     '---',
@@ -61,6 +78,9 @@ export function buildOutputInstructionBlock(outputs: AiStepOutput[]): string {
     '• Return ALL results found as separate elements in the array.  If only one result, return a one-element array.  If none, return an empty array [].',
     '• Each value must be the actual data described — do NOT repeat the description.',
     '• Do NOT invent placeholder values or partial words. If a field has no real value, use null.',
+    ...(hasOptional
+      ? ['• Keys marked [optional] in the schema may be omitted or set to null when they don\'t apply to the result — don\'t fabricate them.']
+      : []),
     '• Make sure the JSON is syntactically valid: matching brackets, no trailing commas, all strings closed.',
   ].join('\n');
 }

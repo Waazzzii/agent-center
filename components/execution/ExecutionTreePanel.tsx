@@ -12,10 +12,26 @@ import { useState, useCallback } from 'react';
 import {
   ChevronRight, ChevronDown, CheckCircle2, XCircle, Loader2,
   PauseCircle, LogIn, Zap, GitBranch, Play, Clock, Hash,
-  AlertCircle,
+  AlertCircle, SkipForward,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getActionBatchItems, type FullTreeNode } from '@/lib/api/agents';
+
+/**
+ * Cascade-skip detection: actions that were never invoked because an
+ * upstream step's _status='failed' propagated to all their input items
+ * get marked `status='failed'` with an error_message starting with
+ * "Skipped:" by the executor (see agent-executor.service.js cascade
+ * gate). Surfacing this differently from a "real" failure lets
+ * operators quickly identify which row is the actual root cause.
+ */
+function isCascadeSkipped(node: FullTreeNode): boolean {
+  return (
+    node.status === 'failed' &&
+    typeof node.error_message === 'string' &&
+    node.error_message.startsWith('Skipped:')
+  );
+}
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -145,6 +161,8 @@ function TreeNodeRow({
     ...(batchItems ?? []),
   ];
 
+  const cascadeSkipped = isCascadeSkipped(node);
+
   return (
     <div>
       {/* Row */}
@@ -155,6 +173,10 @@ function TreeNodeRow({
         )}
         style={{ paddingLeft: `${depth * 16 + 8}px` }}
         onClick={() => onSelect(node)}
+        // Native tooltip surfaces the cascade origin without needing
+        // hover-state plumbing — operators see the chain reason on
+        // hover, click to drill into the action_log row for details.
+        title={cascadeSkipped && node.error_message ? node.error_message : undefined}
       >
         {/* Expand/collapse chevron */}
         {hasChildren ? (
@@ -174,15 +196,27 @@ function TreeNodeRow({
           <span className="w-4 shrink-0" />
         )}
 
-        {/* Status dot */}
+        {/* Status dot — failed treatment for cascade-skipped, distinct
+            icon below so it reads as "skipped because upstream broke"
+            not "this step itself crashed". */}
         <span className={cn('w-1.5 h-1.5 rounded-full shrink-0', statusDot(node.status))} />
 
-        {/* Icon */}
-        <NodeIcon node={node} />
+        {/* Icon — cascade-skipped overrides the action-type icon with
+            a skip-forward glyph so the eye picks out which rows are
+            collateral vs. the root failure. */}
+        {cascadeSkipped ? (
+          <SkipForward className="h-3 w-3 text-red-500 shrink-0" />
+        ) : (
+          <NodeIcon node={node} />
+        )}
 
         {/* Label */}
-        <span className="truncate flex-1 text-xs">
+        <span className={cn(
+          'truncate flex-1 text-xs',
+          cascadeSkipped && 'text-muted-foreground italic',
+        )}>
           {node.label}
+          {cascadeSkipped && <span className="ml-1 text-[10px] text-red-500">(skipped)</span>}
           {node.type === 'execution' && node.item_index != null && (
             <span className="text-muted-foreground ml-1">#{node.item_index}</span>
           )}

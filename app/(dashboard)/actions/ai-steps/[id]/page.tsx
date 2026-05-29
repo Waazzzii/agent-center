@@ -76,7 +76,16 @@ export default function EditAiStepPage() {
         prompt: form.prompt,
         model: form.model,
         connector_ids: form.connector_ids,
-        outputs: form.outputs.filter((o) => o.key.trim()).map((o) => ({ key: o.key.trim(), description: o.description.trim() })),
+        outputs: form.outputs
+          .filter((o) => o.key.trim())
+          .map((o) => ({
+            key: o.key.trim(),
+            description: o.description.trim(),
+            // Persist required: true so the DB row always has the
+            // explicit value, instead of relying on absent === true
+            // which the verifier honors but reads less obviously.
+            required: o.required !== false,
+          })),
         skill_ids: form.skill_ids,
       });
       toast.success('AI step saved');

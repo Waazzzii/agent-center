@@ -3,6 +3,7 @@
 import { type AiStepOutput, buildOutputInstructionBlock } from '@/lib/api/ai-steps';
 import { type Skill } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -62,7 +63,12 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
       ? f.skill_ids.filter((x) => x !== id)
       : [...f.skill_ids, id],
   }));
-  const addOutput = () => setForm((f) => ({ ...f, outputs: [...f.outputs, { key: '', description: '' }] }));
+  const addOutput = () => setForm((f) => ({
+    ...f,
+    // Required by default — opt-out by unchecking the box. Matches the
+    // legacy behavior where every declared output was strict.
+    outputs: [...f.outputs, { key: '', description: '', required: true }],
+  }));
   const updateOutput = (idx: number, patch: Partial<AiStepOutput>) => setForm((f) => ({
     ...f,
     outputs: f.outputs.map((o, i) => (i === idx ? { ...o, ...patch } : o)),
@@ -150,25 +156,40 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
               <p className="text-xs text-muted-foreground italic">No declared outputs — response captured as free-form text (default JSON nudge still applies).</p>
             ) : (
               <div className="space-y-1.5">
-                {form.outputs.map((o, i) => (
-                  <div key={i} className="flex items-start gap-2">
-                    <Input
-                      placeholder="key"
-                      value={o.key}
-                      onChange={(e) => updateOutput(i, { key: e.target.value })}
-                      className="w-40 text-xs font-mono"
-                    />
-                    <Input
-                      placeholder="Description of what goes in this key"
-                      value={o.description}
-                      onChange={(e) => updateOutput(i, { description: e.target.value })}
-                      className="flex-1 text-xs"
-                    />
-                    <Button type="button" variant="ghost" size="sm" onClick={() => removeOutput(i)} className="h-8 text-destructive hover:text-destructive">
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </Button>
-                  </div>
-                ))}
+                {form.outputs.map((o, i) => {
+                  // Treat absent `required` as true so legacy rows
+                  // (saved before this field existed) stay strict.
+                  const isRequired = o.required !== false;
+                  return (
+                    <div key={i} className="flex items-start gap-2">
+                      <Input
+                        placeholder="key"
+                        value={o.key}
+                        onChange={(e) => updateOutput(i, { key: e.target.value })}
+                        className="w-40 text-xs font-mono"
+                      />
+                      <Input
+                        placeholder="Description of what goes in this key"
+                        value={o.description}
+                        onChange={(e) => updateOutput(i, { description: e.target.value })}
+                        className="flex-1 text-xs"
+                      />
+                      <label
+                        className="flex items-center gap-1.5 text-[11px] text-muted-foreground select-none h-8 px-1.5 cursor-pointer shrink-0"
+                        title="Unchecked: the executor accepts a missing or null value for this key without marking the item failed. Only valid for fields that don't apply to every result."
+                      >
+                        <Checkbox
+                          checked={isRequired}
+                          onCheckedChange={(checked) => updateOutput(i, { required: checked !== false })}
+                        />
+                        Required
+                      </label>
+                      <Button type="button" variant="ghost" size="sm" onClick={() => removeOutput(i)} className="h-8 text-destructive hover:text-destructive">
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  );
+                })}
               </div>
             )}
 
