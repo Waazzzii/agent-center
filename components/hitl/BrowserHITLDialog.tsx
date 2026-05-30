@@ -61,18 +61,6 @@ interface Props {
    * return a verifyRunId.
    */
   onVerifyStarted?: (verifyRunId: string) => void;
-  /**
-   * Optional callback that wipes the live browser session (cookies +
-   * localStorage) AND the persisted storage_state row for this login.
-   * The parent supplies the wiring via closure (orgId + loginId + the
-   * dialog's logId). When provided, the dialog renders a "Clear
-   * session" button alongside Done — useful when the operator's first
-   * impulse on opening HITL is "let me start clean before logging in
-   * fresh" (e.g. wrong account already logged in, stale UI state).
-   * Omit for logout flows or for HITL contexts where clearing isn't
-   * meaningful.
-   */
-  onClearSession?: () => Promise<void>;
 }
 
 const POLL_INTERVAL_MS = 10_000;
@@ -100,11 +88,7 @@ function StatusPill({ status, purpose = 'login' }: { status: BrowserRunStatus['s
   );
 }
 
-export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe', purpose = 'login', onVerifyStarted, onClearSession }: Props) {
-  // Tracks the in-flight Clear session request so the button can show a
-  // spinner and avoid double-click. Resolves when the worker confirms
-  // both halves of the wipe (live context + DB row).
-  const [clearing, setClearing] = useState(false);
+export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe', purpose = 'login', onVerifyStarted }: Props) {
   // postDone = the user has clicked the Done button and we've handed off
   // to the backend for session-save + (for logins) post-Done verification.
   // The original browser slot is being torn down; a fresh one may be
@@ -363,51 +347,11 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
             </Badge>
           )}
           <div className="ml-auto flex items-center gap-2">
-            {/* Clear session — operator-driven wipe of cookies +
-                localStorage on the live context AND the persisted
-                storage_state row. Shown alongside Done for login HITL
-                flows when the parent supplies onClearSession. The page
-                then visibly reloads to the logged-out state, ready for
-                a fresh manual login. */}
-            {isAuthRequired && onClearSession && purpose === 'login' && (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={async () => {
-                  if (clearing) return;
-                  if (typeof window !== 'undefined') {
-                    const ok = window.confirm(
-                      'Clear all cookies and saved session data for this login?\n\nThe browser will reload to the logged-out state and you can sign in fresh.',
-                    );
-                    if (!ok) return;
-                  }
-                  setClearing(true);
-                  try {
-                    await onClearSession();
-                    toast.success('Session cleared — sign in fresh now');
-                  } catch (err) {
-                    toast.error(
-                      `Failed to clear session: ${err instanceof Error ? err.message : 'unknown error'}`,
-                    );
-                  } finally {
-                    setClearing(false);
-                  }
-                }}
-                disabled={clearing || resuming || aborting}
-                className="h-7 text-xs"
-                title="Wipe cookies + localStorage and reload the page so you can log in fresh."
-              >
-                {clearing
-                  ? <><Loader2 className="mr-1 h-3 w-3 animate-spin" />Clearing…</>
-                  : <>Clear session</>
-                }
-              </Button>
-            )}
             {isAuthRequired && (
               <Button
                 size="sm"
                 onClick={handleDone}
-                disabled={resuming || aborting || clearing}
+                disabled={resuming || aborting}
                 className="h-7 bg-green-600 hover:bg-green-700 text-white text-xs"
               >
                 {resuming

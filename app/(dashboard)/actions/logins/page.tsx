@@ -327,20 +327,6 @@ export default function LoginsPage() {
           agentName={activeForDialog.label}
           mode={activeForDialog.mode}
           purpose={activeForDialog.kind === 'login_logout' ? 'logout' : 'login'}
-          // Wire the Clear Session button to wipe cookies + the persisted
-          // storage_state row for this login. orgId + loginId come from
-          // closure; the dialog already knows its own logId.
-          onClearSession={
-            selectedOrgId && viewingLoginId
-              ? async () => {
-                  await clearLoginSession(
-                    selectedOrgId,
-                    viewingLoginId,
-                    activeForDialog.logId,
-                  );
-                }
-              : undefined
-          }
         />
       )}
     </div>

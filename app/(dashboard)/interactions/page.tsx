@@ -208,9 +208,25 @@ export default function InteractionsPage() {
 
   // Build unified rows
   type Row = { type: 'login-group'; loginId: string; group: AgentApprovalItem[] }
+    | { type: 'login-verify'; loginId: string; session: ActiveVerifySession }
     | { type: 'item'; item: AgentApprovalItem };
   const rows: Row[] = [];
   for (const [loginId, group] of loginGroups) rows.push({ type: 'login-group', loginId, group });
+
+  // Synthetic verify rows — when the user clicks Done in the HITL dialog,
+  // the backend immediately flips the awaiting_approval action_log to
+  // 'executing' (so the original row disappears from this list) and
+  // kicks off an independent background verify. activeLoginSessions
+  // tracks that verify in localStorage. Without a synthetic row here,
+  // the post-Done "Verifying…" state has nowhere to render — the row
+  // just vanishes. Render one synthetic row per in-flight login_verify
+  // that doesn't already have a backing awaiting_approval group.
+  for (const [loginId, session] of Object.entries(activeLoginSessions)) {
+    if (session.kind !== 'login_verify') continue;
+    if (loginGroups.has(loginId)) continue; // group still has rows — original row handles the badge
+    rows.push({ type: 'login-verify', loginId, session });
+  }
+
   for (const item of [...ungroupedLogins, ...approvals]) rows.push({ type: 'item', item });
 
   return (
@@ -311,6 +327,37 @@ export default function InteractionsPage() {
                             <span className="ml-1">Log In</span>
                           </Button>
                         )}
+                      </td>
+                    </tr>
+                  );
+                }
+
+                if (row.type === 'login-verify') {
+                  // Post-Done verify, no backing awaiting_approval row.
+                  // The polling effect above tears this synthetic row down
+                  // when the verify reaches a terminal status.
+                  const { loginId, session } = row;
+                  return (
+                    <tr key={`lv-${loginId}`} className="border-t bg-muted/10">
+                      <td className="px-4 py-2.5">
+                        <Badge variant="warning" className="gap-1">
+                          <LogIn className="h-3 w-3" /> Login
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-2.5 font-medium text-muted-foreground">
+                        {session.label}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                        Verifying saved session in background
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                        {formatRelative(new Date(session.createdAt).toISOString())}
+                      </td>
+                      <td className="px-4 py-2.5 text-right">
+                        <Button size="sm" disabled className="bg-warning/60 text-white disabled:opacity-100 text-xs">
+                          <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                          Verifying...
+                        </Button>
                       </td>
                     </tr>
                   );
@@ -456,22 +503,6 @@ export default function InteractionsPage() {
               mode: 'observe',
             });
           }}
-          // Wire the Clear session button — wipes cookies + localStorage
-          // on the live browser context AND zeroes the persisted
-          // storage_state row. Same callback shape as the /actions/logins
-          // page so the dialog renders the button consistently regardless
-          // of which entry point opened it.
-          onClearSession={
-            selectedOrgId && viewingLoginId && activeLoginSessions[viewingLoginId]
-              ? async () => {
-                  await clearLoginSession(
-                    selectedOrgId,
-                    viewingLoginId,
-                    activeLoginSessions[viewingLoginId].logId,
-                  );
-                }
-              : undefined
-          }
         />
       )}
     </div>
