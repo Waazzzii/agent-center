@@ -9,6 +9,7 @@ import {
   deleteLogin,
   startLogin,
   startLogout,
+  clearLoginSession,
   type Login,
 } from '@/lib/api/logins';
 import { getBrowserRunStatus } from '@/lib/api/agents';
@@ -192,6 +193,15 @@ export default function LoginsPage() {
     if (!selectedOrgId) return;
     setStarting((s) => ({ ...s, [item.id]: true }));
     try {
+      // Pre-clear the persisted storage_state before allocating the
+      // new slot. Operator clicked Log In ⇒ any remaining session
+      // data is about to be replaced anyway, so wiping it up front
+      // guarantees the new context starts truly empty. Avoids the
+      // "stale session bleeds into a fresh manual login" loop that
+      // previously required closing/reopening the browser to recover.
+      // No live context exists yet, so the call only touches the DB
+      // row. Best-effort: don't block the login flow on a clear failure.
+      await clearLoginSession(selectedOrgId, item.id).catch(() => {});
       const result = await startLogin(selectedOrgId, item.id);
       setActiveVerifySession({
         entityId: item.id,
@@ -252,6 +262,13 @@ export default function LoginsPage() {
                   const active = activeSessions[item.id];
                   const isStarting = !!starting[item.id];
                   const needsLogin = item.status === 'needs_login';
+                  // 'verifying' is the intermediate state between a manual-
+                  // login Done click and the background verify settling on
+                  // valid / needs_login. Previously this branch was missing
+                  // — the button immediately rendered as Log Out (since
+                  // needsLogin is false) and the operator couldn't tell
+                  // that anything was happening in the background.
+                  const isVerifying = item.status === 'verifying';
 
                   return (
                     <tr key={item.id} className="border-t hover:bg-muted/30 cursor-pointer transition-colors"
@@ -262,7 +279,18 @@ export default function LoginsPage() {
                       <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(item.last_checked_at)}</td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-                          {needsLogin ? (
+                          {isVerifying ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              disabled
+                              className="text-xs"
+                              title="Verifying the saved session — this finishes in a few seconds."
+                            >
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                              <span className="ml-1">Verifying…</span>
+                            </Button>
+                          ) : needsLogin ? (
                             <Button size="sm" onClick={() => handleLogin(item)} disabled={isStarting || !!active}
                               className="bg-warning hover:bg-warning/90 text-white text-xs">
                               {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
@@ -299,6 +327,20 @@ export default function LoginsPage() {
           agentName={activeForDialog.label}
           mode={activeForDialog.mode}
           purpose={activeForDialog.kind === 'login_logout' ? 'logout' : 'login'}
+          // Wire the Clear Session button to wipe cookies + the persisted
+          // storage_state row for this login. orgId + loginId come from
+          // closure; the dialog already knows its own logId.
+          onClearSession={
+            selectedOrgId && viewingLoginId
+              ? async () => {
+                  await clearLoginSession(
+                    selectedOrgId,
+                    viewingLoginId,
+                    activeForDialog.logId,
+                  );
+                }
+              : undefined
+          }
         />
       )}
     </div>

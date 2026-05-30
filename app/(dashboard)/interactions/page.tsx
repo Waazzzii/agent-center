@@ -10,7 +10,7 @@ import {
   getBrowserRunStatus,
   type AgentApprovalItem,
 } from '@/lib/api/agents';
-import { startLogin } from '@/lib/api/logins';
+import { startLogin, clearLoginSession } from '@/lib/api/logins';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -137,6 +137,17 @@ export default function InteractionsPage() {
     if (!selectedOrgId) return;
     setStartingLogin((s) => ({ ...s, [loginId]: true }));
     try {
+      // Pre-clear the persisted storage_state row before allocating
+      // the new browser slot. The operator clicked Log In, so any
+      // remaining cookies / localStorage are about to be irrelevant
+      // anyway — wiping them up front means the freshly-allocated
+      // worker context starts from a truly empty state. Avoids the
+      // "stale session bleeds into the fresh manual login" loop that
+      // previously required closing and reopening the browser.
+      // No live context exists yet (no logId), so clearLoginSession
+      // only touches the DB row. Best-effort: don't block the login
+      // flow on a clear failure.
+      await clearLoginSession(selectedOrgId, loginId).catch(() => {});
       const result = await startLogin(selectedOrgId, loginId);
       setActiveVerifySession({
         entityId: loginId,
@@ -445,6 +456,22 @@ export default function InteractionsPage() {
               mode: 'observe',
             });
           }}
+          // Wire the Clear session button — wipes cookies + localStorage
+          // on the live browser context AND zeroes the persisted
+          // storage_state row. Same callback shape as the /actions/logins
+          // page so the dialog renders the button consistently regardless
+          // of which entry point opened it.
+          onClearSession={
+            selectedOrgId && viewingLoginId && activeLoginSessions[viewingLoginId]
+              ? async () => {
+                  await clearLoginSession(
+                    selectedOrgId,
+                    viewingLoginId,
+                    activeLoginSessions[viewingLoginId].logId,
+                  );
+                }
+              : undefined
+          }
         />
       )}
     </div>

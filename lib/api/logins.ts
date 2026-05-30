@@ -169,6 +169,32 @@ export async function startLogout(orgId: string, id: string): Promise<VerifyResu
   return res.data;
 }
 
+/** Operator-driven wipe of the persisted storage_state row, and —
+ *  when a logId is supplied — the live browser session (cookies +
+ *  localStorage) of an active HITL run too.
+ *
+ *  Two call sites:
+ *   • Inside the HITL login dialog (Clear session button): pass logId
+ *     so the live context gets wiped and the page reloads to logged-out.
+ *   • Before starting a new login (Log In button on the Interactions /
+ *     Logins list): omit logId. No browser slot exists yet — only the
+ *     DB row needs zeroing so the next startLogin's slot allocation
+ *     seeds from an empty state. Avoids the "stale cookies survive into
+ *     a fresh manual login attempt" trap that required closing and
+ *     reopening the browser.
+ */
+export async function clearLoginSession(
+  orgId: string,
+  id: string,
+  logId?: string,
+): Promise<{ liveCleared: boolean; dbCleared: boolean }> {
+  const res = await agentClient.post<{ liveCleared: boolean; dbCleared: boolean }>(
+    `/api/admin/${orgId}/logins/${id}/clear-session`,
+    logId ? { logId } : {},
+  );
+  return res.data;
+}
+
 /**
  * Test the auto-login chain end-to-end — runs the same verify → script →
  * re-verify path the agent uses, but standalone (no HITL fallback). Lets

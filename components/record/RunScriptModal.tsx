@@ -1126,14 +1126,55 @@ export function RunScriptModal({
   };
 
   // ── Rename variable — updates all step references ───────────
+  //
+  // {{var}} placeholders can land in MANY fields on a step, not just
+  // value/url. Missing any of them produced the "orphan + new key"
+  // symptom: rename `contract_id` → `cid` and the params map flipped
+  // correctly, but any step with `#button-{{contract_id}}` in its
+  // selector kept the old reference, so contract_id stayed visible as
+  // a referenced variable AND cid showed up as an unattached new one.
+  //
+  // Substitute() in the worker (browser-step-run-worker.service.js)
+  // looks at: selector, text, url, value, frame_selector, waitFor.selector,
+  // and elementSnapshot.candidates[].sel. Mirror that full surface
+  // here so the rename is a true find-and-replace across everything
+  // the runtime substitutes.
+  //
+  // Also matches BOTH `{var}` and `{{var}}` (recorder/substitute allow
+  // either form per substitute()'s `\{+...\}+` regex).
   const handleRenameVariable = (oldName: string, newName: string) => {
     const safeName = newName.trim().replace(/\s+/g, '_').replace(/\W/g, '');
     if (!safeName || safeName === oldName) return;
-    // Update all step references: {{oldName}} → {{newName}} in value/url/field_name
+
+    // Builds a regex that matches {oldName} or {{oldName}} (or any
+    // number of surrounding braces), preserving the outer brace count
+    // in the replacement.
+    const ref = new RegExp(`(\\{+)${oldName}(\\}+)`, 'g');
+    const swap = (s: string | null | undefined): string | null | undefined =>
+      typeof s === 'string' ? s.replace(ref, (_m, open, close) => `${open}${safeName}${close}`) : s;
+
     const updatedSteps = (stepRunState?.steps ?? []).map((s) => {
-      const updated = { ...s };
-      if (updated.value) updated.value = updated.value.replace(new RegExp(`\\{\\{${oldName}\\}\\}`, 'g'), `{{${safeName}}}`);
-      if (updated.url) updated.url = updated.url.replace(new RegExp(`\\{\\{${oldName}\\}\\}`, 'g'), `{{${safeName}}}`);
+      const updated: typeof s = { ...s };
+      // String fields the worker substitutes against.
+      if (typeof updated.value === 'string')          updated.value          = swap(updated.value) as string;
+      if (typeof updated.url === 'string')            updated.url            = swap(updated.url) as string;
+      if (typeof updated.selector === 'string')       updated.selector       = swap(updated.selector) as string;
+      if (typeof updated.text === 'string')           updated.text           = swap(updated.text) as string;
+      if (typeof updated.frame_selector === 'string') updated.frame_selector = swap(updated.frame_selector) as string;
+      // waitFor.selector (locked-in fallback for the locator chain).
+      if (updated.waitFor && typeof updated.waitFor.selector === 'string') {
+        updated.waitFor = { ...updated.waitFor, selector: swap(updated.waitFor.selector) as string };
+      }
+      // elementSnapshot.candidates[].sel (ranked locator candidates).
+      if (updated.elementSnapshot && Array.isArray(updated.elementSnapshot.candidates)) {
+        updated.elementSnapshot = {
+          ...updated.elementSnapshot,
+          candidates: updated.elementSnapshot.candidates.map((c) =>
+            typeof c?.sel === 'string' ? { ...c, sel: swap(c.sel) as string } : c
+          ),
+        };
+      }
+      // Extract step: field_name names which params key the result writes to.
       if (updated.field_name === oldName) updated.field_name = safeName;
       return updated;
     });
