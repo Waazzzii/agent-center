@@ -47,8 +47,37 @@ export interface AgentAction {
   /** Per-action Slack channel override for HITL notifications. Falls
    *  through to program / org-default if null. */
   notification_slack_channel_id?: string | null;
+  /** Per-use cross-cutting options stored on agent_actions.execution_options
+   *  (JSONB, migration 212). Object always present; absent inner keys =
+   *  default behavior. See agent-backend/services/agents/execution-options.js
+   *  for the executor's consumer. */
+  execution_options?: ExecutionOptions | null;
   created_at: string;
   updated_at: string;
+}
+
+/** Predicate operators supported by the executor's conditional gate.
+ *  Keep in lock-step with CONDITIONAL_EXECUTION_OPERATORS in
+ *  agent-backend/services/agents/agent-actions.service.js. */
+export type ConditionalOperator =
+  | 'eq' | 'neq' | 'gt' | 'lt' | 'gte' | 'lte'
+  | 'empty' | 'not_empty'
+  // Friendlier-named aliases — same semantics as empty / not_empty
+  // respectively. Treat null / undefined / '' / empty-array as "missing."
+  | 'exists' | 'not_exists'
+  | 'contains';
+
+export interface ConditionalExecution {
+  /** Dotted path into the previous step's per-item output state. */
+  field: string;
+  operator: ConditionalOperator;
+  /** Omitted for empty/not_empty (nullary operators). */
+  value?: string | number | boolean | null;
+}
+
+export interface ExecutionOptions {
+  conditional_execution?: ConditionalExecution;
+  continue_on_failure?: boolean;
 }
 
 export interface AgentTrigger {

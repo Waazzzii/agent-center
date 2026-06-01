@@ -75,6 +75,18 @@ const ST: Record<string, { dot: string; cls: string; label: string }> = {
   completed: { dot: 'bg-emerald-500', cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400', label: 'Completed' },
   approved:  { dot: 'bg-emerald-500', cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400', label: 'Approved' },
   failed:    { dot: 'bg-red-500', cls: 'border-red-400 text-red-600 dark:text-red-400', label: 'Failed' },
+  // 'skipped' covers two operator-visible cases:
+  //   • Conditional-gate skip (all items gated by the step's
+  //     execution_options.conditional_execution predicate)
+  //   • Cascade skip (every item arrived _status='failed' from an
+  //     upstream non-tolerant step)
+  // Both render the same neutral gray pill; the error_message tooltip
+  // names the cause. Differentiating with TWO status values would
+  // bloat the enum for no behavioral gain — gate-skipped items
+  // continue normally next step (item _status='completed'), cascade-
+  // skipped items keep cascading (item _status='failed'), and that
+  // behavioral split is enforced by item _status, not row status.
+  skipped:   { dot: 'bg-slate-400', cls: 'border-slate-300 text-slate-500 dark:text-slate-400', label: 'Skipped' },
   aborted:   { dot: 'bg-red-400', cls: 'border-red-400 text-red-500', label: 'Aborted' },
   denied:    { dot: 'bg-red-400', cls: 'border-red-400 text-red-500', label: 'Denied' },
   executing: { dot: 'bg-blue-500 animate-pulse', cls: 'border-blue-400 text-blue-600 dark:text-blue-400', label: 'Running' },
@@ -91,6 +103,68 @@ function Dot({ status, className: cls }: { status: string; className?: string })
 function SBadge({ status }: { status: string }) {
   const s = ST[status] ?? ST.executing;
   return <Badge variant="outline" className={cn('text-[10px] h-5 px-1.5', s.cls)}>{s.label}</Badge>;
+}
+
+/**
+ * Banner under each action header. Most of the time `error_message`
+ * carries a real failure and gets the red treatment. But several
+ * execution_options breadcrumbs ride on the same field:
+ *
+ *   "Conditional gate: all N item(s) gated (…)"  — gray, informational.
+ *     Step row's status is 'skipped'. Operator's predicate gated every
+ *     item; the next step processes them normally.
+ *
+ *   "Cascade: upstream step failed — …"  — gray, informational.
+ *     Step row's status is 'skipped'. Every item arrived with
+ *     _status='failed' from a non-tolerant upstream step; cascading
+ *     continues downstream.
+ *
+ *   "Skipped: N cascade-failed, M gated (…)"  — gray, informational.
+ *     Mixed cause — both cascade and gate contributed.
+ *
+ *   "Tolerated failure: <reason>"  — yellow, warning-but-not-fatal.
+ *     The step threw, but the action has continue_on_failure=true so
+ *     items passed through with cleared failure markers.
+ *
+ *   "Tolerated N per-item failure(s) (continue_on_failure)" — yellow.
+ *     Step succeeded as a unit but some items inside failed; the
+ *     continue_on_failure flag cleared their _status='failed' markers
+ *     on items going downstream.
+ *
+ * Detection is a simple prefix match — the strings are constants emitted
+ * by the executor (see agent-executor.service.js + execution-options.js).
+ * Plain `error_message` values fall back to the original red banner.
+ */
+function ActionMessageBanner({ message }: { message: string }) {
+  const isSkipped =
+    message.startsWith('Conditional gate:') ||
+    message.startsWith('Cascade:') ||
+    message.startsWith('Skipped:') ||
+    message.startsWith('Partition:');
+  const isTolerated = message.startsWith('Tolerated ');
+
+  if (isSkipped) {
+    return (
+      <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40 p-3 flex items-start gap-2">
+        <PauseCircle className="h-4 w-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />
+        <pre className="text-xs text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words font-mono leading-relaxed">{message}</pre>
+      </div>
+    );
+  }
+  if (isTolerated) {
+    return (
+      <div className="rounded-lg border border-yellow-200 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-950/20 p-3 flex items-start gap-2">
+        <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
+        <pre className="text-xs text-yellow-700 dark:text-yellow-400 whitespace-pre-wrap break-words font-mono leading-relaxed">{message}</pre>
+      </div>
+    );
+  }
+  return (
+    <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 p-3 flex items-start gap-2">
+      <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
+      <pre className="text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap break-words font-mono leading-relaxed">{message}</pre>
+    </div>
+  );
 }
 
 function nodeTypeLabel(node: FullTreeNode): string {
@@ -253,6 +327,47 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
                   {isSub && childExecs.length > 0 ? childExecs[0].agent_name ?? childExecs[0].label : action.label}
                 </span>
                 <SBadge status={action.status} />
+                {/* Execution-options breadcrumbs — small chip when the
+                    action_log error_message indicates the step was
+                    skipped or had its failure tolerated by
+                    continue_on_failure. Lets the operator distinguish
+                    "actually completed" from "completed via gate" at a
+                    glance. Cause-specific chip text reveals whether
+                    skip was conditional or cascade. */}
+                {action.error_message?.startsWith('Conditional gate:') && (
+                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
+                    Gated
+                  </Badge>
+                )}
+                {action.error_message?.startsWith('Cascade:') && (
+                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
+                    Cascade
+                  </Badge>
+                )}
+                {action.error_message?.startsWith('Skipped:') && (
+                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
+                    Skipped
+                  </Badge>
+                )}
+                {action.error_message?.includes('Partition:') && !action.error_message?.startsWith('Partition:') && (
+                  // Mixed-partition row — overall status is completed/failed
+                  // but some items were gated or cascaded. The breadcrumb is
+                  // appended to whatever the handler wrote, so we match
+                  // `includes()` rather than `startsWith()`.
+                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
+                    Partial
+                  </Badge>
+                )}
+                {action.error_message?.startsWith('Partition:') && (
+                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
+                    Partial
+                  </Badge>
+                )}
+                {action.error_message?.startsWith('Tolerated ') && (
+                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-yellow-400 text-yellow-600 dark:text-yellow-400" title={action.error_message}>
+                    Tolerated
+                  </Badge>
+                )}
               </div>
               <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                 <span>{AT[action.action_type ?? ''] ?? action.action_type}</span>
@@ -839,12 +954,7 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
 
   return (
     <div className="space-y-3">
-      {action.error_message && (
-        <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 p-3 flex items-start gap-2">
-          <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
-          <pre className="text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap break-words font-mono leading-relaxed">{action.error_message}</pre>
-        </div>
-      )}
+      {action.error_message && <ActionMessageBanner message={action.error_message} />}
 
       <Tabs defaultValue="input">
         <TabsList variant="line">
@@ -1078,13 +1188,8 @@ export default function ExecutionDetailPage() {
       {/* ── Summary cards (same format for everything) ─────────── */}
       <SummaryCards node={current} />
 
-      {/* ── Error ──────────────────────────────────────────────── */}
-      {current.error_message && (
-        <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 p-3 flex items-start gap-2">
-          <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
-          <pre className="text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap break-words font-mono leading-relaxed">{current.error_message}</pre>
-        </div>
-      )}
+      {/* ── Error / breadcrumb message ──────────────────────────── */}
+      {current.error_message && <ActionMessageBanner message={current.error_message} />}
 
       {/* ── Content ────────────────────────────────────────────── */}
       {/* Agent → show action list */}

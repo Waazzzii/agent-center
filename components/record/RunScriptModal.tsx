@@ -1534,17 +1534,147 @@ export function RunScriptModal({
     });
 
   // ── Extract from URL (manual dialog — fallback) ────────────────
-  const handleExtractUrl = async () => {
-    setUrlExtractValue('');
+  // `prefill` lets the smart-copy path open the dialog with the clipboard
+  // value already typed in when it can't auto-detect a URL match — so the
+  // operator sees their copied value, can pick the right method
+  // (query/path/match), or correct the value, instead of getting silently
+  // dropped into a DOM text-extract step which doesn't look like
+  // anything they asked for.
+  const handleExtractUrl = async (prefill?: string) => {
+    setUrlExtractValue(prefill ?? '');
     setUrlExtractFieldName('');
     // Fetch live URL before opening dialog
     if (runId && orgId) {
+      // Race the live-URL fetch against a short timeout so a hung
+      // network/worker doesn't lock the dialog open indefinitely.
+      // 2s is generous for an in-region call; on timeout we fall back
+      // to whatever pageUrl is already in stepRunState.
       try {
-        const freshState = await getStepRun(orgId, runId);
+        const freshState = await Promise.race([
+          getStepRun(orgId, runId),
+          new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+        ]);
         if (freshState?.pageUrl) setStepRunState((s) => s ? { ...s, pageUrl: freshState.pageUrl } : s);
       } catch { /* use cached */ }
     }
     setUrlExtractOpen(true);
+  };
+
+  /**
+   * URL-extract entry point used by the toolbar's Extract URL button.
+   *
+   * Same detection logic as handleSmartCopyWithText (query param → path
+   * segment → url_match) BUT differs in the fallback:
+   *
+   *   • Match found    → insert URL extract step (same as smart-copy)
+   *   • No match found → open the manual URL Extract dialog WITH the
+   *                      clipboard value pre-filled, so the operator
+   *                      can fix the value or pick a method themselves.
+   *
+   * Critically does NOT silently insert a DOM text-extract — that's the
+   * behavior smart-copy uses when the operator just hits Ctrl+C on
+   * arbitrary page text (the user's intent is "extract whatever I copied"),
+   * but here the operator explicitly clicked "Extract URL" and a DOM
+   * extract would never match that intent.
+   */
+  const handleUrlExtractFromClipboard = async (clipText: string) => {
+    if (!runId || !orgId) {
+      void handleExtractUrl(clipText);
+      return;
+    }
+
+    // Fetch live URL — same source of truth used by the manual dialog.
+    // Race against a 2s timeout so a hung worker can't lock the operator
+    // out of the extract flow. On timeout the dialog opens with the
+    // clipboard pre-filled — operator can paste the URL manually.
+    let liveUrl = '';
+    try {
+      const freshState = await Promise.race([
+        getStepRun(orgId, runId),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2000)),
+      ]);
+      liveUrl = freshState?.pageUrl ?? '';
+      if (liveUrl) setStepRunState((s) => s ? { ...s, pageUrl: liveUrl } : s);
+    } catch { /* fall through */ }
+
+    if (!liveUrl) {
+      // No URL to match against (fetch failed, timeout, or worker has
+      // no page yet) → manual dialog with the clipboard pre-filled so
+      // the operator can paste the URL or correct the value.
+      void handleExtractUrl(clipText);
+      return;
+    }
+
+    let method: 'query_param' | 'path_segment' | 'url_match' | null = null;
+    let fieldName = '';
+    let paramName = '';
+    let pathIndex = 0;
+
+    try {
+      const parsed = new URL(liveUrl);
+      for (const [key, val] of parsed.searchParams.entries()) {
+        if (val === clipText) {
+          method = 'query_param';
+          paramName = key;
+          fieldName = key;
+          break;
+        }
+      }
+      if (!method) {
+        const segments = parsed.pathname.split('/').filter(Boolean);
+        const idx = segments.indexOf(clipText);
+        if (idx >= 0) {
+          method = 'path_segment';
+          pathIndex = idx;
+          fieldName = idx > 0 ? `${segments[idx - 1].replace(/s$/, '')}_id` : `path_${idx}`;
+        }
+      }
+    } catch { /* invalid URL */ }
+
+    if (!method && liveUrl.includes(clipText)) {
+      method = 'url_match';
+      fieldName = 'extracted_value';
+    }
+
+    if (!method) {
+      // No match — open the dialog pre-filled. Operator can either
+      // correct the value (URL may have been re-encoded) or hit Cancel.
+      toast.info(`"${clipText.slice(0, 30)}${clipText.length > 30 ? '…' : ''}" not found in URL — open dialog to choose method`);
+      void handleExtractUrl(clipText);
+      return;
+    }
+
+    const urlExtraction: RecordedStep['url_extraction'] =
+      method === 'query_param'  ? { method, param_name: paramName } :
+      method === 'path_segment' ? { method, path_index: pathIndex } :
+                                  { method, match_value: clipText };
+
+    const step: RecordedStep = {
+      action: 'extract',
+      selector: '__url__',
+      field_name: fieldName,
+      text: clipText,
+      _defaultValue: clipText,
+      url_extraction: urlExtraction,
+    };
+
+    const insertAt = stepRunState?.currentIndex ?? 0;
+    setStepRunState((s) => {
+      if (!s) return s;
+      const newSteps = [...s.steps];
+      newSteps.splice(insertAt, 0, step);
+      return { ...s, steps: newSteps, totalSteps: newSteps.length };
+    });
+    setNewStepIndices((prev) => new Set([...prev, insertAt]));
+    setHasChanges(true);
+    if (runId && orgId) {
+      const newSteps = [...(stepRunState?.steps ?? [])];
+      newSteps.splice(insertAt, 0, step);
+      syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+    }
+
+    const label = method === 'query_param' ? `?${paramName}` : method === 'path_segment' ? `path[${pathIndex}]` : 'match';
+    toast.success(`Extracted ${label} → {{${fieldName}}} = "${clipText}"`);
   };
 
   /** Analyze where a value appears in the URL and create the appropriate extract step. */
@@ -2148,8 +2278,13 @@ export function RunScriptModal({
               } : handleAddExtractStep}
               onSelectExtractUrl={async () => {
                 const clip = await requestVncClipboard();
-                if (clip) handleSmartCopyWithText(clip);
-                else handleExtractUrl();
+                // The Extract URL toolbar button is explicitly a URL-extract
+                // intent — never fall back to a silent DOM text-extract.
+                // With a clipboard value, try to URL-detect; if it doesn't
+                // match, the dialog opens pre-filled so the operator can
+                // adjust. Without a clipboard value, just open the dialog.
+                if (clip) await handleUrlExtractFromClipboard(clip);
+                else await handleExtractUrl();
               }}
               onSelectCopyPage={async () => {
                 const clip = await requestVncClipboard();

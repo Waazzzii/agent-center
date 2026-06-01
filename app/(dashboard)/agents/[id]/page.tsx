@@ -26,6 +26,7 @@ import { BrowserScriptPreview } from '@/components/actions/BrowserScriptPreview'
 import { SubAgentPreview } from '@/components/actions/SubAgentPreview';
 import { ApprovalPreview } from '@/components/actions/ApprovalPreview';
 import { InfoBlock } from '@/components/actions/InfoBlock';
+import { ExecutionOptionsEditor, ExecutionOptionsSummary } from '@/components/actions/ExecutionOptionsEditor';
 import { SlackChannelInput } from '@/components/notifications/SlackChannelInput';
 import {
   getAgentAccessGroups,
@@ -198,6 +199,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     batchSize: 1,
     maxRetries: 0,
     accessGroupIds: [] as string[],
+    // Per-action cross-cutting options (migration 212). Null when nothing
+    // is attached — the editor renders empty Apply buttons. When an
+    // operator applies conditional_execution or continue_on_failure, the
+    // ExecutionOptionsEditor updates this object and the form payload
+    // sends it on save.
+    executionOptions: null as import('@/lib/api/agents').ExecutionOptions | null,
   });
   const [aiSteps, setAiSteps] = useState<AiStep[]>([]);
   const [logins, setLogins] = useState<Login[]>([]);
@@ -346,6 +353,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       batchSize: 1,
       maxRetries: 0,
       accessGroupIds: [],
+      executionOptions: null,
     });
     if (type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -366,6 +374,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       batchSize: action.batch_size ?? 1,
       maxRetries: action.max_retries ?? 0,
       accessGroupIds: [],
+      executionOptions: action.execution_options ?? null,
     });
     if (action.action_type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -494,6 +503,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           approval_step_id: actionForm.approvalStepId || null,
         };
       }
+      // Per-action cross-cutting options (migration 212). Always sent as
+      // an object so the server normalizer can confirm/clear cleanly —
+      // null collapses to {} on the backend (= no options attached).
+      payload.execution_options = actionForm.executionOptions ?? {};
       let savedActionId: string;
       if (editingAction) {
         await updateAction(selectedOrgId, agentId, editingAction.id, payload);
@@ -1056,6 +1069,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   const isBeingDragged = dragIndex === idx
                     || (draggedPartnerId !== undefined && draggedPartnerId === action.id);
 
+                  // Steps with execution_options attached get a 4px amber
+                  // left-border to distinguish them at a glance — the
+                  // summary line under the step name spells out which
+                  // attachments (conditional / failure-tolerated). Color
+                  // matches the editor's amber accent for visual unity.
+                  const hasExecutionOptions =
+                    !!action.execution_options?.conditional_execution ||
+                    action.execution_options?.continue_on_failure === true;
+
                   return (
                   <div key={action.id} className={cn(isPaired && 'relative')}>
                     <Card
@@ -1064,6 +1086,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         isBeingDragged && 'opacity-40 scale-[0.98]',
                         dropIndex === idx && !isBeingDragged && 'ring-2 ring-primary ring-offset-1',
                         isPaired && 'border-violet-300/70 dark:border-violet-700/50',
+                        hasExecutionOptions && 'border-l-4 border-l-amber-400 dark:border-l-amber-500',
                         pairCardClass,
                       )}
                       draggable
@@ -1187,6 +1210,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                 </p>
                               );
                             })()}
+                            {/* Execution-options indicators (migration 212).
+                                Shows a one-line summary when the step has
+                                a conditional_execution predicate or the
+                                continue_on_failure flag attached. Empty
+                                state renders nothing — keeps cards
+                                compact for the common case. */}
+                            <ExecutionOptionsSummary options={action.execution_options} />
                           </div>
                           <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
                             <Button
@@ -1701,6 +1731,24 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 </div>
               </>
             )}
+
+            {/* Per-action cross-cutting options (migration 212).
+                Conditional Execution = predicate that gates this step
+                per-item; non-matching items passthrough to the next step.
+                Allow Failure = step failure becomes a tolerated warning
+                and items passthrough instead of aborting the agent run.
+                Available on every action_type (approval / login / AI step /
+                browser_script / sub_agent) — approval and login rarely
+                use them but the storage shape is uniform. */}
+            <div className="mt-4 pt-4 border-t border-dashed border-muted-foreground/20">
+              <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
+                Execution options
+              </p>
+              <ExecutionOptionsEditor
+                value={actionForm.executionOptions}
+                onChange={(opts) => setActionForm((f) => ({ ...f, executionOptions: opts }))}
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setActionDialogOpen(false)}>Cancel</Button>
