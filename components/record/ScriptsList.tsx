@@ -1,14 +1,15 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Trash2, Pencil, Copy } from 'lucide-react';
+import { Trash2, Pencil, Copy, Search, X } from 'lucide-react';
 import { listScripts, deleteScript, createScript, getScriptLoginUsage, type BrowserScript } from '@/lib/api/scripts';
 import { RunScriptModal } from './RunScriptModal';
 
@@ -32,6 +33,25 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   // Per-script "currently being duplicated" state so the action button can
   // show a busy state without blocking the rest of the table.
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  // Operator-typed filter against script name + description. Empty string =
+  // show everything. Trimmed + lowercased once for the indexOf check.
+  const [search, setSearch] = useState('');
+
+  // Sorted + filtered view. Default sort is by name (case-insensitive,
+  // localeCompare so accents/digits behave naturally). The search match
+  // is substring against name OR description so operators who remember
+  // the description but not the exact name still find it.
+  const visibleScripts = useMemo(() => {
+    const needle = search.trim().toLowerCase();
+    const filtered = needle
+      ? scripts.filter((s) =>
+          s.name.toLowerCase().includes(needle) ||
+          (s.description?.toLowerCase().includes(needle) ?? false))
+      : scripts;
+    return [...filtered].sort((a, b) =>
+      a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }),
+    );
+  }, [scripts, search]);
 
   const load = async () => {
     if (!orgId) return;
@@ -137,9 +157,38 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
 
   return (
     <>
-      <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-        Saved Scripts ({scripts.length})
-      </p>
+      <div className="flex items-center justify-between gap-3 flex-wrap">
+        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
+          Saved Scripts ({search.trim() && visibleScripts.length !== scripts.length
+            ? `${visibleScripts.length} of ${scripts.length}`
+            : scripts.length})
+        </p>
+        {/* Search bar — filters by name OR description, case-insensitive
+            substring. Hidden when there's nothing to filter yet (don't
+            tease the operator with a control they can't usefully use). */}
+        {scripts.length > 0 && (
+          <div className="relative flex-1 max-w-xs">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60 pointer-events-none" />
+            <Input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Filter by name or description…"
+              className="h-8 pl-7 pr-7 text-xs"
+            />
+            {search.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setSearch('')}
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted transition-colors"
+                aria-label="Clear search"
+              >
+                <X className="h-3 w-3 text-muted-foreground" />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
 
       {loading ? (
         <div className="flex h-32 items-center justify-center">
@@ -148,6 +197,17 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
       ) : scripts.length === 0 ? (
         <Card><p className="py-10 text-center text-sm text-muted-foreground">
           No scripts saved yet. Click Record above to create one.
+        </p></Card>
+      ) : visibleScripts.length === 0 ? (
+        <Card><p className="py-10 text-center text-sm text-muted-foreground">
+          No scripts match &ldquo;{search}&rdquo;.{' '}
+          <button
+            type="button"
+            onClick={() => setSearch('')}
+            className="text-brand hover:underline"
+          >
+            Clear filter
+          </button>
         </p></Card>
       ) : (
         <Card className="overflow-hidden py-0">
@@ -167,7 +227,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
               </tr>
             </thead>
               <tbody>
-                {scripts.map((script) => {
+                {visibleScripts.map((script) => {
                   const paramCount = Object.keys(script.parameters ?? {}).length;
                   return (
                   <tr
