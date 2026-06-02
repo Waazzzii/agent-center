@@ -86,6 +86,44 @@ export function SelectorPanel({ step, stepIndex, onUpdateStep }: SelectorPanelPr
         )}
       </div>
 
+      {/* Wait-state dropdown — only meaningful for wait_for steps.
+          Default 'visible' keeps the original behavior (tries
+          candidates, fails if nothing becomes visible). 'hidden'
+          waits for the selector to be display:none/visibility:hidden/
+          detached — useful for drawer-closes and modal-dismisses.
+          'detached' is strictest: wait for the element to be removed
+          from the DOM entirely. Candidate fallback is skipped on
+          hidden/detached (operator's selector IS the spec). */}
+      {step.action === 'wait_for' && (
+        <div className="rounded border border-border/40 bg-muted/20 px-2.5 py-2 space-y-1">
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Wait until
+            </span>
+            <select
+              value={step.wait_state ?? 'visible'}
+              onChange={(e) =>
+                onUpdateStep({
+                  ...step,
+                  wait_state: e.target.value as 'visible' | 'hidden' | 'detached',
+                })
+              }
+              className="h-6 text-xs bg-transparent border border-border/50 rounded px-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
+            >
+              <option value="visible">Visible (default)</option>
+              <option value="hidden">Hidden (display:none / not visible)</option>
+              <option value="detached">Detached (removed from DOM)</option>
+            </select>
+          </div>
+          {(step.wait_state === 'hidden' || step.wait_state === 'detached') && (
+            <p className="text-[10px] text-muted-foreground leading-tight">
+              Candidate fallback is skipped — the active selector above is the spec. Wait until that
+              specific element {step.wait_state === 'hidden' ? 'becomes hidden or detached' : 'is removed from the DOM'}.
+            </p>
+          )}
+        </div>
+      )}
+
       {activeSel && activeSel !== 'body' && (
         <div className="rounded bg-green-500/5 border border-green-500/20 px-2.5 py-1.5">
           <span className="text-[9px] text-muted-foreground">Active selector:</span>

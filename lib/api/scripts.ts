@@ -43,6 +43,14 @@ export interface RecordedStep {
   tab_index?: number;
   /** For wait_for steps: optional timeout override in ms */
   timeout?: number;
+  /** For wait_for steps: which DOM state to wait for.
+   *  - 'visible' (default) — element appears AND becomes visible.
+   *    Tries selector candidates, falls back through the ranked list.
+   *  - 'hidden' — element is missing OR not visible (display:none,
+   *    visibility:hidden, detached). Use to wait for a drawer/modal
+   *    to close before proceeding.
+   *  - 'detached' — strictest: element is fully removed from the DOM. */
+  wait_state?: 'visible' | 'hidden' | 'detached';
   /** For pause steps: how long to sleep before the next step. Capped
    *  worker-side at 5 minutes (300_000ms). Positive integer or omitted. */
   duration_ms?: number;
