@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
-  getLogin, updateLogin, deleteLogin, verifyLogin, startLogin, startLogout,
+  getLogin, updateLogin, deleteLogin, verifyLogin, startLogout,
   setLoginCredentials, clearLoginCredentials, testAutoLogin,
   listLoginRuns,
   type Login, type LoginRunAudit,
@@ -28,6 +28,7 @@ import {
   subscribeActiveVerifySessions,
   type ActiveVerifySession,
 } from '@/lib/hooks/use-active-verify-sessions';
+import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -93,6 +94,7 @@ export default function EditLoginPage() {
   // from kicking off two browser-slot sessions at once.
   type StartingAction = 'verify' | 'login' | 'logout' | null;
   const [startingAction, setStartingAction] = useState<StartingAction>(null);
+  const { start: startManualLogin } = useStartManualLogin();
   const isStarting = startingAction !== null;
   const [activeSession, setActiveSessionState] = useState<ActiveVerifySession | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -670,21 +672,16 @@ export default function EditLoginPage() {
   const handleLogin = async () => {
     if (!selectedOrgId) return;
     setStartingAction('login');
-    try {
-      const result = await startLogin(selectedOrgId, id);
-      setActiveVerifySession({
-        entityId: id,
-        kind: 'login_manual',
-        logId: result.executionLogId,
-        label: `Log in: ${login?.name}`,
-        mode: 'interactive',
-      });
-      setDialogOpen(true);
-    } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to start login');
-    } finally {
-      setStartingAction(null);
-    }
+    // Centralized via useStartManualLogin — same flow as the
+    // Interactions page and the logins list. CRITICALLY, this used
+    // to skip the pre-clear step that the other two pages already
+    // had, which left stale cookies in the session row and made
+    // repeated Log In clicks on a broken profile silently inherit
+    // the bad state. The hook now ensures all three entry points
+    // behave identically.
+    const result = await startManualLogin(selectedOrgId, id, `Log in: ${login?.name}`);
+    setStartingAction(null);
+    if (result) setDialogOpen(true);
   };
 
   // Manual logout — mirrors the list-page flow. Spins up an interactive

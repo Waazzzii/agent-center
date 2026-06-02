@@ -10,7 +10,7 @@ import {
   getBrowserRunStatus,
   type AgentApprovalItem,
 } from '@/lib/api/agents';
-import { startLogin, clearLoginSession } from '@/lib/api/logins';
+import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -55,6 +55,7 @@ export default function InteractionsPage() {
   const [activeLoginSessions, setActiveLoginSessions] = useState<Record<string, ActiveVerifySession>>({});
   const [viewingLoginId, setViewingLoginId] = useState<string | null>(null);
   const [startingLogin, setStartingLogin] = useState<Record<string, boolean>>({});
+  const { start: startManualLogin } = useStartManualLogin();
 
   useEffect(() => {
     const refresh = () => {
@@ -136,33 +137,14 @@ export default function InteractionsPage() {
   const handleOpenBrowser = async (loginId: string, loginName: string) => {
     if (!selectedOrgId) return;
     setStartingLogin((s) => ({ ...s, [loginId]: true }));
-    try {
-      // Pre-clear the persisted storage_state row before allocating
-      // the new browser slot. The operator clicked Log In, so any
-      // remaining cookies / localStorage are about to be irrelevant
-      // anyway — wiping them up front means the freshly-allocated
-      // worker context starts from a truly empty state. Avoids the
-      // "stale session bleeds into the fresh manual login" loop that
-      // previously required closing and reopening the browser.
-      // No live context exists yet (no logId), so clearLoginSession
-      // only touches the DB row. Best-effort: don't block the login
-      // flow on a clear failure.
-      await clearLoginSession(selectedOrgId, loginId).catch(() => {});
-      const result = await startLogin(selectedOrgId, loginId);
-      setActiveVerifySession({
-        entityId: loginId,
-        kind: 'login_manual',
-        logId: result.executionLogId,
-        label: `Log in: ${loginName}`,
-        mode: 'interactive',
-      });
-      setViewingLoginId(loginId);
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e.response?.data?.error || 'Failed to start login');
-    } finally {
-      setStartingLogin((s) => ({ ...s, [loginId]: false }));
-    }
+    // useStartManualLogin handles the pre-clear → startLogin →
+    // setActiveVerifySession sequence consistently across the
+    // Interactions page, the logins list, AND the edit-login page.
+    // Result is the new login_run's logId on success, null on error
+    // (toast already fired by the hook).
+    const result = await startManualLogin(selectedOrgId, loginId, `Log in: ${loginName}`);
+    setStartingLogin((s) => ({ ...s, [loginId]: false }));
+    if (result) setViewingLoginId(loginId);
   };
 
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);

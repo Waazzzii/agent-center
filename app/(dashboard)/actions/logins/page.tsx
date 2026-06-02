@@ -7,11 +7,10 @@ import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   listLogins,
   deleteLogin,
-  startLogin,
   startLogout,
-  clearLoginSession,
   type Login,
 } from '@/lib/api/logins';
+import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
 import { getBrowserRunStatus } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
@@ -68,6 +67,7 @@ export default function LoginsPage() {
 
   // Per-login "starting" state (during the initial POST call)
   const [starting, setStarting] = useState<Record<string, boolean>>({});
+  const { start: startManualLogin } = useStartManualLogin();
 
   // Active sessions from localStorage, keyed by login id
   const [activeSessions, setActiveSessions] = useState<Record<string, ActiveVerifySession>>({});
@@ -192,31 +192,14 @@ export default function LoginsPage() {
   const handleLogin = async (item: Login) => {
     if (!selectedOrgId) return;
     setStarting((s) => ({ ...s, [item.id]: true }));
-    try {
-      // Pre-clear the persisted storage_state before allocating the
-      // new slot. Operator clicked Log In ⇒ any remaining session
-      // data is about to be replaced anyway, so wiping it up front
-      // guarantees the new context starts truly empty. Avoids the
-      // "stale session bleeds into a fresh manual login" loop that
-      // previously required closing/reopening the browser to recover.
-      // No live context exists yet, so the call only touches the DB
-      // row. Best-effort: don't block the login flow on a clear failure.
-      await clearLoginSession(selectedOrgId, item.id).catch(() => {});
-      const result = await startLogin(selectedOrgId, item.id);
-      setActiveVerifySession({
-        entityId: item.id,
-        kind: 'login_manual',
-        logId: result.executionLogId,
-        label: `Log in: ${item.name}`,
-        mode: 'interactive',
-      });
-      setViewingLoginId(item.id);
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e.response?.data?.error || 'Failed to start login');
-    } finally {
-      setStarting((s) => ({ ...s, [item.id]: false }));
-    }
+    // Centralized in useStartManualLogin — same flow as the
+    // Interactions page and the edit-login page. Pre-clears stale
+    // storage_state, kicks off the login_run, and stamps the
+    // active-verify-sessions store. Returns null on error (toast
+    // already fired) or { logId } on success.
+    const result = await startManualLogin(selectedOrgId, item.id, `Log in: ${item.name}`);
+    setStarting((s) => ({ ...s, [item.id]: false }));
+    if (result) setViewingLoginId(item.id);
   };
 
   if (!allowed) return <NoPermissionContent />;
