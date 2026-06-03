@@ -43,7 +43,15 @@ interface Options {
   enabled?: boolean;
 }
 
-const MAX_BACKOFF_MS = 30_000;
+const MIN_BACKOFF_MS = 5_000;   // initial + floor — keep reconnects gentle
+const MAX_BACKOFF_MS = 60_000;
+// Only reset backoff to MIN if the connection has been stable for at least this
+// long after `hello`. Otherwise an open-then-immediately-error cycle would keep
+// resetting the backoff on every hello and reconnect at the floor over and
+// over — exactly the pathology we saw flooding /products/me on the script page
+// while waiting on stuck pending state. With this guard, a flapping connection
+// climbs the backoff curve instead of holding at the floor.
+const STABLE_RESET_MS = 30_000;
 
 export function useEventStream({ topics, onEvent, enabled = true }: Options) {
   const [connected, setConnected] = useState(false);
@@ -58,8 +66,9 @@ export function useEventStream({ topics, onEvent, enabled = true }: Options) {
     if (typeof window === 'undefined') return;
 
     let es: EventSource | null = null;
-    let backoffMs = 1000;
+    let backoffMs = MIN_BACKOFF_MS;
     let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let stableResetTimer: ReturnType<typeof setTimeout> | null = null;
     let disposed = false;
 
     const open = () => {
@@ -75,8 +84,12 @@ export function useEventStream({ topics, onEvent, enabled = true }: Options) {
       es = new EventSource(url.toString(), { withCredentials: true });
 
       es.addEventListener('hello', () => {
-        backoffMs = 1000; // reset backoff on successful handshake
         setConnected(true);
+        // Don't reset backoff immediately — wait for the connection to PROVE
+        // stability for STABLE_RESET_MS first. If we error out before then,
+        // the backoff keeps climbing instead of pinning at MIN.
+        if (stableResetTimer) clearTimeout(stableResetTimer);
+        stableResetTimer = setTimeout(() => { backoffMs = MIN_BACKOFF_MS; }, STABLE_RESET_MS);
       });
 
       es.onmessage = (msg) => {
@@ -90,19 +103,21 @@ export function useEventStream({ topics, onEvent, enabled = true }: Options) {
 
       es.onerror = () => {
         setConnected(false);
+        if (stableResetTimer) { clearTimeout(stableResetTimer); stableResetTimer = null; }
         if (es) {
           es.close();
           es = null;
         }
         if (disposed) return;
         // Reconnect with exponential backoff, capped.
-        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
         reconnectTimer = setTimeout(open, backoffMs);
+        backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
       };
     };
 
     const close = () => {
       if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+      if (stableResetTimer) { clearTimeout(stableResetTimer); stableResetTimer = null; }
       if (es) { es.close(); es = null; }
       setConnected(false);
     };
@@ -113,7 +128,7 @@ export function useEventStream({ topics, onEvent, enabled = true }: Options) {
         close();
       } else if (!es) {
         // Tab back — reopen immediately.
-        backoffMs = 1000;
+        backoffMs = MIN_BACKOFF_MS;
         open();
       }
     };

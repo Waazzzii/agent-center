@@ -94,6 +94,8 @@ export default function LoginsPage() {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       return;
     }
+    // Dedupe toasts per logId across ticks while this effect is alive.
+    const toasted = new Set<string>();
     const tick = async () => {
       let changed = false;
       for (const entityId of Object.keys(activeSessions)) {
@@ -102,6 +104,25 @@ export default function LoginsPage() {
         try {
           const status = await getBrowserRunStatus(s.logId);
           if (TERMINAL.has(status.status)) {
+            // Server-side background failures (clear-profile-no-worker,
+            // crashed runs, etc.) come through here. The initial POST
+            // returned 200 because the work was kicked off in a
+            // background task — without this toast they'd just vanish
+            // from the UI with no signal to the operator.
+            if (status.status !== 'completed' && !toasted.has(s.logId)) {
+              toasted.add(s.logId);
+              const kindLabel =
+                s.kind === 'login_logout' ? 'Logout' :
+                s.kind === 'login_verify' ? 'Verify' :
+                s.kind === 'login_manual' ? 'Login' :
+                'Operation';
+              const action = status.status === 'aborted' ? 'aborted' : 'failed';
+              toast.error(
+                status.error
+                  ? `${kindLabel} ${action}: ${status.error}`
+                  : `${kindLabel} ${action}.`
+              );
+            }
             clearActiveVerifySession(entityId);
             changed = true;
           }
@@ -165,11 +186,44 @@ export default function LoginsPage() {
   };
 
   // ── Log Out / Log In actions ───────────────────────────────
-  // Verify lives on the edit page now — the list page only exposes the
-  // two interactive flows (log in, log out) since those need the noVNC
-  // dialog to open immediately.
+  // Log In still opens the noVNC dialog (operator interacts with the
+  // login form). Log Out is fully automated server-side — backend
+  // closes Chrome + rm-rf's the profile dir + marks needs_login — so
+  // it just kicks off the run and lets the polling effect track it to
+  // terminal. The row's button shows a spinner while active; the
+  // shared poll surfaces failure via toast.
   const handleLogout = async (item: Login) => {
     if (!selectedOrgId) return;
+
+    // Destructive confirm — see actions/logins/[id]/page.tsx for the
+    // full rationale. Same warning text so operators get a consistent
+    // message whether they trigger logout from the list or the detail
+    // page.
+    const confirmed = await confirm({
+      title:       'Log Out of this Profile?',
+      description: (
+        <div className="space-y-2">
+          <p>
+            This will close every Chrome window using{' '}
+            <span className="font-medium text-foreground">{item.name}</span>{' '}
+            and wipe its saved session.
+          </p>
+          <p>
+            <span className="font-medium text-destructive">
+              Any agent runs currently using this login will fail mid-step.
+            </span>{' '}
+            Queued runs will need to re-acquire the login (new HITL prompts)
+            before they can continue.
+          </p>
+          <p>Only continue if you intend to force a fresh login from scratch.</p>
+        </div>
+      ),
+      confirmText: 'Log Out',
+      cancelText:  'Cancel',
+      variant:     'destructive',
+    });
+    if (!confirmed) return;
+
     setStarting((s) => ({ ...s, [item.id]: true }));
     try {
       const result = await startLogout(selectedOrgId, item.id);
@@ -178,9 +232,14 @@ export default function LoginsPage() {
         kind: 'login_logout',
         logId: result.executionLogId,
         label: `Log out: ${item.name}`,
-        mode: 'interactive',
+        // 'observe' rather than 'interactive' — there's no HITL step
+        // for logout anymore, so any dialog-opening code path treats
+        // this as read-only.
+        mode: 'observe',
       });
-      setViewingLoginId(item.id);
+      // Intentionally NO setViewingLoginId here — logout has nothing
+      // for the operator to do in the dialog. The button on the row
+      // shows the spinner state via activeSessions[item.id].kind.
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
       toast.error(e.response?.data?.error || 'Failed to start logout');
@@ -282,7 +341,9 @@ export default function LoginsPage() {
                           ) : (
                             <Button variant="outline" size="sm" onClick={() => handleLogout(item)} disabled={isStarting || !!active} className="text-xs">
                               {isStarting || active ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
-                              <span className="ml-1">Log Out</span>
+                              <span className="ml-1">
+                                {active?.kind === 'login_logout' ? 'Logging out…' : 'Log Out'}
+                              </span>
                             </Button>
                           )}
                           <Button variant="ghost" size="icon-sm" className="text-destructive/50 hover:text-destructive"

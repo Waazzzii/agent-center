@@ -155,6 +155,9 @@ export default function InteractionsPage() {
       return;
     }
     const TERMINAL = new Set(['completed', 'failed', 'aborted']);
+    // Track toasted logIds so we don't double-toast across ticks. Lives
+    // inside the effect so it resets when activeLoginSessions changes.
+    const toasted = new Set<string>();
     const tick = async () => {
       let changed = false;
       for (const entityId of activeIds) {
@@ -162,7 +165,27 @@ export default function InteractionsPage() {
         if (!s) continue;
         try {
           const status = await getBrowserRunStatus(s.logId);
-          if (TERMINAL.has(status.status)) { clearActiveVerifySession(entityId); changed = true; }
+          if (TERMINAL.has(status.status)) {
+            // Surface server-side failures the start-call's 200 hid.
+            // See use-start-manual-login + actions/logins/[id] for the
+            // mirror of this pattern; same reasoning here.
+            if (status.status !== 'completed' && !toasted.has(s.logId)) {
+              toasted.add(s.logId);
+              const kindLabel =
+                s.kind === 'login_logout' ? 'Logout' :
+                s.kind === 'login_verify' ? 'Verify' :
+                s.kind === 'login_manual' ? 'Login' :
+                'Operation';
+              const action = status.status === 'aborted' ? 'aborted' : 'failed';
+              toast.error(
+                status.error
+                  ? `${kindLabel} ${action}: ${status.error}`
+                  : `${kindLabel} ${action}.`
+              );
+            }
+            clearActiveVerifySession(entityId);
+            changed = true;
+          }
         } catch { clearActiveVerifySession(entityId); changed = true; }
       }
       if (changed) await load(true);

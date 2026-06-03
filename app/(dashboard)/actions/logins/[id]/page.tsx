@@ -212,10 +212,35 @@ export default function EditLoginPage() {
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       return;
     }
+    // Track which logId we've already toasted on so a re-fire of the poll
+    // (or a network hiccup that re-runs the tick) doesn't double-toast the
+    // same failure.
+    let toastedLogId: string | null = null;
     const tick = async () => {
       try {
         const status = await getBrowserRunStatus(activeSession.logId);
         if (TERMINAL.has(status.status)) {
+          // Surface failures to the operator. The standalone-login flows
+          // (manual login, verify, logout, auto-login test) run their
+          // critical work in a background task on the server, so the
+          // initial POST returns 200 even when the work later fails —
+          // that's why these used to fail silently. Now any non-completed
+          // terminal status produces a toast with the server's error
+          // message (when present) or a kind-aware fallback string.
+          if (status.status !== 'completed' && toastedLogId !== activeSession.logId) {
+            toastedLogId = activeSession.logId;
+            const kindLabel =
+              activeSession.kind === 'login_logout' ? 'Logout' :
+              activeSession.kind === 'login_verify' ? 'Verify' :
+              activeSession.kind === 'login_manual' ? 'Login' :
+              'Operation';
+            const action = status.status === 'aborted' ? 'aborted' : 'failed';
+            toast.error(
+              status.error
+                ? `${kindLabel} ${action}: ${status.error}`
+                : `${kindLabel} ${action}.`
+            );
+          }
           clearActiveVerifySession(id);
           if (selectedOrgId) load();
         }
@@ -684,13 +709,51 @@ export default function EditLoginPage() {
     if (result) setDialogOpen(true);
   };
 
-  // Manual logout — mirrors the list-page flow. Spins up an interactive
-  // HITL session so the operator can click "log out" in the app UI; when
-  // they hit Done the post-logout state is persisted and the profile
-  // status flips back to 'needs_login'. Only useful when the profile is
-  // currently valid; the button is hidden in the 'needs_login' state.
+  // Manual logout — fully automated server-side. Backend's
+  // startLoginLogout closes every Chrome window for this profile,
+  // deletes the profile dir, and stamps status='needs_login'. There
+  // is no HITL step for the operator anymore — used to be an
+  // "interactive" session where they manually clicked log-out in the
+  // app and confirmed Done, but the persistent-profile rm-the-dir
+  // model made all of that redundant. We just kick off the run and
+  // let the polling effect track it to terminal; the button shows a
+  // spinner + "Logging out..." while active and the toast in that
+  // effect surfaces any failure.
   const handleLogout = async () => {
     if (!selectedOrgId) return;
+
+    // Destructive confirmation — logout closes every Chrome window
+    // bound to this profile (closeAllRunsForProfile) and wipes the
+    // user-data-dir. Any agent run currently using this login —
+    // mid-step, awaiting HITL, parked in the login queue — gets
+    // rug-pulled and will surface as failed in execution history.
+    // The operator may not realize this when they click the button on
+    // a quiet-looking page, so we make the impact explicit.
+    const confirmed = await confirm({
+      title:       'Log Out of this Profile?',
+      description: (
+        <div className="space-y-2">
+          <p>
+            This will close every Chrome window using{' '}
+            <span className="font-medium text-foreground">{login?.name ?? 'this login'}</span>{' '}
+            and wipe its saved session.
+          </p>
+          <p>
+            <span className="font-medium text-destructive">
+              Any agent runs currently using this login will fail mid-step.
+            </span>{' '}
+            Queued runs will need to re-acquire the login (new HITL prompts)
+            before they can continue.
+          </p>
+          <p>Only continue if you intend to force a fresh login from scratch.</p>
+        </div>
+      ),
+      confirmText: 'Log Out',
+      cancelText:  'Cancel',
+      variant:     'destructive',
+    });
+    if (!confirmed) return;
+
     setStartingAction('logout');
     try {
       const result = await startLogout(selectedOrgId, id);
@@ -699,9 +762,11 @@ export default function EditLoginPage() {
         kind: 'login_logout',
         logId: result.executionLogId,
         label: `Log out: ${login?.name}`,
-        mode: 'interactive',
+        // 'observe' so the existing dialog-open paths (e.g. clicking
+        // the row's "Watch" button) wouldn't open it in interactive
+        // mode — but the dialog itself isn't auto-opened here at all.
+        mode: 'observe',
       });
-      setDialogOpen(true);
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to start logout');
     } finally {
@@ -803,17 +868,27 @@ export default function EditLoginPage() {
                       {activeSession && activeSession.kind === 'login_verify' ? 'Verifying...' : 'Verify'}
                     </span>
                   </Button>
-                  {/* Logout — interactive HITL session so the operator can
-                      manually click "log out" in the app, then hit Done to
-                      persist the now-logged-out state. Only meaningful when
-                      the profile is currently valid; hidden in needs_login. */}
+                  {/* Logout — fully automated. Backend closes Chrome,
+                      rm-rf's the profile dir, marks needs_login. The
+                      button just shows a spinner + "Logging out..." while
+                      the run is in flight; no HITL dialog opens. Only
+                      meaningful when the profile is currently valid;
+                      hidden in needs_login. */}
                   <Button variant="outline" size="sm" onClick={handleLogout} disabled={isStarting || !!activeSession} className="text-xs">
-                    {startingAction === 'logout' ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
-                    <span className="ml-1">Log Out</span>
+                    {startingAction === 'logout' || (activeSession && activeSession.kind === 'login_logout')
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <LogOut className="h-3 w-3" />}
+                    <span className="ml-1">
+                      {activeSession && activeSession.kind === 'login_logout' ? 'Logging out...' : 'Log Out'}
+                    </span>
                   </Button>
                 </>
               )}
-              {activeSession && (
+              {/* Watch button for in-flight verify / manual login sessions —
+                  re-opens the HITL dialog so the operator can monitor or
+                  interact. Logout has no HITL step (fully automated), so
+                  there's nothing to watch — hide the button for that kind. */}
+              {activeSession && activeSession.kind !== 'login_logout' && (
                 <Button variant="outline" size="sm" className="text-xs" onClick={() => setDialogOpen(true)}>
                   Watch
                 </Button>

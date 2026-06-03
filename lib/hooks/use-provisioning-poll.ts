@@ -19,7 +19,10 @@ export interface UseProvisioningPollOptions<T extends { status: string }> {
   onReady: (data: T) => void;
   /** Called if the poll fetch throws (e.g. 503, network error). */
   onError: (err: unknown) => void;
-  /** Poll interval in ms. Default 3000. */
+  /** Poll interval in ms. Default 5000.
+   *  VM boot takes 30–120s; 5s is plenty fine-grained and ~40% fewer hits
+   *  than the old 3s default. Each poll auths upstream via /products/me,
+   *  so a sub-5s interval was wasted traffic. */
   intervalMs?: number;
 }
 
@@ -38,7 +41,7 @@ export function useProvisioningPoll<T extends { status: string }>({
   isProvisioningStatus,
   onReady,
   onError,
-  intervalMs = 3000,
+  intervalMs = 5000,
 }: UseProvisioningPollOptions<T>): UseProvisioningPollResult {
   const [isProvisioning, setIsProvisioning] = useState(false);
   const [elapsedMs, setElapsedMs] = useState(0);

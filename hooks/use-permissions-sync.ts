@@ -19,8 +19,13 @@ import { useAuthStore } from "@/stores/auth.store";
 import apiClient from "@/lib/api/client";
 import type { ProductUser } from "@/types/api.types";
 
-const BASE_RETRY_MS = 2_000;
+const BASE_RETRY_MS = 5_000;
 const MAX_RETRY_MS = 60_000;
+// Only reset retry to BASE if the connection has been stable this long. An
+// open-then-immediately-error cycle previously reset on every onopen, pinning
+// reconnects at the floor and flooding /products/me upstream (every reconnect
+// auths twice — ticket POST + SSE GET).
+const STABLE_RESET_MS = 30_000;
 // Same-origin BFF — catchall injects bearer and streams SSE through.
 const API_URL = "/api/backend";
 
@@ -29,6 +34,7 @@ export function usePermissionsSync() {
   const updateAdmin = useAuthStore((s) => s.updateAdmin);
   const retryDelay = useRef(BASE_RETRY_MS);
   const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const stableResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const esRef = useRef<EventSource | null>(null);
 
   useEffect(() => {
@@ -41,11 +47,9 @@ export function usePermissionsSync() {
         const { data } = await apiClient.post<{ ticket: string }>("/admin/me/events/ticket", {});
         ticket = data.ticket;
       } catch {
-        // Can't get a ticket — retry after backoff
-        retryTimer.current = setTimeout(() => {
-          retryDelay.current = Math.min(retryDelay.current * 2, MAX_RETRY_MS);
-          connect();
-        }, retryDelay.current);
+        // Can't get a ticket — retry after backoff (climb the curve)
+        retryTimer.current = setTimeout(connect, retryDelay.current);
+        retryDelay.current = Math.min(retryDelay.current * 2, MAX_RETRY_MS);
         return;
       }
 
@@ -62,17 +66,25 @@ export function usePermissionsSync() {
       });
 
       es.onopen = () => {
-        retryDelay.current = BASE_RETRY_MS; // reset backoff on successful connection
+        // Don't reset backoff yet — wait for the connection to prove stability.
+        // A connection that opens then immediately errors keeps climbing the
+        // backoff curve instead of pinning at the floor.
+        if (stableResetTimer.current) clearTimeout(stableResetTimer.current);
+        stableResetTimer.current = setTimeout(() => {
+          retryDelay.current = BASE_RETRY_MS;
+        }, STABLE_RESET_MS);
       };
 
       es.onerror = () => {
+        if (stableResetTimer.current) {
+          clearTimeout(stableResetTimer.current);
+          stableResetTimer.current = null;
+        }
         es.close();
         esRef.current = null;
         // Reconnect with exponential backoff (fetches a fresh ticket each time)
-        retryTimer.current = setTimeout(() => {
-          retryDelay.current = Math.min(retryDelay.current * 2, MAX_RETRY_MS);
-          connect();
-        }, retryDelay.current);
+        retryTimer.current = setTimeout(connect, retryDelay.current);
+        retryDelay.current = Math.min(retryDelay.current * 2, MAX_RETRY_MS);
       };
     }
 
@@ -84,6 +96,10 @@ export function usePermissionsSync() {
       if (retryTimer.current) {
         clearTimeout(retryTimer.current);
         retryTimer.current = null;
+      }
+      if (stableResetTimer.current) {
+        clearTimeout(stableResetTimer.current);
+        stableResetTimer.current = null;
       }
     };
   }, [admin?.id, updateAdmin]); // reconnect only if the logged-in user changes

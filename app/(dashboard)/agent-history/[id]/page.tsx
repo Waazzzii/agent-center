@@ -1065,15 +1065,63 @@ export default function ExecutionDetailPage() {
   // Last crumb = current view
   const [crumbs, setCrumbs] = useState<Crumb[]>([]);
 
+  // Index nodes by id across a freshly-fetched tree so we can re-resolve
+  // existing crumbs against live data without changing their identity.
+  // The crumb's `.node` reference gets refreshed in place, so the action
+  // currently being viewed picks up status/output updates from SSE refreshes
+  // without re-mounting (which would otherwise reset tabs, scroll, etc.).
+  const indexTreeById = useCallback((root: FullTreeNode | null): Map<string, FullTreeNode> => {
+    const map = new Map<string, FullTreeNode>();
+    const walk = (n: FullTreeNode) => {
+      if (!n?.id) return;
+      map.set(n.id, n);
+      for (const c of n.children ?? []) walk(c);
+    };
+    if (root) walk(root);
+    return map;
+  }, []);
+
   const loadTree = useCallback(async () => {
     if (!selectedOrgId || !id) return;
     try {
       const data = await getFullExecutionTree(selectedOrgId, id);
       setTree(data);
-      if (crumbs.length === 0) {
-        // Auto-build breadcrumb from ancestors (if this is a sub-agent execution)
-        // Ancestors include both execution nodes (agents) and action nodes (the sub_agent step)
-        // Only include execution ancestors in the breadcrumb (not the sub_agent action nodes)
+
+      // Refresh crumb references in place so the current view gets the
+      // latest data, but DON'T reset position — that's the bug that
+      // kicked operators back to the root view every time SSE fired.
+      //
+      // Two cases handled inside the functional setter:
+      //   1. crumbs is empty → first load. Build the initial chain from
+      //      ancestors + the just-fetched root, optionally drill into
+      //      the ?action= query param.
+      //   2. crumbs is non-empty → a refresh. Re-resolve each crumb's
+      //      node from the new tree by id (so status, output, etc. stay
+      //      live), but keep the crumb chain order/length intact.
+      //
+      // We use the functional setCrumbs form because the useCallback
+      // closure-captured `crumbs` would otherwise be stale across SSE
+      // refreshes (deps are [selectedOrgId, id]) — that stale `[]` was
+      // the trigger for the re-init on every event.
+      const treeIndex = indexTreeById(data);
+
+      setCrumbs((prev) => {
+        if (prev.length > 0) {
+          // Refresh-in-place — same crumb chain, fresh node references.
+          // If a crumb's node no longer exists in the new tree (rare —
+          // a deleted action), keep the old reference so the user
+          // doesn't get rug-pulled mid-view.
+          return prev.map((c) => {
+            const fresh = treeIndex.get(c.node.id);
+            return fresh ? { ...c, node: fresh } : c;
+          });
+        }
+
+        // First load — auto-build breadcrumb from ancestors (if this
+        // is a sub-agent execution). Ancestors include both execution
+        // nodes (agents) and action nodes (the sub_agent step). Only
+        // include execution ancestors in the breadcrumb (not the
+        // sub_agent action nodes).
         const ancestorCrumbs: Crumb[] = (data.ancestors ?? [])
           .filter((a) => a.type !== 'action')
           .map((a) => ({
@@ -1087,25 +1135,29 @@ export default function ExecutionDetailPage() {
             },
           }));
         const initialCrumbs = [...ancestorCrumbs, { label: data.label, node: data }];
-        setCrumbs(initialCrumbs);
 
-        // If ?action= query param is set, pre-select that action
-        // For sub_agent actions: open the modal. For others: drill in.
+        // If ?action= query param is set, pre-select that action.
+        // For sub_agent actions: open the modal (handled below — modal
+        // setter is outside the functional updater since it touches
+        // a different piece of state). For others: append to crumbs.
         if (initialActionId.current && data.children) {
           const matchingAction = data.children.find((a) => a.id === initialActionId.current);
           if (matchingAction) {
+            initialActionId.current = null;
             if (matchingAction.action_type === 'sub_agent') {
-              setSubAgentModalNode(matchingAction);
-            } else {
-              setCrumbs([...initialCrumbs, { label: matchingAction.label, node: matchingAction }]);
+              // Defer modal open so we don't trigger a setState mid-setter
+              queueMicrotask(() => setSubAgentModalNode(matchingAction));
+              return initialCrumbs;
             }
+            return [...initialCrumbs, { label: matchingAction.label, node: matchingAction }];
           }
-          initialActionId.current = null; // consume it
+          initialActionId.current = null;
         }
-      }
+        return initialCrumbs;
+      });
     } catch { toast.error('Failed to load execution'); }
     finally { setLoading(false); }
-  }, [selectedOrgId, id]);
+  }, [selectedOrgId, id, indexTreeById]);
 
   useEffect(() => { loadTree(); }, [loadTree]);
 
