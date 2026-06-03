@@ -855,19 +855,26 @@ export default function EditLoginPage() {
                 </Button>
               ) : (
                 <>
-                  {/* Spinner only when THIS button is the one starting up
-                      (startingAction === 'verify') or there's a live
-                      verify session running. If the operator clicked Log
-                      Out, Verify just shows as disabled with its normal
-                      icon — no misleading animation. */}
-                  <Button variant="outline" size="sm" onClick={handleVerify} disabled={isStarting || !!activeSession} className="text-xs">
-                    {startingAction === 'verify' || (activeSession && activeSession.kind === 'login_verify')
-                      ? <Loader2 className="h-3 w-3 animate-spin" />
-                      : <ShieldCheck className="h-3 w-3" />}
-                    <span className="ml-1">
-                      {activeSession && activeSession.kind === 'login_verify' ? 'Verifying...' : 'Verify'}
-                    </span>
-                  </Button>
+                  {/* Verify button intentionally hidden from operators.
+                      Agent runs and the post-manual-login flow already
+                      verify automatically, and an operator-driven verify
+                      kicks off a fresh slot whose first navigation can
+                      transiently land on a not-yet-loaded page and
+                      flip the row to needs_login — confusing for a
+                      session that's actually fine.
+                      handleVerify is still exported (kept for super-
+                      admin/debug use later) but no button surface it. */}
+                  {/* Spinner-only state when a verify is running in
+                      the background (e.g. fired by an agent or by the
+                      post-manual-login chain) so the operator knows
+                      activity is happening without giving them a
+                      button to trigger it manually. */}
+                  {activeSession && activeSession.kind === 'login_verify' && (
+                    <Button variant="outline" size="sm" disabled className="text-xs">
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      <span className="ml-1">Verifying...</span>
+                    </Button>
+                  )}
                   {/* Logout — fully automated. Backend closes Chrome,
                       rm-rf's the profile dir, marks needs_login. The
                       button just shows a spinner + "Logging out..." while
@@ -943,40 +950,28 @@ export default function EditLoginPage() {
               ) : (
                 <Badge variant="neutral" className="gap-1 text-[10px]">No credentials</Badge>
               )}
-              {/* Test button — runs the SAME verify → script → re-verify
-                  chain the agent uses, just standalone. Label rotates
-                  through the phases as SSE events come in. Disabled when
-                  config is incomplete, a test is in flight, or another
-                  verify/login session is using the browser slot. */}
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                className="text-xs min-w-[170px]"
-                disabled={
-                  !scriptId
-                  || !login.credentials_secret_id
-                  || testPhase !== 'idle'
-                  || !!activeSession
-                }
-                onClick={handleTestAutoLogin}
-                title={
-                  !scriptId || !login.credentials_secret_id
-                    ? 'Configure both a script and credentials first'
-                    : testPhase !== 'idle'
-                      ? 'Test in progress — watch the status below'
-                      : 'Run the auto-login chain end-to-end without affecting any agent run'
-                }
-              >
-                {testPhase === 'idle'
-                  ? <Sparkles className="h-3 w-3 mr-1" />
-                  : <Loader2 className="h-3 w-3 animate-spin mr-1" />}
-                {testPhase === 'idle'        ? 'Test auto-login'
-                  : testPhase === 'verifying_initial'      ? 'Verifying login…'
-                  : testPhase === 'running_script'         ? 'Auto-login proceeding…'
-                  : testPhase === 'verifying_after_script' ? 'Verifying auto-login…'
-                  : 'Testing…'}
-              </Button>
+              {/* Test Auto-Login button intentionally hidden from
+                  operators. Runs a synthetic verify → auto-login →
+                  re-verify chain that allocates a browser slot, which
+                  competes with real agent runs for the worker. Operators
+                  asked to surface this only when an auto-login is
+                  actively failing in production, which they can already
+                  diagnose by triggering an actual agent run against the
+                  login. Keeping handleTestAutoLogin + testAutoLogin
+                  imports in place so we can re-introduce a debug-only
+                  surface later without rebuilding the wiring.
+                  Live-test progress (when something else has triggered
+                  one) is still shown via the testPhase-driven banner
+                  below this header row. */}
+              {testPhase !== 'idle' && (
+                <Button type="button" variant="outline" size="sm" disabled className="text-xs min-w-[170px]">
+                  <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                  {testPhase === 'verifying_initial'        ? 'Verifying login…'
+                   : testPhase === 'running_script'          ? 'Auto-login proceeding…'
+                   : testPhase === 'verifying_after_script'  ? 'Verifying auto-login…'
+                   : 'Testing…'}
+                </Button>
+              )}
             </div>
           </div>
 
