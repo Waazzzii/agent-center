@@ -202,9 +202,11 @@ export async function deleteAgent(orgId: string, agentId: string) {
  * needed. The duplicate:
  *   • copies name (with "(copy)" suffix), description, requires_browser
  *   • is created INACTIVE so it doesn't fire while the operator reviews
- *   • clones every action, preserving order_index and FK references
- *     (ai_step_id, login_id, script_id, target_agent_id) — the dup uses
- *     the same reusable resources as the source
+ *   • clones every action, preserving order_index, FK references
+ *     (ai_step_id, login_id, script_id, target_agent_id, approval_step_id)
+ *     — the dup uses the same reusable resources as the source — and
+ *     per-use config (execution_options for conditional/allow-failure,
+ *     notification_slack_channel_id, approval_instructions, notify_user_id)
  *   • does NOT clone triggers (webhook keys would conflict, cron would
  *     double-fire) or routine_bindings — operator wires those up post-dup
  */
@@ -257,6 +259,13 @@ export async function duplicateAgent(
         login_id: a.login_id ?? null,
         script_id: a.script_id ?? null,
         target_agent_id: a.target_agent_id ?? null,
+        approval_step_id: a.approval_step_id ?? null,
+        notification_slack_channel_id: a.notification_slack_channel_id ?? null,
+        // Per-use cross-cutting config: conditional_execution gate +
+        // continue_on_failure tolerance. Previously dropped on clone,
+        // forcing operators to re-apply per-step "Allow Failure" /
+        // "Conditional" toggles on every duplicate.
+        execution_options: a.execution_options ?? null,
         ...tuning,
       });
     }
