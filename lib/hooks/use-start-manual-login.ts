@@ -2,7 +2,7 @@
 
 import { useState, useCallback } from 'react';
 import { toast } from 'sonner';
-import { startLogin, clearLoginSession } from '@/lib/api/logins';
+import { startLogin } from '@/lib/api/logins';
 import { setActiveVerifySession } from '@/lib/hooks/use-active-verify-sessions';
 
 /**
@@ -14,27 +14,32 @@ import { setActiveVerifySession } from '@/lib/hooks/use-active-verify-sessions';
  *   • /actions/logins list (manual log-in for the profile)
  *   • /actions/logins/[id] edit page (same, but per-profile context)
  *
- * Before this hook existed, each page hand-rolled the same 3-step
- * sequence — and one of them (the edit page) was MISSING the
- * pre-clear step. That left stale cookies in the session row, and
- * when the operator clicked Log In a third time on a misbehaving
- * login the worker would re-seed the OLD broken state into the
- * fresh slot, defeating the whole point of clicking Log In again.
- * Centralizing here means every entry point gets the SAME behavior:
+ * Two steps every entry point shares:
  *
- *   1. Pre-clear `browser_client_sessions.storage_state` in the DB
- *      to '{}'. Worker-side allocation reads from there and seeds
- *      the new slot with a CLEAN context. Best-effort: a transient
- *      Redis/DB hiccup on this call doesn't block the login.
- *
- *   2. POST /admin/logins/:id/login — kicks off a login_run (kind=
+ *   1. POST /admin/logins/:id/login — kicks off a login_run (kind=
  *      'manual'), allocates a worker slot, navigates to login.url,
  *      pauses for the operator to interact with the noVNC view.
  *
- *   3. Stamp the global active-verify-sessions store so any page
+ *   2. Stamp the global active-verify-sessions store so any page
  *      open to /interactions sees the spinner-row immediately. The
  *      caller's component then opens the dialog with the returned
  *      logId.
+ *
+ * NO pre-clear step. Under the persistent-profile architecture, the
+ * worker reuses the per-login profile_path on every allocation and
+ * Playwright re-attaches to whatever cookies / localStorage live on
+ * disk — so opening a Log In session against an existing profile
+ * keeps the operator in whatever logged-in state the site remembers
+ * (which is normally what we want — they're often just re-verifying
+ * or topping up an expired field). The earlier version of this hook
+ * called clearLoginSession() to wipe browser_client_sessions
+ * .storage_state before every Log In click — that was a holdover
+ * from the pre-persistent-profile architecture where the DB blob
+ * WAS the cookie store. It's no longer needed and was actively
+ * counterproductive (re-logging-in unnecessarily when the operator
+ * just wanted to re-confirm). The Logout button remains the only
+ * nuclear option — it deletes the profile_path directory on the
+ * worker via startLogout's server-side flow.
  *
  * Returns `{ start, starting }`. `start` returns null on failure
  * (toast already fired), or `{ logId }` on success — the caller
@@ -57,12 +62,6 @@ export function useStartManualLogin() {
     ): Promise<{ logId: string } | null> => {
       setStarting(true);
       try {
-        // Pre-clear the persisted storage_state row. No logId yet
-        // (slot hasn't been allocated), so this only touches the DB
-        // row — the live worker context wipe doesn't apply.
-        // Best-effort: failure here doesn't stop the login.
-        await clearLoginSession(orgId, loginId).catch(() => {});
-
         const result = await startLogin(orgId, loginId);
 
         // Stamp the cross-page store so /interactions / list pages
