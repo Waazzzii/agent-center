@@ -14,7 +14,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy, Search } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 
 type SortKey = 'name' | 'status' | 'created';
 
@@ -54,15 +54,13 @@ export default function AgentsPage() {
     }
   };
 
-  // Realtime: refresh agents list when executions change (run started/completed)
-  const agentRefreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEventStream({
+  // Near-realtime: refresh agents list when executions change. Versioned
+  // polling (15s — list page, low stakes) instead of a parked SSE stream.
+  useTopicVersions({
     topics: selectedOrgId ? [`org:${selectedOrgId}:executions`] : [],
     enabled: !!selectedOrgId,
-    onEvent: () => {
-      if (agentRefreshRef.current) clearTimeout(agentRefreshRef.current);
-      agentRefreshRef.current = setTimeout(() => loadAgents(true), 200);
-    },
+    intervalMs: 15_000,
+    onChange: () => { loadAgents(true); },
   });
 
   const handleRun = async (agentId: string, name: string) => {

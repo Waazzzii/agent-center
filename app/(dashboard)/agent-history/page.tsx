@@ -50,7 +50,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 
 // ─── Constants ────────────────────────────────────────────────
 
@@ -521,10 +521,12 @@ export default function AgentExecutionsPage() {
     }, 200);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page]);
-  useEventStream({
+  // Versioned polling (10s — history list, near-realtime is fine).
+  useTopicVersions({
     topics: selectedOrgId ? [`org:${selectedOrgId}:executions`] : [],
     enabled: !!selectedOrgId,
-    onEvent: scheduleRefresh,
+    intervalMs: 10_000,
+    onChange: scheduleRefresh,
   });
 
   // Seed agent filter from URL param once agents list is loaded

@@ -28,7 +28,7 @@ import {
   PauseCircle,
 } from 'lucide-react';
 import { ProvisioningNotice } from './ProvisioningNotice';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 
 interface Props {
   open: boolean;
@@ -63,7 +63,7 @@ interface Props {
   onVerifyStarted?: (verifyRunId: string) => void;
 }
 
-const POLL_INTERVAL_MS = 10_000;
+const POLL_INTERVAL_MS = 5_000;
 
 function StatusPill({ status, purpose = 'login' }: { status: BrowserRunStatus['status']; purpose?: 'login' | 'logout' }) {
   const authLabel = purpose === 'logout' ? 'Awaiting Logout' : 'Awaiting Login';
@@ -193,14 +193,14 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
     }
   };
 
-  // ── Realtime: flip the status pill the moment the backend transitions.
-  // `run:<runId>` is the universal topic — works for both agent executions
-  // and standalone login runs.  Refetch on any event since the status
-  // mapping (auth_required vs awaiting_approval etc.) is server-side.
-  useEventStream({
+  // ── Near-realtime: versioned polling on the run topic. Replaces the
+  // SSE stream — fetchStatus refires when the run's version moves, so
+  // the status pill flips within one poll interval of any transition.
+  // The 5s safety-net interval below covers the rest.
+  useTopicVersions({
     topics: open && runId ? [`run:${runId}`] : [],
     enabled: open,
-    onEvent: () => { fetchStatus().catch(() => {}); },
+    onChange: () => { fetchStatus().catch(() => {}); },
   });
 
   const startStatusPoll = () => {

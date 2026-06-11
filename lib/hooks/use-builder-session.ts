@@ -22,7 +22,7 @@ import {
   isBuilderTerminal,
   type BuilderSession,
 } from '@/lib/api/script-builder';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
 import { clearActiveBuilderSession } from '@/lib/hooks/use-active-builder-session';
 
@@ -108,9 +108,13 @@ export function useBuilderSession(orgId: string | null, sessionId: string | null
     debounceRef.current = setTimeout(() => { void refresh(); }, REFETCH_DEBOUNCE_MS);
   }, [refresh]);
 
-  const { connected } = useEventStream({
+  // Versioned polling (5s) — replaces the SSE stream. The 10s fallback
+  // poll below stays as belt-and-suspenders; builder sessions also pull
+  // fresh state after each action completes (the API call returns it),
+  // so realtime push was never load-bearing here.
+  const { connected } = useTopicVersions({
     topics: sessionId ? [`builder:${sessionId}`] : [],
-    onEvent,
+    onChange: onEvent,
     enabled: !!sessionId && !!orgId && !terminal && !notFound,
   });
 

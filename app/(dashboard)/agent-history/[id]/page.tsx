@@ -31,7 +31,7 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getActionBatchItems, getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { LogViewer } from '@/components/execution/LogViewer';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 
@@ -849,12 +849,14 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
 
   // Live-update steps via SSE while the action is executing
   const stepsRefresh = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEventStream({
+  // Versioned polling (5s while visible) — refetch the step log when the
+  // run's topic version moves. Replaces the parked SSE stream.
+  useTopicVersions({
     topics: executionId ? [`run:${executionId}`] : [],
     enabled: !!executionId && hasLogs,
-    onEvent: () => {
+    onChange: () => {
       if (stepsRefresh.current) clearTimeout(stepsRefresh.current);
-      stepsRefresh.current = setTimeout(() => loadSteps(), 500);
+      stepsRefresh.current = setTimeout(() => loadSteps(), 200);
     },
   });
 
@@ -1162,12 +1164,14 @@ export default function ExecutionDetailPage() {
   useEffect(() => { loadTree(); }, [loadTree]);
 
   const refreshRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEventStream({
+  // Versioned polling (5s while visible) — refresh the execution tree
+  // when the run's topic version moves.
+  useTopicVersions({
     topics: id ? [`run:${id}`] : [],
     enabled: !!id && !!selectedOrgId,
-    onEvent: () => {
+    onChange: () => {
       if (refreshRef.current) clearTimeout(refreshRef.current);
-      refreshRef.current = setTimeout(() => loadTree(), 300);
+      refreshRef.current = setTimeout(() => loadTree(), 200);
     },
   });
 

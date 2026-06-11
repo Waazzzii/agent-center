@@ -19,7 +19,7 @@ import {
   setLoginAccessGroups,
   type AgentAccessGroup,
 } from '@/lib/api/agent-access-groups';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import {
   listActiveVerifySessions,
   getActiveVerifySession,
@@ -414,112 +414,37 @@ export default function EditLoginPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // SSE: refresh login status when it changes + listen for live phase
-  // updates from the auto-login test runner.
+  // Near-realtime: versioned polling on this login's topic (+ the active
+  // run's topic while one is in flight). Replaces the SSE stream.
   //
-  // Subscription scope: ONLY the login-specific topic + the run-scoped
-  // topic (for the in-flight verify/manual/logout/test). We deliberately
-  // do NOT subscribe to `org:<orgId>:logins` here — that channel carries
-  // every login change in the org and would re-render this page whenever
-  // an unrelated login profile is touched. The list page subscribes to
-  // the org topic; this detail page only cares about its own login.
+  // Scope: ONLY the login-specific topic + run topic. We deliberately do
+  // NOT watch `org:<orgId>:logins` — that would refresh this page when
+  // any unrelated login in the org changes.
   //
-  // All SSE-driven refreshes use load(silent=true), which only updates
-  // the read-only `login` row — it does NOT re-seed the form, scripts,
-  // scriptId, or credEntries state. That's why the page no longer
-  // visibly flickers when a background event fires.
+  // What changed vs SSE: we no longer receive event payloads, so the
+  // auto-login test's per-phase label rotation ("Verifying login…" →
+  // "Auto-login proceeding…") is driven optimistically at start + by the
+  // testRunId terminal poll instead of mid-run breadcrumb events. The
+  // operator sees start + terminal states — the intermediate phase
+  // granularity was nice-to-have. All refreshes stay silent
+  // (load(silent=true)) so the form/credentials editor never flickers,
+  // and the reference-stable setLogin/setRecentRuns updates mean a
+  // refetch with unchanged data re-renders nothing.
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Memoize the topics array — useEventStream re-subscribes whenever the
-  // identity of this array changes, so handing it a new literal on every
-  // render would tear down + recreate the SSE connection (and might
-  // explain part of the "constantly refreshing" feel).
-  const sseTopics = useMemo(
+  const versionTopics = useMemo(
     () => (selectedOrgId
       ? [`login:${id}`, ...(activeSession ? [`run:${activeSession.logId}`] : [])]
       : []),
     [selectedOrgId, id, activeSession?.logId]
   );
-  useEventStream({
-    topics: sseTopics,
+  useTopicVersions({
+    topics: versionTopics,
     enabled: !!selectedOrgId,
-    onEvent: (ev) => {
-      // Defensive filter — even on the login-specific topic, we may
-      // receive run-status events whose entityId is the runId (not the
-      // login id). Only treat events that are clearly tied to this
-      // login as cause for a status refresh.
-      const eventForThisLogin =
-        ev.entityId === id ||
-        (ev.data && typeof ev.data === 'object' && 'loginId' in ev.data && ev.data.loginId === id);
-
-      // Auto-login test progress — intercept these before the generic
-      // refresh path so we drive the button label deterministically.
-      if (ev.type === 'login.test_phase' && ev.entityId === id) {
-        const { phase, message, outcome } = (ev.data ?? {}) as {
-          phase?: string; message?: string; outcome?: string;
-        };
-        if (phase === 'completed') {
-          setTestPhase('idle');
-          setTestRunId(null);
-          // Already-logged-in is informational (not a success in the
-          // "we exercised the script" sense), everything else is a real
-          // pass. UI palette differs accordingly.
-          setTestResult({
-            kind: outcome === 'already_valid' ? 'info' : 'success',
-            message: message ?? 'Test completed.',
-          });
-          // Refresh the login to pick up the new status/last_checked_at,
-          // plus the recent-runs panel. Silent: don't blow away the form.
-          if (refreshTimer.current) clearTimeout(refreshTimer.current);
-          refreshTimer.current = setTimeout(() => { load(true); loadRecentRuns(); }, 150);
-          return;
-        }
-        if (phase === 'failed') {
-          setTestPhase('idle');
-          setTestRunId(null);
-          setTestResult({ kind: 'error', message: message ?? 'Auto-login test failed.' });
-          if (refreshTimer.current) clearTimeout(refreshTimer.current);
-          refreshTimer.current = setTimeout(() => { load(true); loadRecentRuns(); }, 150);
-          return;
-        }
-        if (phase === 'verifying_initial' || phase === 'running_script' || phase === 'verifying_after_script') {
-          setTestPhase(phase);
-          setTestResult(null);
-          return;
-        }
-        return;
-      }
-      // Everything else — only react if the event is for this login (or
-      // for an active run we're tracking). Silent refresh so the form,
-      // credentials editor, and script picker don't re-render.
-      if (!eventForThisLogin && !ev.type?.startsWith('login_run.')) return;
-      // Filter breadcrumbs: events that don't carry a state change
-      // (per-step log entries, progress pings) shouldn't trigger a
-      // refresh at all — the status pill and timestamps won't change,
-      // and refetching the audit list just rewrites identical rows. We
-      // only refresh on event types that are *terminal-shaped* (started,
-      // completed, failed, aborted, status_changed) or that explicitly
-      // signal a status flip on the login row. Breadcrumb/log/progress
-      // events get dropped here.
-      //
-      // The reference-stable setLogin / setRecentRuns updates below mean
-      // even if a stray refresh slips through, it won't actually
-      // re-render anything when the data hasn't changed.
-      const t = ev.type ?? '';
-      const isStateChange =
-        t.endsWith('.started')
-        || t.endsWith('.completed')
-        || t.endsWith('.failed')
-        || t.endsWith('.aborted')
-        || t.endsWith('.status_changed')
-        || t === 'login.updated'
-        || t === 'login.status_changed';
-      if (!isStateChange) return;
-      // Debounce to 600ms so a burst of near-simultaneous terminal
-      // events (e.g. login_run.completed + login.status_changed firing
-      // back-to-back at end of a run) coalesces into a single fetch
-      // rather than two flashes.
+    onChange: () => {
+      // Debounce so a burst of near-simultaneous changes (login_run
+      // completed + login status flip) coalesces into a single fetch.
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
-      refreshTimer.current = setTimeout(() => { load(true); loadRecentRuns(); }, 600);
+      refreshTimer.current = setTimeout(() => { load(true); loadRecentRuns(); }, 300);
     },
   });
 
@@ -604,16 +529,17 @@ export default function EditLoginPage() {
    * Standalone test of the auto-login chain — same code path the agent
    * uses (verify → script → re-verify) but with no HITL fallback.
    *
-   * UX: no browser viewer. Live progress comes via the
-   * `login.test_phase` SSE events handled in the useEventStream above,
-   * which drives the `testPhase` state and rotates the button label
-   * through the stages. Final outcome lands in `testResult` and renders
-   * inline below the button row.
+   * UX: no browser viewer. The button shows an optimistic "Verifying
+   * login…" at start; the terminal outcome arrives via the testRunId
+   * status poll (below), which sets `testResult` rendered inline under
+   * the button row. (The per-phase label rotation that SSE used to
+   * drive was dropped in the versioned-polling migration — start +
+   * terminal states are what matter.)
    */
   const handleTestAutoLogin = async () => {
     if (!selectedOrgId) return;
     setTestResult(null);
-    // Optimistic phase — the SSE event will overwrite this within a
+    // Optimistic phase — shows immediately while the request is in flight; the
     // moment but it avoids a flash of "Test auto-login" while the
     // request is still in flight.
     setTestPhase('verifying_initial');

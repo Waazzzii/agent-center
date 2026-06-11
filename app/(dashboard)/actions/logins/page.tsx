@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import {
   listActiveVerifySessions,
   getActiveVerifySession,
@@ -155,15 +155,12 @@ export default function LoginsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // ── Realtime: silently reload when any login in this org changes
-  const loginRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEventStream({
+  // ── Near-realtime: silently reload when any login in this org changes.
+  // Versioned polling (5s, visible tabs only) — see use-topic-versions.
+  useTopicVersions({
     topics: selectedOrgId ? [`org:${selectedOrgId}:logins`] : [],
     enabled: !!selectedOrgId,
-    onEvent: () => {
-      if (loginRefreshTimer.current) clearTimeout(loginRefreshTimer.current);
-      loginRefreshTimer.current = setTimeout(() => { load(true); }, 150);
-    },
+    onChange: () => { load(true); },
   });
 
   const handleDelete = async (item: Login) => {

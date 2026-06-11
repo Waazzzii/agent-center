@@ -27,7 +27,7 @@ import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
 import { useBillingRangePresets } from '@/lib/hooks/use-billing-ranges';
 import { getBillingCycle, type BillingCycle } from '@/lib/api/billing-cycles';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { toast } from 'sonner';
 import {
   Activity, Clock, AlertTriangle, Zap, Server, Monitor,
@@ -135,11 +135,13 @@ export default function AnalyticsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Realtime: refresh on any execution event in this org (debounced).
-  useEventStream({
+  // Near-realtime: refresh when executions change. Analytics is a slow-
+  // moving aggregate view — 30s versioned polling is plenty.
+  useTopicVersions({
     topics: selectedOrgId ? [`org:${selectedOrgId}:executions`] : [],
     enabled: !!selectedOrgId,
-    onEvent: () => { void load(); },
+    intervalMs: 30_000,
+    onChange: () => { void load(); },
   });
 
   if (!allowed) return <NoPermissionContent />;

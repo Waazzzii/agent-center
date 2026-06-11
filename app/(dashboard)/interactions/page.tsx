@@ -29,7 +29,7 @@ import {
   subscribeActiveVerifySessions,
   type ActiveVerifySession,
 } from '@/lib/hooks/use-active-verify-sessions';
-import { useEventStream } from '@/lib/hooks/use-event-stream';
+import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 
 const PAGE_SIZE = 20;
 type FilterType = 'all' | 'approval' | 'login';
@@ -94,14 +94,13 @@ export default function InteractionsPage() {
     return () => clearInterval(iv);
   }, [load]);
 
-  const interactionsTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEventStream({
+  // Versioned polling (replaces SSE): refetch when the org's interactions
+  // topic version moves. ~100-byte poll every 5s while visible, nothing
+  // while hidden. Worst-case staleness one poll interval — fine here.
+  useTopicVersions({
     topics: selectedOrgId ? [`org:${selectedOrgId}:interactions`] : [],
     enabled: !!selectedOrgId,
-    onEvent: () => {
-      if (interactionsTimer.current) clearTimeout(interactionsTimer.current);
-      interactionsTimer.current = setTimeout(() => { load(true); }, 150);
-    },
+    onChange: () => { load(true); },
   });
 
   const handleApprove = async (item: AgentApprovalItem) => {
