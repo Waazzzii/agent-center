@@ -53,7 +53,7 @@ function truncate(str: string, max: number) {
 
 type ActionType = RecordedStep['action'];
 
-const ACTION_ICONS: Record<ActionType, React.ReactNode> = {
+export const ACTION_ICONS: Record<ActionType, React.ReactNode> = {
   navigate:   <Globe className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
   click:      <MousePointer2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
   fill:       <Type className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
@@ -67,7 +67,7 @@ const ACTION_ICONS: Record<ActionType, React.ReactNode> = {
   pause:        <Hourglass className="h-3.5 w-3.5 text-indigo-400 shrink-0" />,
 };
 
-function StepDescription({ step }: { step: RecordedStep }) {
+export function StepDescription({ step }: { step: RecordedStep }) {
   switch (step.action) {
     case 'navigate':
       return (

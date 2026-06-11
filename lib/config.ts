@@ -25,3 +25,12 @@ export const AGENT_CLIENT_ID =
  */
 export const AUTH_URL =
   process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:3100";
+
+/**
+ * AI Script Builder ("Build with AI" on Browser Scripts) — hidden by default
+ * while the feature is being tested. Set NEXT_PUBLIC_AI_SCRIPT_BUILDER=true
+ * to surface the entry point + resume banner. NEXT_PUBLIC_* is baked at
+ * build time, so flipping this requires a rebuild/redeploy.
+ */
+export const AI_SCRIPT_BUILDER_ENABLED =
+  process.env.NEXT_PUBLIC_AI_SCRIPT_BUILDER === "true";
