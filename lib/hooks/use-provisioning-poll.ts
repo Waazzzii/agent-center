@@ -80,13 +80,25 @@ export function useProvisioningPoll<T extends { status: string }>({
     setIsProvisioning(true);
     setElapsedMs(0);
 
+    // Hard ceiling on provisioning waits. Worker boot worst-case is ~5 min
+    // (image pull + Autopilot node provision + Chromium pool init); a run
+    // that still reports 'provisioning' after 10 minutes is wedged — its
+    // pending marker expired or the provision failed silently. Without
+    // this cap, a dialog left open on such a run polls every 5s forever.
+    const MAX_PROVISIONING_MS = 10 * 60 * 1000;
+
     intervalRef.current = setInterval(async () => {
       try {
         const data = await pollFnRef.current(runId);
 
-        setElapsedMs(Date.now() - startTimeRef.current);
+        const elapsed = Date.now() - startTimeRef.current;
+        setElapsedMs(elapsed);
 
         if (isProvisioningStatusRef.current(data.status)) {
+          if (elapsed > MAX_PROVISIONING_MS) {
+            cleanup();
+            onErrorRef.current(new Error('Provisioning timed out after 10 minutes'));
+          }
           return; // still waiting
         }
 

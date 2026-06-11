@@ -163,19 +163,33 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
   // ── Status polling (10s) — runs after provisioning is complete ──
   // Kept as a safety net; SSE below drives the fast path.
 
+  // Consecutive-failure counter for the safety-net poll. A dialog left
+  // open on a run that no longer exists (404s) or an unreachable server
+  // must NOT keep polling every 10s forever — accumulated zombie pollers
+  // were part of the Cloud Run saturation incident. After 6 consecutive
+  // failures (~1 min) we stop entirely; the user can close/reopen the
+  // dialog to retry.
+  const pollFailuresRef = useRef(0);
+
   const fetchStatus = async () => {
     try {
       const data = await getBrowserRunStatus(runId);
       setRunStatus(data);
       setPollError(false);
+      pollFailuresRef.current = 0;
 
-      // Stop polling when terminal
-      if (data.status === 'completed' || data.status === 'failed') {
-        clearInterval(intervalRef.current!);
-        intervalRef.current = null;
+      // Stop polling when terminal ('aborted' included — previously it
+      // kept polling a dead run every 10s indefinitely)
+      if (data.status === 'completed' || data.status === 'failed' || data.status === 'aborted') {
+        if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
       }
     } catch {
       setPollError(true);
+      pollFailuresRef.current++;
+      if (pollFailuresRef.current >= 6 && intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     }
   };
 
