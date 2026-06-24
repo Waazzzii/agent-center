@@ -7,15 +7,17 @@ import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenuLabel, DropdownMenuSeparator,
 } from '@/components/ui/dropdown-menu';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import {
-  CheckCircle2, ChevronRight, ChevronsRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
+  CheckCircle2, ChevronRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
   CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
-  Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, ListTodo, LogIn, KeyRound, Zap,
+  Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
+  Scissors,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -182,12 +184,15 @@ export function RunScriptModal({
   //               runtime's pacing. Used to reproduce timing-sensitive
   //               failures that auto mode masks. UI polls /state at
   //               500ms intervals for live progress.
-  // Legacy `autoMode` boolean kept as a derived value so the existing
-  // mode-dropdown label/icon logic doesn't need to be touched in this
-  // diff.
-  type RunMode = 'step' | 'auto' | 'agent';
+  // Test runs come in two flavors: 'step' (one step at a time, repeatable)
+  // and 'agent' (full run with the agent runtime's timing). The old 'auto'
+  // editor-paced run was removed — "run as the agent would" is the single
+  // honest full-run path.
+  type RunMode = 'step' | 'agent';
   const [runMode, setRunMode] = useState<RunMode>('step');
-  const autoMode = runMode === 'auto';
+  // Which family of actions the toolbar picker is showing. New scripts open
+  // in Record (you're about to capture); existing scripts open in Test.
+  const [toolMode, setToolMode] = useState<'test' | 'record' | 'extract'>(mode === 'record' ? 'record' : 'test');
 
   // ── Hybrid record+replay (within test mode) ───────────────────
   const [isRecording, setIsRecording]           = useState(false);
@@ -288,6 +293,7 @@ export function RunScriptModal({
     setHoveredStep(null);
     setJumpingTo(null);
     setRunMode('step');
+    setToolMode('test');
     setIsRecording(false);
     setLiveRecordedSteps([]);
     setNewStepIndices(new Set());
@@ -304,6 +310,9 @@ export function RunScriptModal({
   // ── Auto-start when overlay opens (with orphan check) ────────
   useEffect(() => {
     if (!open || !orgId) return;
+    // Default the toolbar mode each open: Record for a fresh recording,
+    // Test for an existing script.
+    setToolMode(mode === 'record' ? 'record' : 'test');
 
     // Check for an orphaned session before starting a new one
     const existing = getActiveBrowserSession();
@@ -659,6 +668,110 @@ export function RunScriptModal({
   };
 
   // ── Linked-login handlers ─────────────────────────────────────
+  // Save the script (creating it if this is a brand-new recording) and
+  // restart the browser session so it boots with the linked login's
+  // authenticated profile. The backend resolves profile_path from the
+  // script's login_id at session start, so a linked login only takes
+  // effect on a FRESH session — this gives the operator that fresh
+  // session in one click instead of "close, reopen, start again".
+  const restartSessionWithLogin = async (loginId: string) => {
+    if (!orgId) return;
+    setStarting(true);
+    try {
+      // 1. Capture current steps; stop recording so they're included.
+      let steps = stepRunState?.steps ?? [];
+      const wasRecording = isRecording;
+      if (isRecording && runId) {
+        try {
+          const res = await stopStepRunRecording(orgId, runId);
+          steps = res.steps ?? steps;
+        } catch { /* proceed with whatever steps we have */ }
+      }
+      setIsRecording(false);
+      setLiveRecordedSteps([]);
+      setNewStepIndices(new Set());
+
+      // 2. Persist the script + login_id (create on first save).
+      const name = scriptName.trim() || 'Untitled Script';
+      const parameters = buildParameters(steps);
+      let targetScriptId = script?.id ?? tempScriptId;
+      if (targetScriptId) {
+        await updateScript(orgId, targetScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {}, login_id: loginId });
+      } else {
+        const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: loginId });
+        targetScriptId = created.id;
+        setTempScriptId(created.id);
+      }
+      setHasSavedSession(true);
+      setHasChanges(false);
+      onSaved?.();
+
+      // 3. Tear down the current session.
+      if (runId) await abortStepRun(orgId, runId).catch(() => {});
+      setRunId(null);
+      setStepRunState(null);
+
+      // 4. Start a fresh session on the saved script — the backend seeds the
+      //    linked login's profile at boot. Blank params (fresh session).
+      const sessionMode: 'test' | 'record' = mode === 'record' ? 'record' : 'test';
+      const res = await startStepRun(orgId, targetScriptId, {}, undefined, browserClientId);
+      if ('status' in res && res.status === 'provisioning') {
+        // No slot free this instant — hand off to the provisioning poll,
+        // which re-enables recording on completion when mode === 'record'.
+        provisioningModeRef.current = sessionMode;
+        setActiveBrowserSession({ runId: res.runId, orgId, scriptId: targetScriptId, mode: sessionMode });
+        setProvisioningRunId(res.runId);
+        return;
+      }
+      const runState = await getStepRun(orgId, res.runId);
+      setRunId(res.runId);
+      setViewerUrl(res.viewerUrl);
+      setActiveBrowserSession({ runId: res.runId, orgId, scriptId: targetScriptId, mode: sessionMode });
+      setStepRunState({
+        currentIndex: res.currentIndex,
+        totalSteps:   res.totalSteps,
+        step:         res.step,
+        steps:        runState.steps ?? steps,
+        screenshot:   null,
+        extracted:    {},
+        done:         false,
+        status:       'waiting',
+      });
+      setEditedStep(res.step ? JSON.stringify(res.step, null, 2) : '');
+      // Resume recording if we interrupted it (record mode).
+      if (wasRecording && sessionMode === 'record') {
+        await startStepRunRecording(orgId, res.runId);
+        setIsRecording(true);
+      }
+      toast.success('Browser restarted with the linked login');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to restart with login');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  // After a login is linked, offer to restart the browser so it picks up
+  // that login's profile immediately. Only when linking (not unlinking) and
+  // a session is actually live to restart. "Not now" keeps the link; it
+  // applies on the next session start.
+  const maybeOfferRestartWithLogin = async (loginId: string | null) => {
+    if (!loginId || !orgId) return;
+    if (!runId && !provisioningRunId) return;
+    const name = availableLogins.find((l) => l.id === loginId)?.name ?? 'this login';
+    const ok = await confirm({
+      title: 'Restart browser with this login?',
+      description:
+        `A linked login only takes effect in a fresh browser session. Save and restart now ` +
+        `with "${name}" so you can record and test against the logged-in state? Your steps so far are kept.`,
+      confirmText: 'Save & restart',
+      cancelText: 'Not now',
+      variant: 'default',
+    });
+    if (!ok) return;
+    await restartSessionWithLogin(loginId);
+  };
+
   // Linking the script's login propagates the change to every agent
   // already using this script — the operator gets a confirm dialog
   // showing the count before we touch other agents. Idempotent at
@@ -667,6 +780,9 @@ export function RunScriptModal({
     setLoginPickerOpen(false);
     if (!orgId || mode === 'record' || !script?.id) {
       setLinkedLoginId(loginId);
+      // Record mode (or unsaved): the link lives in state until Save, but we
+      // can still offer to restart the live session with the login now.
+      await maybeOfferRestartWithLogin(loginId);
       return;
     }
 
@@ -719,6 +835,9 @@ export function RunScriptModal({
           (parts.length ? ` (${parts.join(', ')})` : '')
         );
       }
+      // Link persisted — offer to restart the live session so it boots with
+      // the login's profile (only fires when linking, with a session live).
+      await maybeOfferRestartWithLogin(loginId);
     } catch (err: any) {
       toast.error(err?.response?.data?.error || 'Failed to update linked login');
     }
@@ -862,69 +981,9 @@ export function RunScriptModal({
     }
   };
 
-  const handleRunAll = async () => {
-    if (!runId || !orgId || !stepRunState || stepRunState.done) return;
-    cancelAutoRunRef.current = false;
-    const controller = new AbortController();
-    autoRunAbortRef.current = controller;
-    setStepRunState((s) => s ? { ...s, status: 'running' } : s);
-    setError(null);
-    let finished = false;
-    while (!finished && !cancelAutoRunRef.current) {
-      try {
-        const res = await executeStepRunStep(orgId, runId, params, controller.signal);
-        finished = res.done;
-        setStepRunState((s) => {
-          const steps = [...(s?.steps ?? [])];
-          if (res.executedStep && res.currentIndex > 0) {
-            steps[res.currentIndex - 1] = res.executedStep;
-          }
-          return {
-            currentIndex: res.currentIndex,
-            totalSteps:   res.totalSteps,
-            step:         res.step,
-            steps,
-            screenshot:   res.screenshot,
-            extracted:    res.extracted,
-            done:         res.done,
-            status:       res.done ? 'waiting' : 'running',
-          };
-        });
-        // Live-update test values from extracted data
-        if (res.extracted && Object.keys(res.extracted).length > 0) {
-          setParams((p) => ({ ...p, ...res.extracted }));
-        }
-        if (res.done) {
-          // Force one more state update to ensure the last executedStep merge is visible
-          const lastExecutedStep = res.executedStep;
-          if (lastExecutedStep && res.currentIndex > 0) {
-            setStepRunState((s) => {
-              if (!s) return s;
-              const steps = [...s.steps];
-              steps[res.currentIndex - 1] = lastExecutedStep;
-              return { ...s, steps };
-            });
-          }
-          setEditedStep('');
-          toast.success('All steps completed!');
-        }
-      } catch (err: any) {
-        // AbortError means the user clicked Stop — not a real error.
-        if (err?.name === 'AbortError' || err?.name === 'CanceledError' || cancelAutoRunRef.current) break;
-        const screenshot = err?.response?.data?.screenshot ?? null;
-        const msg = err?.response?.data?.error || err?.message || 'Step failed';
-        setStepRunState((s) => s ? { ...s, status: 'error', screenshot: screenshot ?? s.screenshot } : s);
-        setError(msg);
-        finished = true;
-      }
-    }
-    autoRunAbortRef.current = null;
-    if (cancelAutoRunRef.current) {
-      cancelAutoRunRef.current = false;
-      setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
-      toast.info('Auto-run stopped');
-    }
-  };
+  // (The old client-side editor-paced "Run All" was removed — the single
+  // full-run path is now handleRunAgentMode, which reproduces the agent
+  // runtime's true back-to-back timing.)
 
   /**
    * Agent-timing Run All. Sends ONE HTTP request to the backend that
@@ -1866,11 +1925,13 @@ export function RunScriptModal({
         const parameters = buildParameters(steps);
 
         if (tempScriptId) {
-          // Already saved once — update in place
-          await updateScript(orgId, tempScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {} });
+          // Already saved once — update in place. Persist the linked login
+          // too (picked from the in-record-mode chip; held in linkedLoginId).
+          await updateScript(orgId, tempScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {}, login_id: linkedLoginId });
         } else {
-          // First save — create the script now
-          const created = await createScript(orgId, { name, steps, parameters, test_values: {} });
+          // First save — create the script now, carrying any login linked
+          // during recording so it sticks without a second round-trip.
+          const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: linkedLoginId });
           setTempScriptId(created.id);
         }
         // Sync steps to the worker so jumps/executions use the saved version
@@ -2143,11 +2204,13 @@ export function RunScriptModal({
             )}
           </div>
 
-          {/* Linked login — chip + Log in button.
-              Record mode skips this: the script doesn't exist yet, so
-              there's nothing to update. The chip reappears once the
-              script is saved and the modal is reopened in test mode. */}
-          {mode !== 'record' && script?.id && (
+          {/* Linked login — chip + Log in button. Available in BOTH record
+              and test mode: in record mode the choice is held in
+              linkedLoginId and persisted on Save (createScript carries
+              login_id); in test mode it's persisted immediately. Linking
+              also offers to restart the browser with the login's profile —
+              see handleSetLinkedLogin. */}
+          {(mode === 'record' || script?.id) && (
             <div className="flex items-center gap-1.5 shrink-0">
               <DropdownMenu open={loginPickerOpen} onOpenChange={setLoginPickerOpen}>
                 <DropdownMenuTrigger asChild>
@@ -2236,23 +2299,17 @@ export function RunScriptModal({
         </div>
 
         {/* Right: actions ─────────────────────────────────────────
-            Single Mode dropdown collapses what used to be four toolbar
-            sections (record toggle / wait capture / extract dropdown /
-            step-auto toggle) into one labeled picker. Selecting a mode
-            triggers it immediately:
-              • Step Test / Auto Test → updates Run button behavior, no action
-              • Record Interactions   → starts recording
-              • Record Wait           → starts wait-for capture
-              • Extract From Element  → starts extract capture
-              • Extract From URL      → uses clipboard or opens URL dialog
-              • Copy From Page        → uses last-copied text
-            The current mode label is always visible so the operator
-            sees exactly what action will happen next. */}
+            "Mode" + "Action" labeled dropdowns. Mode picks Test / Record /
+            Extract; Action lists that mode's actions. The Run trigger lives
+            in the Steps header (below) so this toolbar never shifts, and the
+            Action control becomes a Stop / Cancel button while an action
+            runs. */}
         <div className="flex items-center gap-1.5 shrink-0">
 
           {runId && (
-            <ModeDropdown
-              autoMode={autoMode}
+            <ModeActionPicker
+              toolMode={toolMode}
+              setToolMode={setToolMode}
               runMode={runMode}
               isRecording={isRecording}
               isCapturingWaitFor={isCapturingWaitFor}
@@ -2260,29 +2317,26 @@ export function RunScriptModal({
               isExecuting={isExecuting}
               disabled={starting}
               onSelectStep={() => setRunMode('step')}
-              onSelectAuto={() => setRunMode('auto')}
               onSelectAgent={() => setRunMode('agent')}
-              onSelectRecordInteractions={isRecordMode && isRecording ? handleStopRecordSession : handleToggleRecording}
-              onSelectRecordWait={isCapturingWaitFor ? () => {
+              onStartRecording={handleToggleRecording}
+              onStopRecording={isRecordMode ? handleStopRecordSession : handleToggleRecording}
+              onSelectRecordWait={handleAddWaitStep}
+              onCancelWait={() => {
                 captureAbortRef.current?.abort();
                 captureAbortRef.current = null;
                 cancelStepRunWaitForCapture(orgId!, runId!).catch(() => {});
                 setIsCapturingWaitFor(false);
-              } : handleAddWaitStep}
+              }}
               onSelectAddPause={handleAddPauseStep}
-              onSelectExtractElement={isCapturingExtract ? () => {
+              onSelectExtractElement={handleAddExtractStep}
+              onCancelExtract={() => {
                 captureExtractAbortRef.current?.abort();
                 captureExtractAbortRef.current = null;
                 cancelStepRunExtractCapture(orgId!, runId!).catch(() => {});
                 setIsCapturingExtract(false);
-              } : handleAddExtractStep}
+              }}
               onSelectExtractUrl={async () => {
                 const clip = await requestVncClipboard();
-                // The Extract URL toolbar button is explicitly a URL-extract
-                // intent — never fall back to a silent DOM text-extract.
-                // With a clipboard value, try to URL-detect; if it doesn't
-                // match, the dialog opens pre-filled so the operator can
-                // adjust. Without a clipboard value, just open the dialog.
                 if (clip) await handleUrlExtractFromClipboard(clip);
                 else await handleExtractUrl();
               }}
@@ -2298,63 +2352,6 @@ export function RunScriptModal({
                 }
               }}
             />
-          )}
-
-          {/* Run / Stop — visible whenever a run is active. Mode is
-              chosen in the dropdown above; the button below just
-              fires (or aborts) the current test mode. */}
-          {runId && (
-            <>
-              <div className="w-px h-5 bg-border mx-0.5" />
-              {/* Stop button — visible whenever a step OR auto-run is
-                  in flight. Aborts the in-flight HTTP request so the
-                  UI returns immediately; the backend session stays
-                  alive so the user can click another step / edit /
-                  re-run. Worker keeps grinding the current Playwright
-                  action until it completes (no mid-action interrupt),
-                  but for typical steps that's a sub-second wait. */}
-              {isExecuting ? (
-                <Button
-                  variant="destructive"
-                  size="sm"
-                  onClick={handleStopAutoRun}
-                >
-                  <X className="mr-1.5 h-3 w-3" />
-                  Stop
-                </Button>
-              ) : (
-                <Button
-                  onClick={
-                    runMode === 'auto'  ? handleRunAll
-                    : runMode === 'agent' ? handleRunAgentMode
-                    : handleExecuteStep
-                  }
-                  disabled={
-                    isExecuting ||
-                    isCapturingWaitFor ||
-                    isCapturingExtract ||
-                    isRecording ||
-                    !hasSteps ||
-                    // When the run is done, every step is marked
-                    // completed. There's no "Restart" — clicking a step
-                    // in the list jumps back to it and re-runs from
-                    // there. Disabled state keeps the button visible so
-                    // the layout doesn't shift on completion.
-                    !!stepRunState?.done
-                  }
-                  size="sm"
-                  title={stepRunState?.done ? 'Run complete — click any step to re-run from there.' : undefined}
-                >
-                  {isExecuting
-                    ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                    : runMode === 'auto'  ? <ChevronsRight className="mr-1.5 h-3.5 w-3.5" />
-                    : runMode === 'agent' ? <Zap className="mr-1.5 h-3.5 w-3.5" />
-                    : <Play className="mr-1.5 h-3 w-3 fill-current" />
-                  }
-                  {runMode === 'auto' ? 'Run All' : runMode === 'agent' ? 'Run as Agent' : 'Run Step'}
-                </Button>
-              )}
-            </>
           )}
 
           {/* Save — always visible, but gated until the session is actually
@@ -2473,20 +2470,48 @@ export function RunScriptModal({
           {(
             <>
               <div className="px-3 py-2 border-b shrink-0">
-                <div className="flex items-center gap-2">
-                  <p className="text-xs uppercase tracking-wide font-semibold text-muted-foreground">
-                    {`Steps (${stepCount})`}
-                  </p>
-                  {(() => {
-                    const unresolvedCount = stepsToShow.filter(needsSelectorReview).length;
-                    if (unresolvedCount === 0) return null;
-                    return (
-                      <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400" title={`${unresolvedCount} step${unresolvedCount !== 1 ? 's' : ''} with multiple selector candidates. Run each step to auto-select the best selector.`}>
-                        <AlertTriangle className="h-3 w-3" />
-                        {unresolvedCount} unresolved
-                      </span>
-                    );
-                  })()}
+                <div className="flex items-center gap-2 justify-between">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <p className="text-xs uppercase tracking-wide font-semibold text-muted-foreground">
+                      {`Steps (${stepCount})`}
+                    </p>
+                    {(() => {
+                      const unresolvedCount = stepsToShow.filter(needsSelectorReview).length;
+                      if (unresolvedCount === 0) return null;
+                      return (
+                        <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400" title={`${unresolvedCount} step${unresolvedCount !== 1 ? 's' : ''} with multiple selector candidates. Run each step to auto-select the best selector.`}>
+                          <AlertTriangle className="h-3 w-3" />
+                          {unresolvedCount} unresolved
+                        </span>
+                      );
+                    })()}
+                  </div>
+
+                  {/* Run controls live HERE (not the top toolbar) so the
+                      toolbar's Mode/Action dropdowns never shift when the
+                      run button appears or swaps to Stop. Test mode only —
+                      Record / Extract fire + cancel from the Action picker. */}
+                  {runId && toolMode === 'test' && (
+                    isExecuting ? (
+                      <Button variant="destructive" size="sm" className="h-7 w-28 shrink-0 justify-center" onClick={handleStopAutoRun}>
+                        <X className="mr-1.5 h-3 w-3" />
+                        Stop
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        className="h-7 w-28 shrink-0 justify-center"
+                        onClick={runMode === 'agent' ? handleRunAgentMode : handleExecuteStep}
+                        disabled={isRecording || isCapturingWaitFor || isCapturingExtract || !hasSteps || !!stepRunState?.done}
+                        title={stepRunState?.done ? 'Run complete — click any step to re-run from there.' : undefined}
+                      >
+                        {runMode === 'agent'
+                          ? <Zap className="mr-1.5 h-3.5 w-3.5" />
+                          : <Play className="mr-1.5 h-3 w-3 fill-current" />}
+                        {runMode === 'agent' ? 'Run' : 'Run Step'}
+                      </Button>
+                    )
+                  )}
                 </div>
               </div>
 
@@ -2941,209 +2966,192 @@ export function RunScriptModal({
   );
 }
 
-// ── Action mode dropdown ───────────────────────────────────────────────
+// ── Mode + action picker ───────────────────────────────────────────────
 //
-// Single picker that consolidates the test mode + every capture action
-// (record interactions, record wait, extract from element / url / copy)
-// into one labeled dropdown. Picking a capture mode fires it immediately;
-// picking Step / Auto Test just toggles the Run button behavior.
+// Left: a read-only info box (styled like a field, never a button) showing
+// the CURRENT action (e.g. "Manual", "Record Interactions") or the live
+// status while one runs. Right: three icon-only mode buttons (Test / Record
+// / Extract); clicking one switches to that mode AND opens its action menu
+// (the mode name is the menu heading), and picking an action updates the
+// box. While an action is running, a small icon-only Stop / Cancel button
+// appears to the LEFT of the box. Test actions set the run style (Manual =
+// step, Auto = full agent-timed run); the actual Run button lives in the
+// Steps panel header. Fixed widths so nothing shifts.
 
-interface ModeDropdownProps {
-  /** Legacy boolean — true when runMode === 'auto'. Kept for the
-   *  existing label/icon logic that distinguishes Auto Test from Step
-   *  Test in the trigger button. */
-  autoMode: boolean;
-  /** Current run mode, used for menu-item highlighting across all
-   *  three modes (step / auto / agent). */
-  runMode: 'step' | 'auto' | 'agent';
+type ToolMode = 'test' | 'record' | 'extract';
+
+interface ModeActionPickerProps {
+  toolMode: ToolMode;
+  setToolMode: (m: ToolMode) => void;
+  runMode: 'step' | 'agent';
   isRecording: boolean;
   isCapturingWaitFor: boolean;
   isCapturingExtract: boolean;
   isExecuting: boolean;
   disabled: boolean;
   onSelectStep: () => void;
-  onSelectAuto: () => void;
-  /** Server-side Run All — matches the agent runtime's back-to-back
-   *  step pacing (no editor-side network gap between steps). */
   onSelectAgent: () => void;
-  onSelectRecordInteractions: () => void;
+  onStartRecording: () => void;
+  onStopRecording: () => void;
   onSelectRecordWait: () => void;
-  /** Insert a pure time-based pause step at the current cursor. Unlike
-   *  Record Wait, this doesn't need an element — useful when the next
-   *  step's target needs longer to settle than wait_for can reliably
-   *  detect (e.g. a button whose `disabled` flips ~7s after a prior
-   *  click without any DOM mutation we can hook on). */
+  onCancelWait: () => void;
   onSelectAddPause: () => void;
   onSelectExtractElement: () => void;
+  onCancelExtract: () => void;
   onSelectExtractUrl: () => void | Promise<void>;
   onSelectCopyPage: () => void | Promise<void>;
 }
 
-function ModeDropdown({
-  autoMode, runMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
-  onSelectStep, onSelectAuto, onSelectAgent, onSelectRecordInteractions, onSelectRecordWait,
-  onSelectAddPause,
-  onSelectExtractElement, onSelectExtractUrl, onSelectCopyPage,
-}: ModeDropdownProps) {
-  // Compute the current mode label + icon. Capture states take
-  // precedence over the test-mode toggle so the operator can tell at a
-  // glance what the next click on the page will do.
-  let label =
-    runMode === 'auto' ? 'Auto Test' :
-    runMode === 'agent' ? 'Agent Timing' :
-    'Step Test';
-  let Icon: React.ComponentType<{ className?: string }> =
-    runMode === 'auto' ? ChevronsRight :
-    runMode === 'agent' ? Zap :
-    Play;
-  let accent = 'text-muted-foreground';
-  if (isRecording) {
-    label = 'Recording…';
-    Icon = CircleDot;
-    accent = 'text-red-500 animate-pulse';
-  } else if (isCapturingWaitFor) {
-    label = 'Click to set Wait';
-    Icon = Loader2;
-    accent = 'text-brand animate-spin';
-  } else if (isCapturingExtract) {
-    label = 'Click to Extract';
-    Icon = Loader2;
-    accent = 'text-brand animate-spin';
-  }
+type PickerAction = {
+  label: string;
+  desc: string;
+  icon: React.ComponentType<{ className?: string }>;
+  onClick: () => void | Promise<void>;
+};
 
-  const sectionLabelClass = 'px-2 pt-1.5 pb-0.5 text-[9px] font-medium uppercase tracking-wide text-muted-foreground';
+const MODE_META: { key: ToolMode; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { key: 'test',    label: 'Test',    icon: Play },
+  { key: 'record',  label: 'Record',  icon: CircleDot },
+  { key: 'extract', label: 'Extract', icon: Scissors },
+];
+
+function ModeActionPicker({
+  toolMode, setToolMode, runMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
+  onSelectStep, onSelectAgent, onStartRecording, onStopRecording, onSelectRecordWait, onCancelWait,
+  onSelectAddPause, onSelectExtractElement, onCancelExtract, onSelectExtractUrl, onSelectCopyPage,
+}: ModeActionPickerProps) {
+  // Remember the action last chosen per mode so the left chip can show it.
+  // Test derives from runMode (Manual=step, Auto=agent); Record / Extract
+  // remember the picked index.
+  const [recordIdx, setRecordIdx] = useState(0);
+  const [extractIdx, setExtractIdx] = useState(0);
+
+  // While an action is in progress: the info box shows the live status,
+  // a small icon-only Stop / Cancel button appears to its left, and Mode
+  // locks so the operator can't strand a live recording / capture in
+  // another mode. The box itself is NEVER a button — it stays purely
+  // informational.
+  const activeStatus =
+    isRecording        ? { label: 'Recording…',       Icon: CircleDot, iconClass: 'text-red-500 animate-pulse', stopIcon: Square, stopTitle: 'Stop recording', onStop: onStopRecording } :
+    isCapturingWaitFor ? { label: 'Waiting for click', Icon: Loader2,   iconClass: 'animate-spin text-brand',     stopIcon: X,      stopTitle: 'Cancel wait',     onStop: onCancelWait } :
+    isCapturingExtract ? { label: 'Click to extract',  Icon: Loader2,   iconClass: 'animate-spin text-brand',     stopIcon: X,      stopTitle: 'Cancel extract',  onStop: onCancelExtract } :
+    null;
+  const locked = disabled || !!activeStatus || isExecuting;
+
+  const actionsByMode: Record<ToolMode, PickerAction[]> = {
+    test: [
+      { label: 'Manual', desc: 'Step through one action at a time (use the Run button)', icon: Play, onClick: onSelectStep },
+      { label: 'Auto', desc: 'Run the whole script end-to-end with the agent runtime timing', icon: Zap, onClick: onSelectAgent },
+    ],
+    record: [
+      { label: 'Record Interactions', desc: 'Capture clicks, fills, and navigations on the page', icon: CircleDot, onClick: onStartRecording },
+      { label: 'Record Wait', desc: 'Click an element to insert a wait-for step', icon: Clock, onClick: onSelectRecordWait },
+      { label: 'Add Pause', desc: 'Fixed-duration delay before the next step (no element required)', icon: Hourglass, onClick: onSelectAddPause },
+    ],
+    extract: [
+      { label: 'Extract From Element', desc: 'Click any element on the page', icon: MousePointer2, onClick: onSelectExtractElement },
+      { label: 'Extract From URL', desc: 'Uses selected value, or enter manually', icon: Link2, onClick: onSelectExtractUrl },
+      { label: 'Copy From Page', desc: 'Uses last copied text (Ctrl+C)', icon: Clipboard, onClick: onSelectCopyPage },
+    ],
+  };
+
+  // The selected index for a given mode (Test follows runMode).
+  const selectedIdxFor = (m: ToolMode) =>
+    m === 'test' ? (runMode === 'agent' ? 1 : 0) : m === 'record' ? recordIdx : extractIdx;
+
+  const currentActions = actionsByMode[toolMode];
+  const selectedAction = currentActions[Math.min(selectedIdxFor(toolMode), currentActions.length - 1)] ?? currentActions[0]!;
+
+  // The info box shows live status while active, else the selected action.
+  const BoxIcon = activeStatus ? activeStatus.Icon : selectedAction.icon;
+  const boxIconClass = activeStatus ? activeStatus.iconClass : '';
+  const boxLabel = activeStatus ? activeStatus.label : selectedAction.label;
+  const StopIcon = activeStatus?.stopIcon ?? Square;
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <div className="flex items-center gap-2">
+      {/* Icon-only Stop / Cancel — appears to the LEFT of the info box only
+          while an action is running. Keeps the box itself a pure display. */}
+      {activeStatus && (
         <Button
-          variant="outline"
+          variant="destructive"
           size="sm"
-          className="h-7 gap-1.5 text-xs"
+          className="h-8 w-8 shrink-0 p-0"
+          onClick={activeStatus.onStop}
           disabled={disabled}
-          title="Choose what the next action will do"
+          title={activeStatus.stopTitle}
         >
-          <ListTodo className="h-3 w-3 shrink-0" />
-          <span className="truncate max-w-[140px]">{label}</span>
-          <Icon className={cn('h-3 w-3 shrink-0', accent)} />
+          <StopIcon className="h-3.5 w-3.5 fill-current" />
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-[240px]">
-        <div className={sectionLabelClass}>Test</div>
-        <DropdownMenuItem
-          className={cn('gap-2 cursor-pointer', runMode === 'step' && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
-          onClick={onSelectStep}
-          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
-        >
-          <Play className="h-3.5 w-3.5 shrink-0" />
-          <div>
-            <div className="font-medium">Step Test</div>
-            <div className="text-muted-foreground text-[10px]">Run one step at a time</div>
-          </div>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className={cn('gap-2 cursor-pointer', runMode === 'auto' && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
-          onClick={onSelectAuto}
-          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
-        >
-          <ChevronsRight className="h-3.5 w-3.5 shrink-0" />
-          <div>
-            <div className="font-medium">Auto Test</div>
-            <div className="text-muted-foreground text-[10px]">Run all remaining steps in sequence (editor-paced)</div>
-          </div>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className={cn('gap-2 cursor-pointer', runMode === 'agent' && !isRecording && !isCapturingWaitFor && !isCapturingExtract && 'bg-muted/60')}
-          onClick={onSelectAgent}
-          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
-        >
-          <Zap className="h-3.5 w-3.5 shrink-0" />
-          <div>
-            <div className="font-medium">Agent Timing</div>
-            <div className="text-muted-foreground text-[10px]">
-              Server-side loop — same back-to-back pacing the agent runtime uses. Reproduces timing-sensitive failures Auto Test masks.
-            </div>
-          </div>
-        </DropdownMenuItem>
+      )}
 
-        <div className={sectionLabelClass}>Record</div>
-        <DropdownMenuItem
-          className={cn('gap-2 cursor-pointer', isRecording && 'bg-muted/60')}
-          onClick={onSelectRecordInteractions}
-          disabled={isExecuting || isCapturingWaitFor || isCapturingExtract}
-        >
-          <CircleDot className={cn('h-3.5 w-3.5 shrink-0', isRecording && 'text-red-500')} />
-          <div>
-            <div className="font-medium">{isRecording ? 'Stop Recording' : 'Record Interactions'}</div>
-            <div className="text-muted-foreground text-[10px]">
-              {isRecording ? 'Stop capturing clicks / fills / navigations' : 'Capture clicks, fills, and navigations on the page'}
-            </div>
-          </div>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className={cn('gap-2 cursor-pointer', isCapturingWaitFor && 'bg-muted/60')}
-          onClick={onSelectRecordWait}
-          disabled={isExecuting || isRecording || isCapturingExtract}
-        >
-          <Clock className="h-3.5 w-3.5 shrink-0" />
-          <div>
-            <div className="font-medium">{isCapturingWaitFor ? 'Cancel Wait Capture' : 'Record Wait'}</div>
-            <div className="text-muted-foreground text-[10px]">
-              {isCapturingWaitFor ? 'Stop waiting for the next click' : 'Click an element to insert a wait-for step'}
-            </div>
-          </div>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className="gap-2 cursor-pointer"
-          onClick={onSelectAddPause}
-          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
-        >
-          <Hourglass className="h-3.5 w-3.5 shrink-0" />
-          <div>
-            <div className="font-medium">Add Pause</div>
-            <div className="text-muted-foreground text-[10px]">
-              Fixed-duration delay before the next step (no element required)
-            </div>
-          </div>
-        </DropdownMenuItem>
+      {/* Info box — display only, never a button. Styled like a read-only
+          field (inset, muted) so it never reads as clickable. Shows the
+          selected action, or the live status while one is running. */}
+      <div
+        className="flex h-8 w-44 shrink-0 items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 text-xs font-medium text-foreground cursor-default"
+        title={activeStatus ? activeStatus.label : selectedAction.desc}
+      >
+        <BoxIcon className={cn('h-3.5 w-3.5 shrink-0', boxIconClass || 'text-muted-foreground')} />
+        <span className="truncate">{boxLabel}</span>
+      </div>
 
-        <div className={sectionLabelClass}>Extract</div>
-        <DropdownMenuItem
-          className={cn('gap-2 cursor-pointer', isCapturingExtract && 'bg-muted/60')}
-          onClick={onSelectExtractElement}
-          disabled={isExecuting || isRecording || isCapturingWaitFor}
-        >
-          <MousePointer2 className="h-3.5 w-3.5 shrink-0" />
-          <div>
-            <div className="font-medium">{isCapturingExtract ? 'Cancel Element Capture' : 'Extract From Element'}</div>
-            <div className="text-muted-foreground text-[10px]">
-              {isCapturingExtract ? 'Stop waiting for an element click' : 'Click any element on the page'}
-            </div>
-          </div>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className="gap-2 cursor-pointer"
-          onClick={onSelectExtractUrl}
-          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
-        >
-          <Link2 className="h-3.5 w-3.5 shrink-0" />
-          <div>
-            <div className="font-medium">Extract From URL</div>
-            <div className="text-muted-foreground text-[10px]">Uses selected value, or enter manually</div>
-          </div>
-        </DropdownMenuItem>
-        <DropdownMenuItem
-          className="gap-2 cursor-pointer"
-          onClick={onSelectCopyPage}
-          disabled={isExecuting || isRecording || isCapturingWaitFor || isCapturingExtract}
-        >
-          <Clipboard className="h-3.5 w-3.5 shrink-0" />
-          <div>
-            <div className="font-medium">Copy From Page</div>
-            <div className="text-muted-foreground text-[10px]">Uses last copied text (Ctrl+C)</div>
-          </div>
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+      {/* Right: icon-only mode buttons. Clicking one switches to that mode
+          AND opens its action menu (the mode name is the menu heading);
+          picking an action updates the info box on the left. */}
+      <div className={cn('flex rounded-md border bg-muted/30 p-0.5', locked && 'opacity-60')}>
+        {MODE_META.map((m) => {
+          const Icon = m.icon;
+          const activeMode = toolMode === m.key;
+          const modeActions = actionsByMode[m.key];
+          const modeSelectedIdx = selectedIdxFor(m.key);
+          return (
+            <DropdownMenu key={m.key}>
+              <DropdownMenuTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => setToolMode(m.key)}
+                  disabled={locked}
+                  className={cn(
+                    'flex h-7 w-9 items-center justify-center rounded transition-colors',
+                    activeMode ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                    locked && 'cursor-not-allowed hover:text-muted-foreground',
+                  )}
+                  title={`${m.label} actions`}
+                  aria-label={`${m.label} actions`}
+                >
+                  <Icon className={cn('h-4 w-4 shrink-0', m.key === 'record' && isRecording && 'text-red-500 animate-pulse')} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-[260px]">
+                <DropdownMenuLabel>{m.label}</DropdownMenuLabel>
+                <DropdownMenuSeparator />
+                {modeActions.map((a, i) => {
+                  const ActionIcon = a.icon;
+                  return (
+                    <DropdownMenuItem
+                      key={a.label}
+                      className={cn('gap-2 cursor-pointer', i === modeSelectedIdx && 'bg-muted/60')}
+                      onClick={() => {
+                        if (m.key !== toolMode) setToolMode(m.key);
+                        if (m.key === 'record') setRecordIdx(i);
+                        else if (m.key === 'extract') setExtractIdx(i);
+                        a.onClick();
+                      }}
+                    >
+                      <ActionIcon className="h-3.5 w-3.5 shrink-0" />
+                      <div>
+                        <div className="font-medium">{a.label}</div>
+                        <div className="text-muted-foreground text-[10px]">{a.desc}</div>
+                      </div>
+                    </DropdownMenuItem>
+                  );
+                })}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          );
+        })}
+      </div>
+    </div>
   );
 }

@@ -189,6 +189,8 @@ export async function createScript(
     steps: RecordedStep[];
     parameters: Record<string, string>;
     test_values?: Record<string, string>;
+    /** Optional login profile to link at creation time (record-mode "Build with login"). */
+    login_id?: string | null;
   }
 ): Promise<BrowserScript> {
   const res = await agentClient.post<BrowserScript>(
