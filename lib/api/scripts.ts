@@ -1,4 +1,5 @@
 import agentClient from './agent-client';
+import { type Tag, tagFilterParams } from './tags';
 
 export interface SelectorCandidate {
   /** CSS selector, XPath expression, or plain text depending on `type` */
@@ -122,6 +123,8 @@ export interface BrowserScript {
   login_id: string | null;
   created_at: string;
   updated_at: string;
+  /** Tags applied to this script. Present on list/get/create/update responses. */
+  tags?: Tag[];
 }
 
 // ─── Recording ────────────────────────────────────────────────
@@ -173,10 +176,12 @@ export async function cancelRecording(
 // ─── Scripts ──────────────────────────────────────────────────
 
 export async function listScripts(
-  orgId: string
+  orgId: string,
+  opts?: { tagIds?: string[]; tagMatch?: 'any' | 'all' },
 ): Promise<{ scripts: BrowserScript[] }> {
   const res = await agentClient.get<{ scripts: BrowserScript[] }>(
-    `/api/admin/${orgId}/scripts`
+    `/api/admin/${orgId}/scripts`,
+    { params: tagFilterParams(opts?.tagIds ?? [], opts?.tagMatch) }
   );
   return res.data;
 }
@@ -191,6 +196,7 @@ export async function createScript(
     test_values?: Record<string, string>;
     /** Optional login profile to link at creation time (record-mode "Build with login"). */
     login_id?: string | null;
+    tag_ids?: string[];
   }
 ): Promise<BrowserScript> {
   const res = await agentClient.post<BrowserScript>(
@@ -211,6 +217,8 @@ export async function updateScript(
     test_values: Record<string, string>;
     /** Pass a uuid to set, null to clear the link. Omit to leave unchanged. */
     login_id: string | null;
+    /** Replace the script's tag set. Omit to leave unchanged. */
+    tag_ids: string[];
   }>
 ): Promise<BrowserScript> {
   const res = await agentClient.patch<BrowserScript>(

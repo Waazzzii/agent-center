@@ -59,6 +59,8 @@ import { BottomPanel } from './panels';
 import { StepEditModal } from './StepEditModal';
 import { ProvisioningNotice } from '@/components/hitl/ProvisioningNotice';
 import { AGENT_BACKEND_URL as agentApiUrl } from '@/lib/config';
+import { useTags } from '@/lib/hooks/use-tags';
+import { TagPicker } from '@/components/tags/tag-picker';
 
 interface RunScriptModalProps {
   script: BrowserScript | null;
@@ -138,6 +140,21 @@ export function RunScriptModal({
   const [scriptName, setScriptName] = useState('');
   const [scriptDescription, setScriptDescription] = useState('');
   const [showDescription, setShowDescription] = useState(false);
+
+  // ── Tags ──────────────────────────────────────────────────────
+  // Mirrors the linked-login pattern: held in state, persisted immediately
+  // when the script already has an id, otherwise carried into createScript
+  // on first save.
+  const { tags: allTags, createTag } = useTags(orgId);
+  const [scriptTagIds, setScriptTagIds] = useState<string[]>([]);
+  const persistTags = async (ids: string[]) => {
+    setScriptTagIds(ids);
+    const targetId = script?.id ?? tempScriptId;
+    if (orgId && targetId) {
+      try { await updateScript(orgId, targetId, { tag_ids: ids }); onSaved?.(); }
+      catch { toast.error('Failed to update tags'); }
+    }
+  };
 
   // ── Linked login (the script's auth dependency) ───────────────
   // `linkedLoginId` mirrors agent_browser_scripts.login_id. Saved on
@@ -340,6 +357,7 @@ export function RunScriptModal({
       } else {
         setScriptName(script?.name ?? '');
         setScriptDescription(script?.description ?? '');
+        setScriptTagIds((script?.tags ?? []).map((t) => t.id));
         setLinkedLoginId(script?.login_id ?? null);
         // Variables start BLANK every session — the operator must enter
         // current values for the specific run they're doing. Persisting
@@ -698,7 +716,7 @@ export function RunScriptModal({
       if (targetScriptId) {
         await updateScript(orgId, targetScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {}, login_id: loginId });
       } else {
-        const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: loginId });
+        const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: loginId, tag_ids: scriptTagIds });
         targetScriptId = created.id;
         setTempScriptId(created.id);
       }
@@ -2202,6 +2220,12 @@ export function RunScriptModal({
                 {scriptDescription || '+ Add description'}
               </button>
             )}
+          </div>
+
+          {/* Tags — persisted immediately for saved scripts, carried into
+              createScript on first save for brand-new recordings. */}
+          <div className="min-w-0 w-56 shrink-0">
+            <TagPicker tags={allTags} selected={scriptTagIds} onChange={persistTags} onCreate={(name) => createTag({ name })} placeholder="Tags…" />
           </div>
 
           {/* Linked login — chip + Log in button. Available in BOTH record

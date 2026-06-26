@@ -8,7 +8,6 @@ import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import {
   LogOut,
-  Menu,
   Moon,
   Sun,
   ChevronDown,
@@ -253,6 +252,9 @@ export function ViewModeSidebar() {
 
   return (
     <>
+      {/* The mobile menu button lives in the dashboard layout's top header bar
+          (MobileTopBar), not here — keeping it out of the transformed <aside>
+          and out of the page content so it never overlaps page headings. */}
       {sidebarOpen && (
         <div className="fixed inset-0 z-40 bg-black/50 md:hidden" onClick={toggleSidebar} />
       )}
@@ -285,18 +287,6 @@ export function ViewModeSidebar() {
               <X className="h-5 w-5" />
             </Button>
           </div>
-
-          {/* Mobile menu button (visible only on mobile when sidebar is closed) */}
-          <Button
-            variant="ghost"
-            size="icon"
-            className="fixed left-4 top-4 z-50 md:hidden h-12 w-12 rounded-lg bg-background/95 backdrop-blur shadow-lg border"
-            onClick={toggleSidebar}
-            aria-label="Toggle menu"
-            style={{ display: sidebarOpen ? 'none' : undefined }}
-          >
-            <Menu className="h-6 w-6" />
-          </Button>
 
           {/* Navigation */}
           <nav className="flex-1 space-y-1 overflow-y-auto p-4">

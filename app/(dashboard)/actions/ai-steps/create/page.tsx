@@ -13,6 +13,9 @@ import { toast } from 'sonner';
 import { Loader2, Sparkles, Save } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
+import { useTags } from '@/lib/hooks/use-tags';
+import { TagPicker } from '@/components/tags/tag-picker';
+import { Label } from '@/components/ui/label';
 
 export default function CreateAiStepPage() {
   const { selectedOrgId } = useAdminViewStore();
@@ -28,6 +31,9 @@ export default function CreateAiStepPage() {
     name: '', description: '', prompt: '', model: 'claude-sonnet-4-6',
     connector_ids: [], outputs: [], skill_ids: [],
   });
+
+  const { tags, createTag } = useTags(selectedOrgId);
+  const [tagIds, setTagIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (!selectedOrgId) return;
@@ -62,6 +68,7 @@ export default function CreateAiStepPage() {
             required: o.required !== false,
           })),
         skill_ids: form.skill_ids,
+        tag_ids: tagIds,
       });
       toast.success('AI step created');
       router.push(`/actions/ai-steps/${created.id}`);
@@ -102,6 +109,10 @@ export default function CreateAiStepPage() {
               connectors={connectors}
               skills={skills}
             />
+            <div className="mt-4 space-y-1 border-t pt-4">
+              <Label>Tags</Label>
+              <TagPicker tags={tags} selected={tagIds} onChange={setTagIds} onCreate={(name) => createTag({ name })} />
+            </div>
           </CardContent>
         </Card>
       )}

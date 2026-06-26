@@ -19,6 +19,8 @@ import { listAiSteps, createAiStep, type AiStep } from '@/lib/api/ai-steps';
 import { listApprovalSteps, createApprovalStep, type ApprovalStep } from '@/lib/api/approval-steps';
 import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
 import { listLogins, type Login } from '@/lib/api/logins';
+import { useTags } from '@/lib/hooks/use-tags';
+import { TagPicker } from '@/components/tags/tag-picker';
 import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
 import { AiStepPreview } from '@/components/actions/AiStepPreview';
 import { LoginPreview } from '@/components/actions/LoginPreview';
@@ -251,6 +253,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [agentDesc, setAgentDesc] = useState('');
   const [agentActive, setAgentActive] = useState(true);
   const [agentRequiresBrowser, setAgentRequiresBrowser] = useState(false);
+  const [agentTagIds, setAgentTagIds] = useState<string[]>([]);
+  const { tags: allTags, createTag } = useTags(selectedOrgId);
   const [settingsDirty, setSettingsDirty] = useState(false);
   const [savingSettings, setSavingSettings] = useState(false);
   // "Run now" button state — spinner while the trigger is in flight.
@@ -293,6 +297,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setAgentDesc(agentData.description ?? '');
       setAgentActive(agentData.is_active);
       setAgentRequiresBrowser(agentData.requires_browser ?? false);
+      setAgentTagIds((agentData.tags ?? []).map((t) => t.id));
       setSettingsDirty(false);
       setActions((actionsData ?? []).sort((a, b) => a.order_index - b.order_index));
       const triggers = agentData.triggers ?? [];
@@ -673,7 +678,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return false;
     try {
       setSavingSettings(true);
-      await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined, is_active: agentActive, requires_browser: agentRequiresBrowser });
+      await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined, is_active: agentActive, requires_browser: agentRequiresBrowser, tag_ids: agentTagIds });
       toast.success('Agent updated');
       setSettingsDirty(false);
       await loadAll();
@@ -1328,6 +1333,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 onChange={(e) => { setAgentDesc(e.target.value); setSettingsDirty(true); }}
                 placeholder="Optional description…"
                 rows={3}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Tags</Label>
+              <TagPicker
+                tags={allTags}
+                selected={agentTagIds}
+                onChange={(ids) => { setAgentTagIds(ids); setSettingsDirty(true); }}
+                onCreate={(name) => createTag({ name })}
               />
             </div>
 

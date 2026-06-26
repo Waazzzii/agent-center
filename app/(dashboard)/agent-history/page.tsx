@@ -12,6 +12,9 @@ import {
   type Agent,
   type ExecutionRun,
 } from '@/lib/api/agents';
+import { tagFilterParams } from '@/lib/api/tags';
+import { useTags } from '@/lib/hooks/use-tags';
+import { TagList } from '@/components/tags/tag-badge';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -47,6 +50,7 @@ import {
   ArrowUpRight,
   CalendarIcon,
   GitBranch,
+  Tag as TagIcon,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
@@ -251,6 +255,9 @@ function RunsTable({
                     <span className="text-[9px] text-brand shrink-0">{childCount} sub</span>
                   )}
                   {run.has_active_browser && <Monitor className="h-3 w-3 text-info shrink-0" />}
+                  {run.tags && run.tags.length > 0 && (
+                    <span className="hidden lg:inline-flex shrink-0"><TagList tags={run.tags} max={2} /></span>
+                  )}
                 </div>
                 {/* Progress */}
                 <div className="flex items-center gap-0.5">
@@ -375,6 +382,9 @@ export default function AgentExecutionsPage() {
   const [agentFilter, setAgentFilter]       = useState<string>('');
   const [fromFilter, setFromFilter]         = useState<string>('');
   const [toFilter, setToFilter]             = useState<string>('');
+  const [tagFilters, setTagFilters]         = useState<string[]>([]);
+
+  const { tags } = useTags(selectedOrgId);
 
   // Inline date input state
   const [pendingDate, setPendingDate]       = useState<'from' | 'to' | null>(null);
@@ -382,7 +392,7 @@ export default function AgentExecutionsPage() {
 
   const initialAgentId = useRef(searchParams.get('agent_id'));
 
-  const hasFilters = statusFilters.length > 0 || !!triggerFilter || !!agentFilter || !!fromFilter || !!toFilter;
+  const hasFilters = statusFilters.length > 0 || !!triggerFilter || !!agentFilter || !!fromFilter || !!toFilter || tagFilters.length > 0;
 
   // ─── Load functions ─────────────────────────────────────────
 
@@ -394,6 +404,7 @@ export default function AgentExecutionsPage() {
       agentId?: string;
       from?: string;
       to?: string;
+      tags?: string[];
       silent?: boolean;
     }
   ) => {
@@ -404,6 +415,7 @@ export default function AgentExecutionsPage() {
     const agentId  = opts?.agentId   !== undefined ? opts.agentId   : agentFilter;
     const from     = opts?.from      !== undefined ? opts.from      : fromFilter;
     const to       = opts?.to        !== undefined ? opts.to        : toFilter;
+    const tagIds   = opts?.tags      !== undefined ? opts.tags      : tagFilters;
 
     try {
       if (!silent) setLoading(true);
@@ -413,6 +425,7 @@ export default function AgentExecutionsPage() {
       if (agentId)              params.agent_id     = agentId;
       if (from)                 params.from         = new Date(from + 'T00:00:00').toISOString();
       if (to) { const d = new Date(to + 'T00:00:00'); d.setHours(23, 59, 59, 999); params.to = d.toISOString(); }
+      Object.assign(params, tagFilterParams(tagIds));
       const data = await getExecutionHistory(selectedOrgId, params);
       setRuns(data.items ?? []);
       setTotal(data.total);
@@ -422,7 +435,7 @@ export default function AgentExecutionsPage() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [selectedOrgId, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter]);
+  }, [selectedOrgId, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter, tagFilters]);
 
   const loadSummary = useCallback(async () => {
     if (!selectedOrgId) return;
@@ -474,14 +487,22 @@ export default function AgentExecutionsPage() {
     setDateInputValue('');
   };
 
+  const toggleTag = (tagId: string, checked: boolean) => {
+    const next = checked ? [...tagFilters, tagId] : tagFilters.filter((t) => t !== tagId);
+    setTagFilters(next);
+    setPage(1);
+    loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: toFilter, tags: next });
+  };
+
   const clearFilters = () => {
     setStatusFilters([]);
     setTriggerFilter('');
     setAgentFilter('');
     setFromFilter('');
     setToFilter('');
+    setTagFilters([]);
     setPage(1);
-    loadHistory(1, { statuses: [], trigger: '', agentId: '', from: '', to: '' });
+    loadHistory(1, { statuses: [], trigger: '', agentId: '', from: '', to: '', tags: [] });
   };
 
   const goToPage = (pg: number) => {
@@ -771,6 +792,37 @@ export default function AgentExecutionsPage() {
                   </DropdownMenu>
                 )}
 
+                {/* Tag multi-select — resolves through each run's agent */}
+                {tags.length > 0 && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className={cn('gap-1.5 text-xs border-dashed', tagFilters.length > 0 && 'border-solid border-brand/40 text-foreground')}
+                      >
+                        <TagIcon className="h-3 w-3" />
+                        Tags
+                        {tagFilters.length > 0 && (
+                          <Badge variant="brand" className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">{tagFilters.length}</Badge>
+                        )}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="w-56 max-h-60 overflow-y-auto">
+                      {tags.map((t) => (
+                        <DropdownMenuCheckboxItem
+                          key={t.id}
+                          checked={tagFilters.includes(t.id)}
+                          onCheckedChange={(c) => toggleTag(t.id, c)}
+                          onSelect={(e) => e.preventDefault()}
+                        >
+                          {t.name}
+                        </DropdownMenuCheckboxItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+
                 {/* From date */}
                 {pendingDate === 'from' ? (
                   <div className="flex items-center gap-1.5">
@@ -915,6 +967,17 @@ export default function AgentExecutionsPage() {
                       </button>
                     </span>
                   )}
+                  {tagFilters.map((id) => (
+                    <span key={`t-${id}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                      {tags.find((t) => t.id === id)?.name ?? 'tag'}
+                      <button
+                        onClick={() => toggleTag(id, false)}
+                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                      >
+                        <X className="h-2.5 w-2.5" />
+                      </button>
+                    </span>
+                  ))}
                 </div>
               )}
             </CardHeader>

@@ -1,4 +1,5 @@
 import agentClient from './agent-client';
+import { type Tag, tagFilterParams } from './tags';
 
 export interface AiStepOutput {
   /** JSON key name, e.g. "reservations" */
@@ -98,6 +99,8 @@ export interface AiStep {
   skill_ids?: string[] | null;
   created_at: string;
   updated_at: string;
+  /** Tags applied to this AI step. Present on list/get/create/update responses. */
+  tags?: Tag[];
 }
 
 export interface AiStepInput {
@@ -108,10 +111,16 @@ export interface AiStepInput {
   connector_ids?: string[];
   outputs?: AiStepOutput[];
   skill_ids?: string[];
+  tag_ids?: string[];
 }
 
-export async function listAiSteps(orgId: string): Promise<AiStep[]> {
-  const res = await agentClient.get<AiStep[]>(`/api/admin/${orgId}/ai-steps`);
+export async function listAiSteps(
+  orgId: string,
+  opts?: { tagIds?: string[]; tagMatch?: 'any' | 'all' },
+): Promise<AiStep[]> {
+  const res = await agentClient.get<AiStep[]>(`/api/admin/${orgId}/ai-steps`, {
+    params: tagFilterParams(opts?.tagIds ?? [], opts?.tagMatch),
+  });
   return res.data;
 }
 

@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
-import { getAgents, deleteAgent, duplicateAgent, runAgent, type Agent } from '@/lib/api/agents';
+import { getAgents, deleteAgent, duplicateAgent, runAgent, updateAgent, type Agent } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -12,9 +12,14 @@ import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy, Search } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy, Search, Tag as TagIcon } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
+import { useTags } from '@/lib/hooks/use-tags';
+import { TagFilter } from '@/components/tags/tag-filter';
+import { TagList } from '@/components/tags/tag-badge';
+import { TagAssignDialog } from '@/components/tags/tag-assign-dialog';
+import { RowActionsMenu } from '@/components/ui/row-actions-menu';
 
 type SortKey = 'name' | 'status' | 'created';
 
@@ -26,8 +31,13 @@ export default function AgentsPage() {
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
+  // Distinct from `loading`: true only until the first fetch resolves. The
+  // full-page spinner keys off this so filter/search reloads update the table
+  // in place instead of blanking the whole screen.
+  const [initialLoad, setInitialLoad] = useState(true);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
+  const [tagDialogAgent, setTagDialogAgent] = useState<Agent | null>(null);
 
   // Search + sort live entirely client-side. The list is small enough
   // (hundreds, not thousands) that filtering / sorting in memory is
@@ -36,21 +46,28 @@ export default function AgentsPage() {
   const [sortKey, setSortKey] = useState<SortKey>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
+  // Tag filtering is server-side (refetch on change) so it stays consistent
+  // with the executions feed + MCP. Search/sort remain client-side.
+  const { tags } = useTags(selectedOrgId);
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
+
   useEffect(() => {
     if (selectedOrgId) loadAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOrgId]);
+  }, [selectedOrgId, tagFilter, tagMatch]);
 
   const loadAgents = async (silent = false) => {
     if (!selectedOrgId) return;
     try {
       if (!silent) setLoading(true);
-      const data = await getAgents(selectedOrgId);
+      const data = await getAgents(selectedOrgId, { tagIds: tagFilter, tagMatch });
       setAgents(data.agents);
     } catch (err: any) {
       if (!silent) toast.error(err.message || 'Failed to load agents');
     } finally {
       if (!silent) setLoading(false);
+      setInitialLoad(false);
     }
   };
 
@@ -161,7 +178,7 @@ export default function AgentsPage() {
     }
   };
 
-  if (loading && selectedOrgId) {
+  if (initialLoad && selectedOrgId) {
     return (
       <div className="flex h-64 items-center justify-center">
         <div className="h-10 w-10 animate-spin rounded-full border-4 border-brand border-t-transparent" />
@@ -208,6 +225,15 @@ export default function AgentsPage() {
                   {visibleAgents.length} of {agents.length}
                 </span>
               )}
+              <div className="ml-auto">
+                <TagFilter
+                  tags={tags}
+                  selected={tagFilter}
+                  onChange={setTagFilter}
+                  match={tagMatch}
+                  onMatchChange={setTagMatch}
+                />
+              </div>
             </div>
             <ResponsiveTable
               data={visibleAgents}
@@ -253,6 +279,13 @@ export default function AgentsPage() {
                   render: (a) => new Date(a.created_at).toLocaleDateString(),
                 },
                 {
+                  // Tags is the last data column everywhere; not sortable
+                  // (rows can carry several tags, so a-z has no meaning).
+                  key: 'tags',
+                  label: 'Tags',
+                  render: (a) => <TagList tags={a.tags} />,
+                },
+                {
                   key: 'actions',
                   // No label — actions are self-evident from the icons, and
                   // the th would just steal width on a column we want as
@@ -263,41 +296,45 @@ export default function AgentsPage() {
                   // the rest of the table gets the surplus.
                   thClassName: 'w-px whitespace-nowrap',
                   tdClassName: 'w-px whitespace-nowrap',
+                  // Run stays as the primary inline action; edit / duplicate
+                  // / delete / tag collapse into the ⋮ configure menu.
+                  // Use desktopRender (not render) so the cell isn't wrapped in
+                  // ResponsiveTable's truncate/overflow-hidden fallback, which
+                  // would clip the ⋮ menu in this w-px column.
                   desktopRender: (a) => (
-                    <div className="flex items-center justify-end gap-2">
+                    <div className="flex items-center justify-end gap-1">
                       <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
                         {runningId === a.id
                           ? <RefreshCw className="h-4 w-4 animate-spin" />
                           : <Play className="h-4 w-4 text-success" />}
                       </Button>
-                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} title="Edit agent">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button variant="ghost" size="sm" disabled={duplicatingId === a.id} title="Duplicate agent" onClick={(e) => { e.stopPropagation(); handleDuplicate(a); }}>
-                        {duplicatingId === a.id
-                          ? <RefreshCw className="h-4 w-4 animate-spin" />
-                          : <Copy className="h-4 w-4" />}
-                      </Button>
-                      <Button variant="ghost" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }} title="Delete agent">
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
+                      <RowActionsMenu
+                        actions={[
+                          { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/agents/${a.id}`) },
+                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
+                          { label: duplicatingId === a.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === a.id, onSelect: () => handleDuplicate(a) },
+                          { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(a.id, a.name) },
+                        ]}
+                      />
                     </div>
                   ),
+                  // Mobile card view fallback — same Run + ⋮ menu.
                   render: (a) => (
-                    <>
-                      <Button variant="outline" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }} className="flex-1 rounded-none rounded-tr-lg border-r-0 border-t-0 border-l">
-                        {runningId === a.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4 text-success" />}
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
+                        {runningId === a.id
+                          ? <RefreshCw className="h-4 w-4 animate-spin" />
+                          : <Play className="h-4 w-4 text-success" />}
                       </Button>
-                      <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); router.push(`/agents/${a.id}`); }} className="flex-1 rounded-none border-r-0 border-t-0 border-l">
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button variant="outline" size="sm" disabled={duplicatingId === a.id} onClick={(e) => { e.stopPropagation(); handleDuplicate(a); }} className="flex-1 rounded-none border-r-0 border-t-0 border-l">
-                        {duplicatingId === a.id ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Copy className="h-4 w-4" />}
-                      </Button>
-                      <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); handleDelete(a.id, a.name); }} className="flex-1 rounded-none rounded-br-lg border-r-0 border-b-0 border-l border-destructive/20 hover:bg-destructive/10">
-                        <Trash2 className="h-4 w-4 text-destructive" />
-                      </Button>
-                    </>
+                      <RowActionsMenu
+                        actions={[
+                          { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/agents/${a.id}`) },
+                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
+                          { label: duplicatingId === a.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === a.id, onSelect: () => handleDuplicate(a) },
+                          { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(a.id, a.name) },
+                        ]}
+                      />
+                    </div>
                   ),
                 },
               ]}
@@ -305,6 +342,19 @@ export default function AgentsPage() {
           </CardContent>
         </Card>
       )}
+
+      <TagAssignDialog
+        open={!!tagDialogAgent}
+        onOpenChange={(o) => { if (!o) setTagDialogAgent(null); }}
+        orgId={selectedOrgId}
+        entityLabel={tagDialogAgent?.name}
+        initialTagIds={tagDialogAgent?.tags?.map((t) => t.id) ?? []}
+        onSave={async (ids) => {
+          if (!selectedOrgId || !tagDialogAgent) return;
+          await updateAgent(selectedOrgId, tagDialogAgent.id, { tag_ids: ids });
+          await loadAgents(true);
+        }}
+      />
     </div>
   );
 }

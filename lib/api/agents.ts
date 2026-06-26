@@ -1,4 +1,5 @@
 import agentClient from './agent-client';
+import { type Tag, tagFilterParams } from './tags';
 
 export interface Agent {
   id: string;
@@ -13,6 +14,8 @@ export interface Agent {
   updated_at: string;
   /** Agents that use this agent as a sub-agent target.  Empty = can have sub-agent actions. */
   used_as_sub_agent_by?: { agent_id: string; name: string }[];
+  /** Tags applied to this agent. Present on list/get/create/update responses. */
+  tags?: Tag[];
 }
 
 export interface AgentAction {
@@ -168,9 +171,13 @@ export interface NoVNCInfo {
 
 // ─── Agents ───────────────────────────────────────────────────
 
-export async function getAgents(orgId: string) {
+export async function getAgents(
+  orgId: string,
+  opts?: { tagIds?: string[]; tagMatch?: 'any' | 'all' },
+) {
   const res = await agentClient.get<{ agents?: Agent[] } | Agent[]>(
-    `/api/admin/${orgId}/agents`
+    `/api/admin/${orgId}/agents`,
+    { params: tagFilterParams(opts?.tagIds ?? [], opts?.tagMatch) }
   );
   // Handle both array and wrapped response shapes
   const data = res.data as any;
@@ -182,12 +189,12 @@ export async function getAgent(orgId: string, agentId: string) {
   return res.data;
 }
 
-export async function createAgent(orgId: string, data: { name: string; description?: string }) {
+export async function createAgent(orgId: string, data: { name: string; description?: string; tag_ids?: string[] }) {
   const res = await agentClient.post<Agent>(`/api/admin/${orgId}/agents`, data);
   return res.data;
 }
 
-export async function updateAgent(orgId: string, agentId: string, data: { name?: string; description?: string; is_active?: boolean; requires_browser?: boolean }) {
+export async function updateAgent(orgId: string, agentId: string, data: { name?: string; description?: string; is_active?: boolean; requires_browser?: boolean; tag_ids?: string[] }) {
   const res = await agentClient.patch<Agent>(`/api/admin/${orgId}/agents/${agentId}`, data);
   return res.data;
 }
@@ -398,6 +405,8 @@ export interface ExecutionRun {
   depth: number;
   item_index: number | null;
   has_children?: boolean;
+  /** Tags on this run's agent (tags live on the agent, not the run). */
+  tags?: Tag[];
 }
 
 export interface ExecutionAction {
@@ -461,6 +470,9 @@ export async function getExecutionHistory(
     agent_id?: string;
     status?: string | string[];
     trigger_type?: string;
+    /** Comma-separated tag ids; pair with tag_match. Use tagFilterParams(). */
+    tag_ids?: string;
+    tag_match?: 'any' | 'all';
     page?: number;
     limit?: number;
   }

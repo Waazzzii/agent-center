@@ -17,6 +17,9 @@ import { toast } from 'sonner';
 import { Loader2, Sparkles, Save, Trash2 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
+import { useTags } from '@/lib/hooks/use-tags';
+import { TagPicker } from '@/components/tags/tag-picker';
+import { Label } from '@/components/ui/label';
 
 export default function EditAiStepPage() {
   const { id } = useParams() as { id: string };
@@ -35,6 +38,9 @@ export default function EditAiStepPage() {
     name: '', description: '', prompt: '', model: 'claude-sonnet-4-6',
     connector_ids: [], outputs: [], skill_ids: [],
   });
+
+  const { tags, createTag } = useTags(selectedOrgId);
+  const [tagIds, setTagIds] = useState<string[]>([]);
 
   const load = useCallback(async () => {
     if (!selectedOrgId || !id) return;
@@ -55,6 +61,7 @@ export default function EditAiStepPage() {
         outputs: stepData.outputs ?? [],
         skill_ids: stepData.skill_ids ?? [],
       });
+      setTagIds((stepData.tags ?? []).map((t) => t.id));
       setConnectors((conns.connectors ?? []).filter((c: any) => c.agent_enabled).map((c: any) => ({ id: c.id, label: c.connector_name ?? c.id })));
       setSkills(skillsData.items ?? []);
     } catch {
@@ -87,6 +94,7 @@ export default function EditAiStepPage() {
             required: o.required !== false,
           })),
         skill_ids: form.skill_ids,
+        tag_ids: tagIds,
       });
       toast.success('AI step saved');
     } catch (err: any) {
@@ -158,6 +166,10 @@ export default function EditAiStepPage() {
             connectors={connectors}
             skills={skills}
           />
+          <div className="mt-4 space-y-1 border-t pt-4">
+            <Label>Tags</Label>
+            <TagPicker tags={tags} selected={tagIds} onChange={setTagIds} onCreate={(name) => createTag({ name })} />
+          </div>
         </CardContent>
       </Card>
     </div>

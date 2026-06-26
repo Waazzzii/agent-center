@@ -10,6 +10,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
+import { useTags } from '@/lib/hooks/use-tags';
+import { TagPicker } from '@/components/tags/tag-picker';
 
 export default function CreateAgentPage() {
   const router = useRouter();
@@ -18,12 +20,14 @@ export default function CreateAgentPage() {
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [saving, setSaving] = useState(false);
+  const { tags, createTag } = useTags(selectedOrgId);
+  const [tagIds, setTagIds] = useState<string[]>([]);
 
   const handleSave = async () => {
     if (!selectedOrgId || !name.trim()) return;
     try {
       setSaving(true);
-      const agent = await createAgent(selectedOrgId, { name: name.trim(), description: description.trim() || undefined });
+      const agent = await createAgent(selectedOrgId, { name: name.trim(), description: description.trim() || undefined, tag_ids: tagIds });
       toast.success('Agent created');
       router.push(`/agents/${agent.id}`);
     } catch (err: any) {
@@ -51,6 +55,10 @@ export default function CreateAgentPage() {
           <div className="space-y-1">
             <Label htmlFor="description">Description</Label>
             <Textarea id="description" placeholder="What does this agent do?" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
+          </div>
+          <div className="space-y-1">
+            <Label>Tags</Label>
+            <TagPicker tags={tags} selected={tagIds} onChange={setTagIds} onCreate={(name) => createTag({ name })} />
           </div>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => router.push('/agents')}>Cancel</Button>

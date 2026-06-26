@@ -3,15 +3,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Card } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { ResponsiveTable } from '@/components/ui/responsive-table';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Trash2, Pencil, Copy, Search, X } from 'lucide-react';
-import { listScripts, deleteScript, createScript, getScriptLoginUsage, type BrowserScript } from '@/lib/api/scripts';
+import { Trash2, Pencil, Copy, Search, Tag as TagIcon } from 'lucide-react';
+import { listScripts, deleteScript, createScript, updateScript, getScriptLoginUsage, type BrowserScript } from '@/lib/api/scripts';
 import { RunScriptModal } from './RunScriptModal';
+import { useTags } from '@/lib/hooks/use-tags';
+import { TagFilter } from '@/components/tags/tag-filter';
+import { TagList } from '@/components/tags/tag-badge';
+import { TagAssignDialog } from '@/components/tags/tag-assign-dialog';
+import { RowActionsMenu } from '@/components/ui/row-actions-menu';
 
 interface ScriptsListProps {
   orgId: string | null;
@@ -22,6 +28,8 @@ interface ScriptsListProps {
 export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
   const [loading, setLoading] = useState(false);
+  // Only gates the first-load spinner — filter/search reloads update in place.
+  const [initialLoad, setInitialLoad] = useState(true);
   const [runModalScript, setRunModalScript] = useState<BrowserScript | null>(null);
   const [scriptToDelete, setScriptToDelete] = useState<BrowserScript | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -36,11 +44,18 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   // Operator-typed filter against script name + description. Empty string =
   // show everything. Trimmed + lowercased once for the indexOf check.
   const [search, setSearch] = useState('');
+  const [sortKey, setSortKey] = useState<'name' | 'created'>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
-  // Sorted + filtered view. Default sort is by name (case-insensitive,
-  // localeCompare so accents/digits behave naturally). The search match
-  // is substring against name OR description so operators who remember
-  // the description but not the exact name still find it.
+  // Tag filtering is server-side (refetch on change); search/sort stay local.
+  const { tags } = useTags(orgId);
+  const [tagFilter, setTagFilter] = useState<string[]>([]);
+  const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
+  const [tagDialogScript, setTagDialogScript] = useState<BrowserScript | null>(null);
+
+  // Sorted + filtered view. Search is a substring match against name OR
+  // description so operators who remember the description but not the exact
+  // name still find it.
   const visibleScripts = useMemo(() => {
     const needle = search.trim().toLowerCase();
     const filtered = needle
@@ -48,28 +63,37 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
           s.name.toLowerCase().includes(needle) ||
           (s.description?.toLowerCase().includes(needle) ?? false))
       : scripts;
-    return [...filtered].sort((a, b) =>
-      a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true }),
-    );
-  }, [scripts, search]);
+    return [...filtered].sort((a, b) => {
+      let cmp = 0;
+      if (sortKey === 'name') cmp = a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+      else if (sortKey === 'created') cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      return sortDir === 'asc' ? cmp : -cmp;
+    });
+  }, [scripts, search, sortKey, sortDir]);
+
+  const handleSort = (key: string) => {
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
+    else { setSortKey(key as 'name' | 'created'); setSortDir('asc'); }
+  };
 
   const load = async () => {
     if (!orgId) return;
     setLoading(true);
     try {
-      const data = await listScripts(orgId);
+      const data = await listScripts(orgId, { tagIds: tagFilter, tagMatch });
       setScripts(data.scripts ?? []);
     } catch (err: any) {
       toast.error(err?.message || 'Failed to load scripts');
     } finally {
       setLoading(false);
+      setInitialLoad(false);
     }
   };
 
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId, refreshKey]);
+  }, [orgId, refreshKey, tagFilter, tagMatch]);
 
   /**
    * Duplicate a script — copies name + steps + parameters + test_values
@@ -98,6 +122,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
         steps: script.steps,
         parameters: script.parameters,
         test_values: script.test_values,
+        tag_ids: script.tags?.map((t) => t.id),
       });
       toast.success(`Duplicated → ${candidate}`);
       await load();
@@ -157,140 +182,122 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
 
   return (
     <>
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">
-          Saved Scripts ({search.trim() && visibleScripts.length !== scripts.length
-            ? `${visibleScripts.length} of ${scripts.length}`
-            : scripts.length})
-        </p>
-        {/* Search bar — filters by name OR description, case-insensitive
-            substring. Hidden when there's nothing to filter yet (don't
-            tease the operator with a control they can't usefully use). */}
-        {scripts.length > 0 && (
-          <div className="relative flex-1 max-w-xs">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground/60 pointer-events-none" />
-            <Input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Filter by name or description…"
-              className="h-8 pl-7 pr-7 text-xs"
-            />
-            {search.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setSearch('')}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-muted transition-colors"
-                aria-label="Clear search"
-              >
-                <X className="h-3 w-3 text-muted-foreground" />
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-
-      {loading ? (
+      {initialLoad ? (
         <div className="flex h-32 items-center justify-center">
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-brand border-t-transparent" />
         </div>
-      ) : scripts.length === 0 ? (
-        <Card><p className="py-10 text-center text-sm text-muted-foreground">
-          No scripts saved yet. Click Record above to create one.
-        </p></Card>
-      ) : visibleScripts.length === 0 ? (
-        <Card><p className="py-10 text-center text-sm text-muted-foreground">
-          No scripts match &ldquo;{search}&rdquo;.{' '}
-          <button
-            type="button"
-            onClick={() => setSearch('')}
-            className="text-brand hover:underline"
-          >
-            Clear filter
-          </button>
-        </p></Card>
       ) : (
         <Card className="overflow-hidden py-0">
-          {/* table-auto + narrow numeric columns let the Name column
-              expand to consume freed space. Parameters and Steps are
-              now compact counts (no names, no unit word) — the actual
-              variable list is one click away in the script editor and
-              didn't justify a wide column on the index. */}
-          <table className="w-full text-sm table-auto">
-            <thead className="bg-muted/40 text-xs text-muted-foreground">
-              <tr>
-                <th className="text-left font-medium px-4 py-2">Name</th>
-                <th className="text-left font-medium px-4 py-2 w-px whitespace-nowrap">Params</th>
-                <th className="text-left font-medium px-4 py-2 w-px whitespace-nowrap">Steps</th>
-                <th className="text-left font-medium px-4 py-2 w-px whitespace-nowrap">Created</th>
-                <th className="text-right font-medium px-4 py-2 w-20" />
-              </tr>
-            </thead>
-              <tbody>
-                {visibleScripts.map((script) => {
-                  const paramCount = Object.keys(script.parameters ?? {}).length;
-                  return (
-                  <tr
-                    key={script.id}
-                    className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
-                    onClick={() => setRunModalScript(script)}
-                  >
-                    <td className="px-4 py-2.5">
-                      <div>
-                        <span className="font-medium">{script.name}</span>
-                        {script.description && (
-                          <p className="text-xs text-muted-foreground mt-0.5 max-w-[420px] truncate">
-                            {script.description}
-                          </p>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
-                      {paramCount === 0 ? '—' : paramCount}
-                    </td>
-                    <td className="px-4 py-2.5 tabular-nums text-muted-foreground">
-                      {script.steps.length}
-                    </td>
-                    <td className="py-3 pr-4 text-muted-foreground whitespace-nowrap">
-                      {new Date(script.created_at).toLocaleDateString()}
-                    </td>
-                    <td className="py-3 pr-4 text-right" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1">
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          onClick={() => setRunModalScript(script)}
-                          title="Edit script"
-                        >
-                          <Pencil className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7"
-                          onClick={() => handleDuplicate(script)}
-                          disabled={duplicatingId === script.id}
-                          title="Duplicate script"
-                        >
-                          <Copy className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          className="h-7 w-7 text-destructive hover:text-destructive hover:bg-destructive/10"
-                          onClick={() => setScriptToDelete(script)}
-                          title="Delete script"
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+          <CardContent className="p-0">
+            <div className="flex items-center gap-2 border-b px-3 py-2">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search by name or description…"
+                  className="h-9 pl-8"
+                />
+              </div>
+              {search && (
+                <span className="text-xs text-muted-foreground">{visibleScripts.length} of {scripts.length}</span>
+              )}
+              <div className="ml-auto">
+                <TagFilter tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />
+              </div>
+            </div>
+            <ResponsiveTable
+              data={visibleScripts}
+              getRowKey={(s) => s.id}
+              onRowClick={(s) => setRunModalScript(s)}
+              emptyMessage={search ? `No scripts match "${search}".` : 'No scripts saved yet. Click Record above to create one.'}
+              sortKey={sortKey}
+              sortDir={sortDir}
+              onSort={handleSort}
+              columns={[
+                {
+                  key: 'name',
+                  label: 'Name',
+                  sortable: true,
+                  render: (s) => (
+                    <div>
+                      <span className="font-medium">{s.name}</span>
+                      {s.description && (
+                        <p className="text-xs text-muted-foreground mt-0.5 max-w-[420px] truncate">{s.description}</p>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  // ResponsiveTable is table-fixed: give the compact columns
+                  // explicit widths so the no-width Name column absorbs the
+                  // surplus and renders widest. (w-px would collapse a column
+                  // to ~1px and overflow into neighbors — only valid for the
+                  // icon actions column.)
+                  key: 'params',
+                  label: 'Params',
+                  thClassName: 'w-16',
+                  tdClassName: 'w-16',
+                  render: (s) => {
+                    const n = Object.keys(s.parameters ?? {}).length;
+                    return <span className="tabular-nums text-muted-foreground">{n === 0 ? '—' : n}</span>;
+                  },
+                },
+                {
+                  key: 'steps',
+                  label: 'Steps',
+                  thClassName: 'w-16',
+                  tdClassName: 'w-16',
+                  render: (s) => <span className="tabular-nums text-muted-foreground">{s.steps.length}</span>,
+                },
+                {
+                  key: 'created',
+                  label: 'Created',
+                  sortable: true,
+                  thClassName: 'w-24',
+                  tdClassName: 'w-24',
+                  render: (s) => <span className="text-muted-foreground whitespace-nowrap">{new Date(s.created_at).toLocaleDateString()}</span>,
+                },
+                {
+                  key: 'tags',
+                  label: 'Tags',
+                  thClassName: 'w-40',
+                  tdClassName: 'w-40',
+                  render: (s) => <TagList tags={s.tags} />,
+                },
+                {
+                  key: 'actions',
+                  label: '',
+                  thClassName: 'w-px whitespace-nowrap',
+                  tdClassName: 'w-px whitespace-nowrap',
+                  desktopRender: (s) => (
+                    <div className="flex items-center justify-end">
+                      <RowActionsMenu
+                        actions={[
+                          { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => setRunModalScript(s) },
+                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogScript(s) },
+                          { label: duplicatingId === s.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === s.id, onSelect: () => handleDuplicate(s) },
+                          { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => setScriptToDelete(s) },
+                        ]}
+                      />
+                    </div>
+                  ),
+                  render: (s) => (
+                    <div className="flex items-center">
+                      <RowActionsMenu
+                        actions={[
+                          { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => setRunModalScript(s) },
+                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogScript(s) },
+                          { label: duplicatingId === s.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === s.id, onSelect: () => handleDuplicate(s) },
+                          { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => setScriptToDelete(s) },
+                        ]}
+                      />
+                    </div>
+                  ),
+                },
+              ]}
+            />
+          </CardContent>
         </Card>
       )}
 
@@ -300,6 +307,19 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
         open={!!runModalScript}
         onClose={() => { setRunModalScript(null); load(); }}
         onSaved={() => load()}
+      />
+
+      <TagAssignDialog
+        open={!!tagDialogScript}
+        onOpenChange={(o) => { if (!o) setTagDialogScript(null); }}
+        orgId={orgId}
+        entityLabel={tagDialogScript?.name}
+        initialTagIds={tagDialogScript?.tags?.map((t) => t.id) ?? []}
+        onSave={async (ids) => {
+          if (!orgId || !tagDialogScript) return;
+          await updateScript(orgId, tagDialogScript.id, { tag_ids: ids });
+          await load();
+        }}
       />
 
       <Dialog open={!!scriptToDelete} onOpenChange={(o) => !o && setScriptToDelete(null)}>
