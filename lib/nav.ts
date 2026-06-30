@@ -8,29 +8,48 @@ export interface NavItem {
   href: string;
   permissionKeys?: string[];
   children?: NavItem[];
+  /** Non-clickable section caption (e.g. "Building blocks"). No href/icon. */
+  heading?: boolean;
 }
 
-/** Main org nav — shown in the regular (non-settings) panel */
+/**
+ * Main org nav. Agents is the workspace: it groups the agent list, run
+ * history, and the reusable building blocks an agent is assembled from. Skills
+ * nest under AI Steps and Logins under Browser Scripts — they only feed those,
+ * so they're a third level, not separate destinations.
+ */
 export const orgMainNavItems: NavItem[] = [
-  { label: 'Agents',       href: '/agents',           permissionKeys: ['agent_center_user'] },
   {
-    label: 'Actions',
-    // No href — clicking this only expands/collapses the sub-nav
-    href:  '',
+    label: 'Agents',
+    href: '', // grouper — "All agents" below is the actual list page
     permissionKeys: ['agent_center_user'],
     children: [
-      { label: 'AI Steps',        href: '/actions/ai-steps',        permissionKeys: ['agent_center_user'] },
-      { label: 'Logins',          href: '/actions/logins',          permissionKeys: ['agent_center_user'] },
-      { label: 'Browser Scripts', href: '/actions/browser-scripts', permissionKeys: ['agent_center_user'] },
-      { label: 'Approvals',       href: '/actions/approvals',       permissionKeys: ['agent_center_user'] },
+      { label: 'Workflows',   href: '/agents',        permissionKeys: ['agent_center_user'] },
+      { label: 'Executions',  href: '/agent-history', permissionKeys: ['agent_center_user'] },
+      { label: 'Building blocks', href: '', heading: true },
+      {
+        label: 'AI Steps',
+        href: '/actions/ai-steps',
+        permissionKeys: ['agent_center_user'],
+        children: [
+          { label: 'Skills', href: '/skills', permissionKeys: ['agent_center_user'] },
+        ],
+      },
+      {
+        label: 'Browser Scripts',
+        href: '/actions/browser-scripts',
+        permissionKeys: ['agent_center_user'],
+        children: [
+          { label: 'Logins', href: '/actions/logins', permissionKeys: ['agent_center_user'] },
+        ],
+      },
+      { label: 'Approvals', href: '/actions/approvals', permissionKeys: ['agent_center_user'] },
     ],
   },
-  { label: 'Executions',   href: '/agent-history',   permissionKeys: ['agent_center_user'] },
-  { label: 'Analytics',    href: '/agent-analytics', permissionKeys: ['agent_center_user'] },
-  { label: 'Billing & Usage', href: '/billing',     permissionKeys: ['agent_center_user'] },
-  { label: 'Interactions', href: '/interactions',    permissionKeys: ['agent_center_user'] },
-  { label: 'Skills',       href: '/skills',          permissionKeys: ['agent_center_user'] },
-  { label: 'Access',       href: '/access',          permissionKeys: ['agent_center_user'] },
+  { label: 'Action Required', href: '/interactions',    permissionKeys: ['agent_center_user'] },
+  { label: 'Analytics',       href: '/agent-analytics', permissionKeys: ['agent_center_user'] },
+  { label: 'Billing & Usage', href: '/billing',         permissionKeys: ['agent_center_user'] },
+  { label: 'Access',          href: '/access',          permissionKeys: ['agent_center_user'] },
 ];
 
 /** Settings nav — no settings in the Agent Center */
@@ -51,17 +70,18 @@ export function firstPermittedHref(
   hasPermFn: (orgId: string, key: string) => boolean,
   orgId: string
 ): string | null {
+  const permitted = (item: NavItem) =>
+    bypass || !item.permissionKeys || item.permissionKeys.some((k) => hasPermFn(orgId, k));
+
   for (const item of items) {
-    // If item has children, recurse into them first
+    // Prefer the item's OWN page when it has one (e.g. Agents → /agents),
+    // so a parent that also has children doesn't redirect to its first child.
+    if (item.href && permitted(item)) return item.href;
+    // Otherwise it's a grouper — descend into its children.
     if (item.children?.length) {
       const childHref = firstPermittedHref(item.children, bypass, hasPermFn, orgId);
       if (childHref) return childHref;
-      continue;
     }
-    if (!item.href) continue; // grouper-only leaf — no navigation target
-    if (bypass) return item.href;
-    if (!item.permissionKeys) return item.href;
-    if (item.permissionKeys.some((k) => hasPermFn(orgId, k))) return item.href;
   }
   return null;
 }

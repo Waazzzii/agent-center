@@ -22,9 +22,12 @@ interface VariablesPanelProps {
   onRenameVariable: (oldName: string, newName: string) => void;
   onDeleteVariable?: (name: string) => void;
   hoveredStep: number | null;
+  /** Report the step indices a variable touches while it's hovered/edited, so
+   *  the step list can highlight them (null clears the highlight). */
+  onHoverVariable?: (steps: Set<number> | null) => void;
 }
 
-export function VariablesPanel({ variables, params, onParamsChange, onRenameVariable, onDeleteVariable, hoveredStep }: VariablesPanelProps) {
+export function VariablesPanel({ variables, params, onParamsChange, onRenameVariable, onDeleteVariable, hoveredStep, onHoverVariable }: VariablesPanelProps) {
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [adding, setAdding] = useState(false);
@@ -39,14 +42,7 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
   };
 
   return (
-    <div className="px-3 py-2 space-y-1.5">
-      {/* Header */}
-      <div className="flex items-center justify-between pb-1">
-        <h4 className="text-xs font-medium text-foreground">Variables</h4>
-        <span className="text-[9px] text-muted-foreground">{allVarNames.size} total</span>
-      </div>
-
-      {/* Rows */}
+    <div className="px-2 py-1.5 space-y-1">
       {allVarNames.size === 0 && !adding && (
         <p className="text-[10px] text-muted-foreground/60 py-3 text-center">
           No variables yet. Use <code className="bg-muted px-0.5 rounded font-mono">{'{{name}}'}</code> in any step.
@@ -60,84 +56,85 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
         );
         const inUse = ((info?.sources.length ?? 0) + (info?.consumers.length ?? 0)) > 0;
         const isEditing = editingName === name;
+        // Steps this variable touches (sources set it, consumers read it) —
+        // reported up so the step list highlights them on hover/edit.
+        const impacted = new Set<number>([
+          ...(info?.sources ?? []).map((r) => r.index),
+          ...(info?.consumers ?? []).map((r) => r.index),
+        ]);
+        const flagImpact = () => onHoverVariable?.(impacted.size ? impacted : null);
+        const clearImpact = () => onHoverVariable?.(null);
+
+        // Usage summary shown on hover. Group set/read so it reads naturally,
+        // e.g. "Set in step 2 · Read in steps 5, 7".
+        const setIn = (info?.sources ?? []).map((r) => r.index + 1);
+        const readIn = (info?.consumers ?? []).map((r) => r.index + 1);
+        const plural = (arr: number[]) => (arr.length > 1 ? 's' : '');
+        const usageTitle = inUse
+          ? [
+              setIn.length ? `Set in step${plural(setIn)} ${setIn.join(', ')}` : null,
+              readIn.length ? `Read in step${plural(readIn)} ${readIn.join(', ')}` : null,
+            ].filter(Boolean).join(' · ')
+          : 'Manual value — not referenced by any step';
 
         return (
-          <div key={name} className={cn(
-            'rounded border transition-colors',
-            isRelevant ? 'border-purple-400/40 bg-purple-500/5' : 'border-border/40 hover:border-border/80'
-          )}>
-            {/* Name row */}
-            <div className="flex items-center gap-2 px-2.5 py-1.5">
-              {isEditing ? (
-                <form className="flex-1" onSubmit={(e) => { e.preventDefault(); handleSubmitRename(name); }}>
-                  <input
-                    autoFocus
-                    value={editingValue}
-                    onChange={(e) => setEditingValue(e.target.value)}
-                    onBlur={() => handleSubmitRename(name)}
-                    onKeyDown={(e) => { if (e.key === 'Escape') setEditingName(null); }}
-                    className="w-full text-xs font-mono text-purple-400 bg-transparent border-none outline-none"
-                  />
-                </form>
-              ) : (
-                <button
-                  className="flex-1 text-left font-mono text-xs text-purple-400 hover:text-purple-300 transition-colors truncate"
-                  onClick={() => { setEditingName(name); setEditingValue(name); }}
-                  title="Click to rename"
-                >
-                  {`{{${name}}}`}
-                </button>
-              )}
-              <div className="flex items-center gap-1 shrink-0">
-                {info?.sources.length ? (
-                  <span
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-green-500/10 text-green-600 dark:text-green-400 font-medium"
-                    title={info.sources.map((r) => `Step ${r.index + 1} — ${r.action} (outputs this variable)`).join('\n')}
-                  >
-                    O{info.sources.map((r) => r.index + 1).join(',')}
-                  </span>
-                ) : null}
-                {info?.consumers.length ? (
-                  <span
-                    className="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/10 text-blue-600 dark:text-blue-400 font-medium"
-                    title={info.consumers.map((r) => `Step ${r.index + 1} — ${r.action} (inputs this variable)`).join('\n')}
-                  >
-                    I{info.consumers.map((r) => r.index + 1).join(',')}
-                  </span>
-                ) : null}
-                {!info && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">manual</span>
+          <div
+            key={name}
+            onMouseEnter={flagImpact}
+            onMouseLeave={clearImpact}
+            className={cn(
+              'group flex items-center gap-2 rounded px-2 py-1 border transition-colors',
+              isRelevant ? 'border-purple-400/40 bg-purple-500/5' : 'border-transparent hover:bg-muted/40'
+            )}
+          >
+            {/* Name — left, fixed width */}
+            {isEditing ? (
+              <form className="w-1/2 shrink-0" onSubmit={(e) => { e.preventDefault(); handleSubmitRename(name); }}>
+                <input
+                  autoFocus
+                  value={editingValue}
+                  onChange={(e) => setEditingValue(e.target.value)}
+                  onBlur={() => handleSubmitRename(name)}
+                  onKeyDown={(e) => { if (e.key === 'Escape') setEditingName(null); }}
+                  className="w-full text-xs font-mono text-purple-400 bg-transparent border-none outline-none"
+                />
+              </form>
+            ) : (
+              <button
+                className="shrink-0 max-w-[50%] text-left font-mono text-xs text-purple-400 hover:text-purple-300 transition-colors truncate"
+                onClick={() => { setEditingName(name); setEditingValue(name); }}
+                title={`{{${name}}}\n${usageTitle}\nClick to rename`}
+              >
+                {`{{${name}}}`}
+              </button>
+            )}
+
+            {/* Value — right, fills the row */}
+            <input
+              className="flex-1 min-w-0 text-xs bg-muted/30 rounded px-2 py-1 border border-border/30 focus:border-border focus:outline-none font-mono"
+              placeholder="test value"
+              value={params[name] ?? ''}
+              onFocus={flagImpact}
+              onBlur={clearImpact}
+              onChange={(e) => onParamsChange((p) => ({ ...p, [name]: e.target.value }))}
+            />
+
+            {/* Delete — far right; only when the variable isn't referenced */}
+            {onDeleteVariable && (
+              <button
+                className={cn(
+                  'shrink-0 p-0.5 rounded transition-colors',
+                  inUse
+                    ? 'text-muted-foreground/20 cursor-not-allowed'
+                    : 'text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 opacity-0 group-hover:opacity-100'
                 )}
-                {/* Delete — only when not referenced by any step */}
-                {onDeleteVariable && (
-                  <button
-                    className={cn(
-                      'p-0.5 rounded transition-colors',
-                      inUse
-                        ? 'text-muted-foreground/20 cursor-not-allowed'
-                        : 'text-muted-foreground hover:text-destructive hover:bg-destructive/10'
-                    )}
-                    onClick={() => !inUse && onDeleteVariable(name)}
-                    disabled={inUse}
-                    title={inUse
-                      ? `In use: ${[...(info?.sources ?? []).map((r) => `step ${r.index + 1} (${r.action} — sets)`), ...(info?.consumers ?? []).map((r) => `step ${r.index + 1} (${r.action} — reads)`)].join(', ')}`
-                      : 'Delete variable'
-                    }
-                  >
-                    <Trash2 className="h-3 w-3" />
-                  </button>
-                )}
-              </div>
-            </div>
-            {/* Value row */}
-            <div className="px-2.5 pb-1.5">
-              <input
-                className="w-full text-xs bg-muted/30 rounded px-2 py-1 border border-border/30 focus:border-border focus:outline-none font-mono"
-                placeholder="test value"
-                value={params[name] ?? ''}
-                onChange={(e) => onParamsChange((p) => ({ ...p, [name]: e.target.value }))}
-              />
-            </div>
+                onClick={() => !inUse && onDeleteVariable(name)}
+                disabled={inUse}
+                title={inUse ? `In use: ${usageTitle}` : 'Delete variable'}
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            )}
           </div>
         );
       })}

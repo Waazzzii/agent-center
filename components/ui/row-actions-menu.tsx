@@ -25,13 +25,14 @@ export interface RowAction {
   disabled?: boolean;
 }
 
-export function RowActionsMenu({ actions, title = 'Configure' }: { actions: RowAction[]; title?: string }) {
+export function RowActionsMenu({ actions, title = 'Configure', triggerClassName }: { actions: RowAction[]; title?: string; triggerClassName?: string }) {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"
           size="sm"
+          className={cn(triggerClassName)}
           title={title}
           aria-label={title}
           onClick={(e) => e.stopPropagation()}

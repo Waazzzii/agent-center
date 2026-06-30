@@ -53,15 +53,22 @@ export function StepEditModal({
   // parent now thinks the step is — visible as the UI "reverting" the edit
   // for a split second on save, and confusing operators who expect their
   // edits to persist until they close the modal.
+  // Re-sync the draft from the incoming step whenever it changes (open,
+  // different index, OR the step's content was rewritten under us — e.g. by a
+  // Test & Improve walk). Keying on a JSON fingerprint means an external
+  // rewrite refreshes the JSON tab instead of showing stale content. Local
+  // typing edits jsonText (not the `step` prop), so this never clobbers an
+  // in-progress edit; AI walks lock editing anyway.
+  const stepKey = step ? JSON.stringify(step) : '';
   useEffect(() => {
     if (open) {
       setDraft(step);
-      setJsonText(step ? JSON.stringify(step, null, 2) : '');
+      setJsonText(stepKey ? JSON.stringify(step, null, 2) : '');
       setJsonError('');
       setTab('name');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, stepIndex]);
+  }, [open, stepIndex, stepKey]);
 
   if (!step || !draft) return null;
 

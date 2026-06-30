@@ -238,10 +238,10 @@ export default function InteractionsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <MessageSquare className="h-5 w-5 text-brand" /> Interactions
+            <MessageSquare className="h-5 w-5 text-brand" /> Action Required
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Agent runs waiting for human review or login.
+            Agent runs waiting for a human to review, approve, or log in.
           </p>
         </div>
         <div className="flex items-center gap-1">

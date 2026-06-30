@@ -8,7 +8,7 @@
  */
 
 import { useState, useRef, useEffect } from 'react';
-import { Check, ChevronDown, X } from 'lucide-react';
+import { Check, ChevronDown, Plus, Search, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 export interface MultiSelectOption {
@@ -22,20 +22,30 @@ interface Props {
   onChange: (selected: string[]) => void;
   placeholder?: string;
   disabled?: boolean;
+  /** Show a search box inside the dropdown (auto-on past 6 options). */
+  searchable?: boolean;
+  /** When set, renders a "+ {createLabel}" footer that calls onCreateNew. */
+  onCreateNew?: () => void;
+  createLabel?: string;
 }
 
-export function MultiSelectTags({ options, selected, onChange, placeholder = 'Select…', disabled }: Props) {
+export function MultiSelectTags({ options, selected, onChange, placeholder = 'Select…', disabled, searchable, onCreateNew, createLabel = 'Create new' }: Props) {
   const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState('');
   const ref = useRef<HTMLDivElement>(null);
 
   // Close on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+      if (ref.current && !ref.current.contains(e.target as Node)) { setOpen(false); setQuery(''); }
     };
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  const showSearch = searchable ?? options.length > 6;
+  const q = query.trim().toLowerCase();
+  const visibleOptions = q ? options.filter((o) => o.label.toLowerCase().includes(q)) : options;
 
   const toggle = (value: string) => {
     onChange(
@@ -88,29 +98,56 @@ export function MultiSelectTags({ options, selected, onChange, placeholder = 'Se
 
       {/* Dropdown */}
       {open && (
-        <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-md max-h-48 overflow-auto py-1">
-          {options.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-muted-foreground italic">No options available</div>
-          ) : (
-            options.map((opt) => {
-              const isSelected = selected.includes(opt.value);
-              return (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => toggle(opt.value)}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-muted/50 transition-colors"
-                >
-                  <div className={cn(
-                    'w-4 h-4 rounded border flex items-center justify-center shrink-0',
-                    isSelected ? 'bg-brand border-brand' : 'border-border',
-                  )}>
-                    {isSelected && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
-                  </div>
-                  <span className={cn(isSelected && 'font-medium')}>{opt.label}</span>
-                </button>
-              );
-            })
+        <div className="absolute z-50 mt-1 w-full rounded-md border bg-popover shadow-md">
+          {showSearch && (
+            <div className="border-b p-1.5">
+              <div className="relative">
+                <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder="Search…"
+                  autoFocus
+                  className="w-full rounded-md border border-input bg-transparent py-1.5 pl-7 pr-2 text-xs outline-none focus:border-brand"
+                />
+              </div>
+            </div>
+          )}
+          <div className="max-h-48 overflow-auto py-1">
+            {options.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-muted-foreground italic">No options available</div>
+            ) : visibleOptions.length === 0 ? (
+              <div className="px-3 py-2 text-xs text-muted-foreground italic">No matches</div>
+            ) : (
+              visibleOptions.map((opt) => {
+                const isSelected = selected.includes(opt.value);
+                return (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => toggle(opt.value)}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left hover:bg-muted/50 transition-colors"
+                  >
+                    <div className={cn(
+                      'w-4 h-4 rounded border flex items-center justify-center shrink-0',
+                      isSelected ? 'bg-brand border-brand' : 'border-border',
+                    )}>
+                      {isSelected && <Check className="h-2.5 w-2.5 text-primary-foreground" />}
+                    </div>
+                    <span className={cn(isSelected && 'font-medium')}>{opt.label}</span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+          {onCreateNew && (
+            <button
+              type="button"
+              onMouseDown={(e) => { e.preventDefault(); onCreateNew(); }}
+              className="flex w-full items-center gap-2 border-t px-3 py-2 text-xs text-brand transition-colors hover:bg-muted/50"
+            >
+              <Plus className="h-3 w-3" /> {createLabel}
+            </button>
           )}
         </div>
       )}

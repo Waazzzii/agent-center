@@ -13,14 +13,14 @@ import {
   ChevronDown,
   ChevronRight,
   X,
-  Wand2,
   Bot,
   CheckCircle,
   History,
   BarChart3,
   ShieldCheck,
   Video,
-  Zap,
+  LayoutGrid,
+  Wand2,
   LogIn,
   MessageSquare,
   Sparkles,
@@ -29,50 +29,29 @@ import {
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
 import { useUIStore } from '@/stores/ui.store';
-import { orgMainNavItems as mainItems } from '@/lib/nav';
+import { orgMainNavItems as mainItems, type NavItem } from '@/lib/nav';
 import { useBranding } from '@/components/branding/BrandingProvider';
 
-interface NavChild {
-  label: string;
-  href: string;
-  icon: React.ElementType;
-  permissionKeys?: string[];
-}
-
-interface NavItem {
-  label: string;
-  href: string;
-  icon: React.ElementType;
-  permissionKeys?: string[];
-  children?: NavChild[];
-}
-
-// Merge icons onto shared nav items so they work in the sidebar
-const MAIN_ICONS: Record<string, React.ElementType> = {
-  '/agents':           Bot,
-  '/agent-history':    History,
-  '/agent-analytics':  BarChart3,
-  '/billing':          Receipt,
-  '/interactions':     MessageSquare,
-  '/approvals':        CheckCircle,
-  '/skills':           Wand2,
-  '/record':           Video,
-  '/access':           ShieldCheck,
-};
-// Icons for grouper items (no href) — keyed by label
-const GROUPER_ICONS: Record<string, React.ElementType> = {
-  'Actions': Zap,
-};
-const CHILD_ICONS: Record<string, React.ElementType> = {
+// Icons resolved at render time so the recursive renderer doesn't need a
+// pre-transformed tree. Keyed by href; groupers (no href) keyed by label.
+const ICON_BY_HREF: Record<string, React.ElementType> = {
+  '/agents':                  LayoutGrid,
+  '/agent-history':           History,
   '/actions/ai-steps':        Sparkles,
-  '/actions/logins':          LogIn,
+  '/skills':                  Wand2,
   '/actions/browser-scripts': Video,
+  '/actions/logins':          LogIn,
+  '/actions/approvals':       CheckCircle,
+  '/interactions':            MessageSquare,
+  '/agent-analytics':         BarChart3,
+  '/billing':                 Receipt,
+  '/access':                  ShieldCheck,
 };
-const orgMainNavItems: NavItem[] = mainItems.map((item) => ({
-  ...item,
-  icon: MAIN_ICONS[item.href] ?? GROUPER_ICONS[item.label] ?? Bot,
-  children: item.children?.map((child) => ({ ...child, icon: CHILD_ICONS[child.href] ?? Bot })),
-}));
+const ICON_BY_LABEL: Record<string, React.ElementType> = {
+  'Agents': Bot,
+};
+const iconFor = (item: NavItem): React.ElementType =>
+  ICON_BY_HREF[item.href] ?? ICON_BY_LABEL[item.label] ?? Bot;
 
 export function ViewModeSidebar() {
   const pathname = usePathname();
@@ -87,23 +66,32 @@ export function ViewModeSidebar() {
   // (children-only, no own page) fall back to their label.
   const navKey = (item: { href: string; label: string }) => item.href || `group:${item.label}`;
 
+  // True when `item` (or any descendant) is the current route. Drives both
+  // "is this branch active" highlighting and auto-expansion of the active path.
+  const isActiveHref = (href: string) =>
+    !!href && (pathname === href || pathname.startsWith(`${href}/`));
+  const containsActive = (item: NavItem): boolean =>
+    isActiveHref(item.href) || (item.children ?? []).some(containsActive);
+
+  // Auto-expand every ancestor of the active route so the current page is
+  // always revealed in the tree (respecting manual collapses).
   useEffect(() => {
-    const newExpanded = new Set<string>();
-    for (const item of orgMainNavItems) {
-      if (!item.children?.length) continue;
-      const key = navKey(item);
-      if (manuallyClosed.current.has(key)) continue;
-      const hrefMatchesPath = item.href && pathname.startsWith(item.href);
-      if (
-        item.children.some((c) => pathname.startsWith(c.href)) ||
-        hrefMatchesPath
-      ) {
-        newExpanded.add(key);
+    const toExpand = new Set<string>();
+    const walk = (items: NavItem[]) => {
+      for (const it of items) {
+        if (it.children?.length) {
+          if (!manuallyClosed.current.has(navKey(it)) && containsActive(it)) {
+            toExpand.add(navKey(it));
+          }
+          walk(it.children);
+        }
       }
+    };
+    walk(mainItems);
+    if (toExpand.size > 0) {
+      setExpandedItems((prev) => new Set([...prev, ...toExpand]));
     }
-    if (newExpanded.size > 0) {
-      setExpandedItems((prev) => new Set([...prev, ...newExpanded]));
-    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pathname]);
 
   const toggleExpanded = (href: string) => {
@@ -132,123 +120,107 @@ export function ViewModeSidebar() {
     form.submit();
   };
 
-  const visibleNavItems = orgMainNavItems.filter((item) => {
-    if (!item.permissionKeys || !selectedOrgId) return true;
-    return item.permissionKeys.some((key) => hasPermission(selectedOrgId, key));
-  });
+  const permitted = (item: NavItem) =>
+    !item.permissionKeys || !selectedOrgId || item.permissionKeys.some((k) => hasPermission(selectedOrgId, k));
 
-  const renderNavItem = (item: NavItem) => {
-    const Icon = item.icon;
-    const hasChildren = item.children && item.children.length > 0;
+  const closeMobile = () => { if (sidebarOpen) toggleSidebar(); };
+
+  // Recursive renderer — supports the 3 levels (Agents → AI Steps → Skills).
+  // depth 0 = top-level; nested levels indent under a left guide rail.
+  const renderItem = (item: NavItem, depth: number): React.ReactNode => {
+    if (item.heading) {
+      return (
+        <div key={`h:${item.label}`} className="px-3 pt-3 pb-1 text-[11px] font-medium text-muted-foreground">
+          {item.label}
+        </div>
+      );
+    }
+
+    const Icon = iconFor(item);
     const key = navKey(item);
+    const visibleChildren = (item.children ?? []).filter((c) => c.heading || permitted(c));
+    const hasChildren = visibleChildren.length > 0;
     const isExpanded = hasChildren && expandedItems.has(key);
-    const isChildActive = hasChildren && item.children!.some((c) => pathname.startsWith(c.href));
-    const isActive = !hasChildren && !!item.href && pathname.startsWith(item.href);
-    // A "grouper" is a parent nav item that has no own page and exists only
-    // to expand/collapse its children.  Either: the parent's href matches
-    // one of its children (legacy), or the parent has no href at all.
-    const isGrouper = hasChildren && (!item.href || item.children!.some((c) => c.href === item.href));
+    const selfActive = isActiveHref(item.href);
+    const iconSize = depth === 0 ? 'h-5 w-5' : 'h-4 w-4';
 
-    const visibleChildren = hasChildren
-      ? item.children!.filter((child) => {
-          if (!child.permissionKeys || !selectedOrgId) return true;
-          return child.permissionKeys.some((k) => hasPermission(selectedOrgId, k));
-        })
-      : [];
+    const chevron = isExpanded
+      ? <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
+      : <ChevronRight className="h-4 w-4 shrink-0 opacity-60" />;
+
+    let row: React.ReactNode;
+    if (!item.href) {
+      // Pure grouper (Agents) — click toggles expansion.
+      row = (
+        <button
+          className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+          onClick={() => toggleExpanded(key)}
+        >
+          <Icon className={cn(iconSize, 'shrink-0')} />
+          <span className="flex-1">{item.label}</span>
+          {chevron}
+        </button>
+      );
+    } else if (hasChildren) {
+      // A page that also has children (AI Steps, Browser Scripts): link + chevron.
+      row = (
+        <div
+          className={cn(
+            'flex w-full items-center rounded-lg text-sm font-medium transition-colors',
+            selfActive
+              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+              : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+          )}
+        >
+          <Link
+            href={item.href}
+            className="flex flex-1 items-center gap-3 px-3 py-2"
+            onClick={() => {
+              manuallyClosed.current.delete(key);
+              setExpandedItems((prev) => new Set([...prev, key]));
+              closeMobile();
+            }}
+          >
+            <Icon className={cn(iconSize, 'shrink-0')} />
+            <span className="flex-1 text-left">{item.label}</span>
+          </Link>
+          <button onClick={() => toggleExpanded(key)} className="pr-3 py-2" aria-label={isExpanded ? 'Collapse' : 'Expand'}>
+            {chevron}
+          </button>
+        </div>
+      );
+    } else {
+      // Leaf link.
+      row = (
+        <Link
+          href={item.href}
+          className={cn(
+            'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
+            selfActive
+              ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+              : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground',
+          )}
+          onClick={closeMobile}
+        >
+          <Icon className={cn(iconSize, 'shrink-0')} />
+          <span className="flex-1 text-left">{item.label}</span>
+        </Link>
+      );
+    }
 
     return (
       <div key={key}>
-        {hasChildren ? (
-          <div
-            className={cn(
-              'flex w-full items-center rounded-lg text-sm font-medium transition-colors',
-              !isGrouper && item.href && pathname.startsWith(item.href) && !isChildActive
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-            )}
-          >
-            {isGrouper ? (
-              <button
-                className="flex flex-1 items-center gap-3 px-3 py-2 text-left"
-                onClick={() => toggleExpanded(key)}
-              >
-                <Icon className="h-5 w-5 shrink-0" />
-                <span className="flex-1">{item.label}</span>
-                {isExpanded
-                  ? <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
-                  : <ChevronRight className="h-4 w-4 shrink-0 opacity-60" />
-                }
-              </button>
-            ) : (
-              <>
-                <Link
-                  href={item.href}
-                  className="flex flex-1 items-center gap-3 px-3 py-2"
-                  onClick={() => {
-                    manuallyClosed.current.delete(key);
-                    setExpandedItems((prev) => new Set([...prev, key]));
-                    if (sidebarOpen) toggleSidebar();
-                  }}
-                >
-                  <Icon className="h-5 w-5 shrink-0" />
-                  <span className="flex-1 text-left">{item.label}</span>
-                </Link>
-                <button
-                  onClick={() => toggleExpanded(key)}
-                  className="pr-3 py-2"
-                  aria-label={isExpanded ? 'Collapse' : 'Expand'}
-                >
-                  {isExpanded
-                    ? <ChevronDown className="h-4 w-4 shrink-0 opacity-60" />
-                    : <ChevronRight className="h-4 w-4 shrink-0 opacity-60" />
-                  }
-                </button>
-              </>
-            )}
-          </div>
-        ) : (
-          <Link
-            href={item.href}
-            className={cn(
-              'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors',
-              isActive
-                ? 'bg-sidebar-accent text-sidebar-accent-foreground'
-                : 'text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-            )}
-            onClick={() => { if (sidebarOpen) toggleSidebar(); }}
-          >
-            <Icon className="h-5 w-5" />
-            {item.label}
-          </Link>
-        )}
-
-        {hasChildren && isExpanded && visibleChildren.length > 0 && (
-          <div className="mt-0.5 ml-4 space-y-0.5 border-l border-sidebar-border pl-3">
-            {visibleChildren.map((child) => {
-              const ChildIcon = child.icon;
-              const childActive = pathname.startsWith(child.href);
-              return (
-                <Link
-                  key={child.href}
-                  href={child.href}
-                  className={cn(
-                    'flex items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition-colors',
-                    childActive
-                      ? 'font-medium bg-sidebar-accent text-sidebar-accent-foreground'
-                      : 'text-sidebar-foreground/80 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground'
-                  )}
-                  onClick={() => { if (sidebarOpen) toggleSidebar(); }}
-                >
-                  <ChildIcon className="h-4 w-4 shrink-0" />
-                  {child.label}
-                </Link>
-              );
-            })}
+        {row}
+        {hasChildren && isExpanded && (
+          <div className="mt-0.5 ml-3 space-y-0.5 border-l border-sidebar-border pl-2">
+            {visibleChildren.map((child) => renderItem(child, depth + 1))}
           </div>
         )}
       </div>
     );
   };
+
+  const visibleNavItems = mainItems.filter(permitted);
 
   return (
     <>
@@ -295,7 +267,7 @@ export function ViewModeSidebar() {
                 No access granted yet
               </div>
             )}
-            {visibleNavItems.map(renderNavItem)}
+            {visibleNavItems.map((item) => renderItem(item, 0))}
           </nav>
 
           {/* Footer */}

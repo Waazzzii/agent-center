@@ -29,7 +29,6 @@ export default function AiStepsPage() {
   const router = useRouter();
 
   const [items, setItems] = useState<AiStep[]>([]);
-  const [loading, setLoading] = useState(true);
   // Only gates the first-load spinner — filter/search reloads update in place.
   const [initialLoad, setInitialLoad] = useState(true);
 
@@ -44,13 +43,11 @@ export default function AiStepsPage() {
 
   const load = useCallback(async () => {
     if (!selectedOrgId) return;
-    setLoading(true);
     try {
       setItems(await listAiSteps(selectedOrgId, { tagIds: tagFilter, tagMatch }));
     } catch {
       toast.error('Failed to load AI steps');
     } finally {
-      setLoading(false);
       setInitialLoad(false);
     }
   }, [selectedOrgId, tagFilter, tagMatch]);

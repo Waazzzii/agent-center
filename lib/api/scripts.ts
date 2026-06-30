@@ -90,6 +90,18 @@ export interface RecordedStep {
     /** Literal value to find in the URL (method=url_match) */
     match_value?: string;
   };
+  /**
+   * Engine pauses for human approval before this step (submits / destructive
+   * actions). Set by the AI refine pass; honored by the test replay's gate
+   * handling and by the agent runtime.
+   */
+  requires_approval?: boolean;
+  /**
+   * Display-only reliability annotation from the AI refine pass. Persisted
+   * onto the step so the badge survives a save / reload. Not consumed by the
+   * runtime — purely for the editor's at-a-glance review badges.
+   */
+  _reliability?: { tier: 'reliable' | 'review' | 'fragile'; risks: string[] };
 }
 
 export interface BrowserSession {
@@ -247,6 +259,69 @@ export async function runScript(
   return res.data;
 }
 
+// ─── AI Refine ─────────────────────────────────────────────────
+
+export interface RefineReport {
+  overall: 'reliable' | 'review' | 'fragile';
+  summary: string;
+  /** Plain-English narration of the overall approach / judgment calls. */
+  notes?: string;
+  steps: Array<{ index: number; name: string; reliability: 'reliable'|'review'|'fragile'; risks: string[]; requires_approval: boolean; change?: string }>;
+}
+export interface RefineResult { steps: RecordedStep[]; parameters: Record<string,string>; report: RefineReport; }
+export async function refineScript(orgId: string, body: {
+  steps: RecordedStep[];
+  target_indices?: number[];
+  instruction?: string;
+  context?: { start_url?: string; parameters?: Record<string,string> };
+}): Promise<RefineResult> {
+  const res = await agentClient.post<RefineResult>(`/api/admin/${orgId}/scripts/refine`, body);
+  return res.data;
+}
+
+/** Metadata-only cleanup report from tidyScript. */
+export interface TidyReport {
+  summary: string;
+  named: number;
+  renamed: Array<{ from: string; to: string }>;
+  parameterized: Array<{ index: number; var_name: string; value: string }>;
+  pruned: string[];
+}
+export interface TidyResult { steps: RecordedStep[]; parameters: Record<string, string>; report: TidyReport; }
+
+/**
+ * Tidy a script's METADATA — name every step, rename variables to clearer
+ * snake_case, and prune unused variables. Page-independent; never changes
+ * selectors, actions, values, or step order. Used as the auto-cleanup pass
+ * after a Test & Improve walk.
+ */
+export async function tidyScript(
+  orgId: string,
+  body: { steps: RecordedStep[]; parameters?: Record<string, string>; instruction?: string; scopeIndices?: number[] },
+): Promise<TidyResult> {
+  const res = await agentClient.post<TidyResult>(`/api/admin/${orgId}/scripts/tidy`, body);
+  return res.data;
+}
+
+// ─── AI Step Assist ────────────────────────────────────────────
+
+export interface AssistResult {
+  ok: boolean;
+  step?: RecordedStep;
+  explanation?: string;
+  confidence?: 'high' | 'medium' | 'low';
+  error?: string;
+}
+
+export async function assistStep(
+  orgId: string,
+  runId: string,
+  body: { instruction: string; step_index?: number },
+): Promise<AssistResult> {
+  const res = await agentClient.post<AssistResult>(`/api/admin/${orgId}/step-runs/${runId}/assist`, body);
+  return res.data;
+}
+
 // ─── Browser Sessions ──────────────────────────────────────────
 
 export async function createBrowserSession(
@@ -297,10 +372,34 @@ export interface StepRun {
   lastScreenshot: string | null;
   /** Current page URL — used by "Extract from URL" to auto-detect query/path params. */
   pageUrl?: string | null;
-  status: 'waiting' | 'running' | 'done' | 'error' | 'provisioning';
+  status: 'waiting' | 'running' | 'done' | 'error' | 'provisioning' | 'awaiting_approval';
+  /** True when replay hit a `requires_approval` gate it can't run yet. */
+  awaiting_approval?: boolean;
   /** Live steps captured during active recording (polled in real-time). */
   recordedSteps?: RecordedStep[];
   recordingActive?: boolean;
+}
+
+/**
+ * Shared result shape for the two replay calls (execute one step /
+ * run-remaining). Carries the approval-gate contract: when replay reaches a
+ * `requires_approval` step it can't run yet, the backend returns
+ * `awaiting_approval: true` with `currentIndex` pointing at the gated step.
+ */
+export interface StepRunStepResult {
+  done: boolean;
+  currentIndex: number;
+  totalSteps: number;
+  step: RecordedStep | null;
+  screenshot: string;
+  extracted: Record<string, string>;
+  executedStep?: RecordedStep;
+  pageUrl?: string | null;
+  interrupted?: boolean;
+  /** Set when replay paused at a gated step awaiting Approve / Deny. */
+  awaiting_approval?: boolean;
+  /** Present alongside awaiting_approval — the gated step's index. */
+  status?: 'awaiting_approval';
 }
 
 /** Returned (HTTP 202) when a browser VM needs to be provisioned first. */
@@ -353,10 +452,76 @@ export async function runRemainingStepsAgentMode(
   runId: string,
   params?: Record<string, string>,
   signal?: AbortSignal,
-): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep; pageUrl?: string | null; interrupted?: boolean }> {
+  approvedGates?: number[],
+): Promise<StepRunStepResult> {
+  const body: Record<string, unknown> = {};
+  if (params) body.params = params;
+  if (approvedGates && approvedGates.length > 0) body.approved_gates = approvedGates;
   const res = await agentClient.post(
     `/api/admin/${orgId}/step-runs/${runId}/run-remaining`,
-    params ? { params } : undefined,
+    Object.keys(body).length > 0 ? body : undefined,
+    { signal, timeout: 15 * 60 * 1000 },
+  );
+  return res.data;
+}
+
+/** One entry of the live "Test & Improve" walk's per-step report. */
+export interface ImproveReport {
+  index: number;
+  name?: string | null;
+  change: string;
+  confidence: 'high' | 'medium' | 'low';
+}
+
+/**
+ * Result of an improve-walk pass. Extends the step-run contract (so the same
+ * progress / awaiting_approval / interrupted handling applies) and adds:
+ *  - ok/missingParams: set only when a fresh walk fails its variable pre-flight
+ *  - improve_reports: what the AI changed at each targeted step
+ *  - steps: the (possibly rewritten) step list to sync into the editor
+ */
+export interface ImproveWalkResult extends StepRunStepResult {
+  ok?: boolean;
+  error?: string;
+  missingParams?: string[];
+  improve_reports?: ImproveReport[];
+  steps?: RecordedStep[];
+}
+
+/**
+ * Live "Test & Improve" walk: replays the script in the run's existing browser,
+ * executing each step (so it doubles as a test), pausing on approval gates, and
+ * rewriting the targeted steps' selectors against the live page. Mirrors
+ * runRemainingStepsAgentMode's transport (15-min budget, abortable). Pass
+ * reset=true to start a fresh walk from the top (runs the missing-variable
+ * pre-flight); on an approval pause, call again with reset=false and the gate
+ * index added to approvedGates to resume.
+ */
+export async function improveWalk(
+  orgId: string,
+  runId: string,
+  opts: {
+    params?: Record<string, string>;
+    approvedGates?: number[];
+    targetIndices?: number[];
+    instruction?: string;
+    reset?: boolean;
+    targetedOnly?: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<ImproveWalkResult> {
+  // NOTE: the improve-walk admin route reads camelCase body fields (unlike the
+  // older run-remaining route which used approved_gates).
+  const body: Record<string, unknown> = {};
+  if (opts.params) body.params = opts.params;
+  if (opts.approvedGates && opts.approvedGates.length > 0) body.approvedGates = opts.approvedGates;
+  if (opts.targetIndices && opts.targetIndices.length > 0) body.targetIndices = opts.targetIndices;
+  if (opts.instruction && opts.instruction.trim()) body.instruction = opts.instruction.trim();
+  if (opts.reset) body.reset = true;
+  if (opts.targetedOnly) body.targetedOnly = true;
+  const res = await agentClient.post(
+    `/api/admin/${orgId}/step-runs/${runId}/improve-walk`,
+    body,
     { signal, timeout: 15 * 60 * 1000 },
   );
   return res.data;
@@ -367,8 +532,16 @@ export async function executeStepRunStep(
   runId: string,
   params?: Record<string, string>,
   signal?: AbortSignal,
-): Promise<{ done: boolean; currentIndex: number; totalSteps: number; step: RecordedStep | null; screenshot: string; extracted: Record<string, string>; executedStep?: RecordedStep; pageUrl?: string | null; interrupted?: boolean }> {
-  const res = await agentClient.post(`/api/admin/${orgId}/step-runs/${runId}/execute`, params ? { params } : undefined, { signal });
+  approvedGates?: number[],
+): Promise<StepRunStepResult> {
+  const body: Record<string, unknown> = {};
+  if (params) body.params = params;
+  if (approvedGates && approvedGates.length > 0) body.approved_gates = approvedGates;
+  const res = await agentClient.post(
+    `/api/admin/${orgId}/step-runs/${runId}/execute`,
+    Object.keys(body).length > 0 ? body : undefined,
+    { signal },
+  );
   return res.data;
 }
 

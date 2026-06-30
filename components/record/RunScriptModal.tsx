@@ -15,9 +15,9 @@ import {
 } from '@/components/ui/dialog';
 import {
   CheckCircle2, ChevronRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
-  CircleDot, X, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
+  CircleDot, X, XCircle, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
   Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
-  Scissors,
+  Scissors, Sparkles, ShieldAlert, Wand2,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -49,18 +49,23 @@ import {
   runLinkedLoginInStepRun,
   getScriptAgentUsage,
   propagateScriptLogin,
+  refineScript,
+  improveWalk,
+  tidyScript,
   type BrowserScript,
   type RecordedStep,
+  type RefineReport,
 } from '@/lib/api/scripts';
+import { Badge } from '@/components/ui/badge';
+import { Input } from '@/components/ui/input';
+import { RowActionsMenu } from '@/components/ui/row-actions-menu';
 import { listLogins, type Login } from '@/lib/api/logins';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
-import { BottomPanel } from './panels';
+import { VariablesPanel } from './panels/VariablesPanel';
 import { StepEditModal } from './StepEditModal';
 import { ProvisioningNotice } from '@/components/hitl/ProvisioningNotice';
 import { AGENT_BACKEND_URL as agentApiUrl } from '@/lib/config';
-import { useTags } from '@/lib/hooks/use-tags';
-import { TagPicker } from '@/components/tags/tag-picker';
 
 interface RunScriptModalProps {
   script: BrowserScript | null;
@@ -86,6 +91,35 @@ interface RunScriptModalProps {
  * showing both ("Open contract form" with "Click: button.submit" as a
  * tooltip / subtitle).
  */
+/**
+ * Parse step numbers out of a free-text Improve instruction so "just step 7",
+ * "fix steps 2 and 3", or "step 2-4" target only those steps. Only treats the
+ * text as targeting when it mentions "step"/"steps"; pulls numbers + ranges
+ * from the cluster right after that word (so "set quantity to 5" isn't grabbed).
+ * Returns 0-based indices, clamped to [0, count). `raw` is whether a step was
+ * mentioned at all (to distinguish "no targeting" from "out-of-range step").
+ */
+function parseStepTargets(text: string, count: number): { indices: number[]; mentioned: boolean } {
+  if (!text || !/\bsteps?\b/i.test(text)) return { indices: [], mentioned: false };
+  const nums = new Set<number>();
+  const clusterRe = /\bsteps?\b\s*#?\s*(\d[\d\s,&#–-]*(?:(?:and|to|through)\s*#?\s*\d[\d\s,&#–-]*)*)/gi;
+  let c: RegExpExecArray | null;
+  while ((c = clusterRe.exec(text)) !== null) {
+    const cluster = c[1];
+    const rangeRe = /(\d+)\s*(?:-|–|to|through)\s*(\d+)/gi;
+    let r: RegExpExecArray | null;
+    while ((r = rangeRe.exec(cluster)) !== null) {
+      const a = +r[1], b = +r[2];
+      for (let k = Math.min(a, b); k <= Math.max(a, b); k++) nums.add(k);
+    }
+    const numRe = /\d+/g;
+    let n: RegExpExecArray | null;
+    while ((n = numRe.exec(cluster)) !== null) nums.add(+n[0]);
+  }
+  const indices = [...nums].map((n) => n - 1).filter((i) => i >= 0 && i < count).sort((a, b) => a - b);
+  return { indices, mentioned: true };
+}
+
 function autoStepLabel(step: RecordedStep): string {
   switch (step.action) {
     case 'navigate':   return `Navigate → ${step.url ?? ''}`;
@@ -108,6 +142,24 @@ function autoStepLabel(step: RecordedStep): string {
 function stepLabel(step: RecordedStep): string {
   const custom = step.name?.trim();
   return custom && custom.length > 0 ? custom : autoStepLabel(step);
+}
+
+/** Small colored dot reflecting an AI refine reliability tier. */
+function ReliabilityBadge({ tier, risks }: { tier: 'reliable' | 'review' | 'fragile'; risks: string[] }) {
+  const cls =
+    tier === 'reliable' ? 'bg-green-500' :
+    tier === 'fragile'  ? 'bg-red-500'   :
+                          'bg-amber-500';
+  const title = risks.length > 0
+    ? `${tier} — ${risks.join('; ')}`
+    : `${tier}`;
+  return (
+    <span
+      className={cn('h-2 w-2 rounded-full shrink-0', cls)}
+      title={title}
+      aria-label={`Reliability: ${title}`}
+    />
+  );
 }
 
 export function RunScriptModal({
@@ -140,21 +192,6 @@ export function RunScriptModal({
   const [scriptName, setScriptName] = useState('');
   const [scriptDescription, setScriptDescription] = useState('');
   const [showDescription, setShowDescription] = useState(false);
-
-  // ── Tags ──────────────────────────────────────────────────────
-  // Mirrors the linked-login pattern: held in state, persisted immediately
-  // when the script already has an id, otherwise carried into createScript
-  // on first save.
-  const { tags: allTags, createTag } = useTags(orgId);
-  const [scriptTagIds, setScriptTagIds] = useState<string[]>([]);
-  const persistTags = async (ids: string[]) => {
-    setScriptTagIds(ids);
-    const targetId = script?.id ?? tempScriptId;
-    if (orgId && targetId) {
-      try { await updateScript(orgId, targetId, { tag_ids: ids }); onSaved?.(); }
-      catch { toast.error('Failed to update tags'); }
-    }
-  };
 
   // ── Linked login (the script's auth dependency) ───────────────
   // `linkedLoginId` mirrors agent_browser_scripts.login_id. Saved on
@@ -259,6 +296,82 @@ export function RunScriptModal({
   // ── Steps panel collapse ──────────────────────────────────────
   const [stepsCollapsed, setStepsCollapsed] = useState(false);
 
+  // ── Bottom tabbed panel (right rail) ──────────────────────────
+  // One fixed-height panel below the steps list hosting Variables,
+  // Ask AI, and (while a run/AI action is active) Activity. Auto-
+  // focuses Activity when work starts; Activity tab is hidden at rest.
+  const [bottomTab, setBottomTab] = useState<'variables' | 'ai' | 'activity'>('variables');
+
+  // ── Ask AI panel ──────────────────────────────────────────────
+  // Always rendered (no mode switch). One shared instruction for the
+  // unified "Ask AI" panel — read by handleImprove (the live Test &
+  // Improve walk). Step rows carry an always-on selection checkbox for a
+  // targeted improve.
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [refining, setRefining] = useState(false);
+  const [refineSummary, setRefineSummary] = useState<string | null>(null);
+  const [refineOverall, setRefineOverall] = useState<RefineReport['overall'] | null>(null);
+  // True for the lifetime of a Test & Improve walk (including while paused at an
+  // approval gate), so the approve path knows to RESUME the walk rather than a
+  // plain run, and editing stays locked until it finishes/stops.
+  const [aiWalking, setAiWalking] = useState(false);
+  // Targets frozen at the start of a walk (so resuming after a gate reuses the
+  // same selection) + count of improve_reports already logged to Activity (the
+  // worker returns the full accumulated list each call; only log the new tail).
+  const improveTargetsRef = useRef<number[]>([]);
+  const improveTargetedOnlyRef = useRef(false);
+  const loggedReportsRef = useRef(0);
+  // Indices selected for a targeted refine. Empty → whole-script refine.
+  const [selectedStepIndices, setSelectedStepIndices] = useState<Set<number>>(new Set());
+  // Step indices to highlight while hovering/editing a variable in the
+  // Variables panel (reverse of the step→variable hover highlight).
+  const [highlightVarSteps, setHighlightVarSteps] = useState<Set<number> | null>(null);
+
+  // ── Activity feed ─────────────────────────────────────────────
+  // A lightweight, client-side log of what's happening (replay progress,
+  // extracted values, gates, AI actions). Driven entirely from data we
+  // already have — no backend changes. Newest at the bottom; capped so a
+  // long session doesn't grow unbounded.
+  type ActivityKind = 'step' | 'done' | 'error' | 'gate' | 'ai';
+  type ActivityEntry = { id: string; ts: number; kind: ActivityKind; text: string };
+  const [activity, setActivity] = useState<ActivityEntry[]>([]);
+  const activityScrollRef = useRef<HTMLDivElement>(null);
+  const pushActivity = useCallback((kind: ActivityKind, text: string) => {
+    setActivity((prev) => {
+      const next = [
+        ...prev,
+        { id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`, ts: Date.now(), kind, text },
+      ];
+      // Cap at ~200 entries; keep the newest.
+      return next.length > 200 ? next.slice(next.length - 200) : next;
+    });
+  }, []);
+  // Replay-progress tracking. lastLoggedIndexRef = highest step index we've
+  // already logged a "done" for; lastExtractedRef = the extracted keys we've
+  // already surfaced; runningLoggedRef = the index we last logged a "▶" for.
+  // All reset whenever a fresh run/replay starts.
+  const lastLoggedIndexRef = useRef(0);
+  const lastExtractedRef = useRef<Record<string, string>>({});
+  const runningLoggedRef = useRef<number | null>(null);
+  const lastGateLoggedRef = useRef<number | null>(null);
+  // Baseline the replay-progress refs to where the run is starting FROM so
+  // the activity effect only logs steps completed during this run (not the
+  // ones already executed before the operator hit Run / jumped). Called at
+  // the top of a fresh top-level replay.
+  const startReplayActivity = useCallback((fromIndex: number, extracted: Record<string, string>) => {
+    lastLoggedIndexRef.current = fromIndex;
+    lastExtractedRef.current = { ...extracted };
+    runningLoggedRef.current = null;
+  }, []);
+
+  // ── Approval gates (test replay) ──────────────────────────────
+  // Indices the operator has approved this run. Sent as approved_gates so
+  // the worker can run past a gated step. Reset whenever a fresh run starts.
+  const [approvedGates, setApprovedGates] = useState<Set<number>>(new Set());
+  // When replay pauses at a requires_approval step, this holds the gated
+  // step's index so we can render an inline Approve / Deny prompt.
+  const [pendingGateIndex, setPendingGateIndex] = useState<number | null>(null);
+
   // ── Step edit modal ───────────────────────────────────────────
   // Set to the index of the step the operator clicked the pencil on.
   // Modal lets them rename, tweak the selector, and edit raw JSON in
@@ -322,6 +435,19 @@ export function RunScriptModal({
     setCheckingOrphan(false);
     setResumingOrphan(false);
     setEditingStepIndex(null);
+    setAiPrompt('');
+    setRefining(false);
+    setRefineSummary(null);
+    setRefineOverall(null);
+    setSelectedStepIndices(new Set());
+    setApprovedGates(new Set());
+    setPendingGateIndex(null);
+    setActivity([]);
+    setBottomTab('variables');
+    lastLoggedIndexRef.current = 0;
+    lastExtractedRef.current = {};
+    runningLoggedRef.current = null;
+    lastGateLoggedRef.current = null;
   };
 
   // ── Auto-start when overlay opens (with orphan check) ────────
@@ -331,9 +457,13 @@ export function RunScriptModal({
     // Test for an existing script.
     setToolMode(mode === 'record' ? 'record' : 'test');
 
-    // Check for an orphaned session before starting a new one
+    // Check for an orphaned session before starting a new one. Only offer to
+    // resume it when it belongs to the SAME script (and org) you're opening —
+    // otherwise "Resume" would reconnect you to a different script's session.
+    // A record-mode open (script == null) matches a record orphan (scriptId
+    // null); a saved-script open matches only that script's id.
     const existing = getActiveBrowserSession();
-    if (existing && existing.orgId === orgId) {
+    if (existing && existing.orgId === orgId && existing.scriptId === (script?.id ?? null)) {
       setCheckingOrphan(true);
       getStepRun(orgId, existing.runId)
         .then((run) => {
@@ -357,7 +487,6 @@ export function RunScriptModal({
       } else {
         setScriptName(script?.name ?? '');
         setScriptDescription(script?.description ?? '');
-        setScriptTagIds((script?.tags ?? []).map((t) => t.id));
         setLinkedLoginId(script?.login_id ?? null);
         // Variables start BLANK every session — the operator must enter
         // current values for the specific run they're doing. Persisting
@@ -716,7 +845,7 @@ export function RunScriptModal({
       if (targetScriptId) {
         await updateScript(orgId, targetScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {}, login_id: loginId });
       } else {
-        const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: loginId, tag_ids: scriptTagIds });
+        const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: loginId });
         targetScriptId = created.id;
         setTempScriptId(created.id);
       }
@@ -938,14 +1067,28 @@ export function RunScriptModal({
   // backend session stays alive for the next click.
   const autoRunAbortRef = useRef<AbortController | null>(null);
 
-  const handleExecuteStep = async () => {
+  const handleExecuteStep = async (gates?: Set<number>) => {
     if (!runId || !orgId || !stepRunState) return;
+    // Fresh top-level click clears prior approvals; re-invoke after an
+    // Approve passes the updated set forward (gates !== undefined).
+    const activeGates = gates ?? new Set<number>();
+    if (gates === undefined) {
+      setApprovedGates(activeGates);
+      setPendingGateIndex(null);
+      // Fresh top-level run — baseline activity from the current cursor.
+      startReplayActivity(stepRunState.currentIndex, stepRunState.extracted ?? {});
+    }
     const controller = new AbortController();
     autoRunAbortRef.current = controller;
+    // Single manual step is a quick action — don't yank the bottom panel
+    // off Variables. The Activity tab still surfaces while the step runs
+    // (showActivityTab follows status === 'running'); the operator can
+    // click into it if they want. Auto/agent runs and Improve still
+    // auto-focus Activity because they stream substantial output.
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
     try {
-      const res = await executeStepRunStep(orgId, runId, params, controller.signal);
+      const res = await executeStepRunStep(orgId, runId, params, controller.signal, [...activeGates]);
       // Worker returned 200 with interrupted=true — operator's Stop
       // signaled the worker BEFORE the HTTP abort raced it. The worker
       // has already flipped status back to 'waiting' and didn't
@@ -953,6 +1096,19 @@ export function RunScriptModal({
       if (res.interrupted) {
         setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
         toast.info('Step stopped');
+        return;
+      }
+      // Replay paused at a gated (requires_approval) step — surface the
+      // inline Approve / Deny prompt for that index instead of advancing.
+      if (res.awaiting_approval) {
+        setStepRunState((s) => s ? {
+          ...s,
+          currentIndex: res.currentIndex,
+          step: res.step ?? s.step,
+          status: 'waiting',
+          pageUrl: res.pageUrl ?? s.pageUrl ?? null,
+        } : s);
+        setPendingGateIndex(res.currentIndex);
         return;
       }
       setStepRunState((s) => {
@@ -994,6 +1150,7 @@ export function RunScriptModal({
       const msg = err?.response?.data?.error || err?.message || 'Step failed';
       setStepRunState((s) => s ? { ...s, status: 'error', screenshot: screenshot ?? s.screenshot } : s);
       setError(msg);
+      pushActivity('error', `✗ ${msg}`);
     } finally {
       autoRunAbortRef.current = null;
     }
@@ -1015,11 +1172,21 @@ export function RunScriptModal({
    * prior click, where Auto Test's ~150ms inter-step gap is enough for
    * the page to settle but the agent runtime outruns the settle.
    */
-  const handleRunAgentMode = async () => {
+  const handleRunAgentMode = async (gates?: Set<number>) => {
     if (!runId || !orgId || !stepRunState || stepRunState.done) return;
+    // Fresh top-level click clears prior approvals; re-invoke after an
+    // Approve passes the updated set forward (gates !== undefined).
+    const activeGates = gates ?? new Set<number>();
+    if (gates === undefined) {
+      setApprovedGates(activeGates);
+      setPendingGateIndex(null);
+      // Fresh top-level run — baseline activity from the current cursor.
+      startReplayActivity(stepRunState.currentIndex, stepRunState.extracted ?? {});
+    }
     cancelAutoRunRef.current = false;
     const controller = new AbortController();
     autoRunAbortRef.current = controller;
+    setBottomTab('activity');
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
 
@@ -1048,7 +1215,22 @@ export function RunScriptModal({
     }, 500);
 
     try {
-      const res = await runRemainingStepsAgentMode(orgId, runId, params, controller.signal);
+      const res = await runRemainingStepsAgentMode(orgId, runId, params, controller.signal, [...activeGates]);
+      // Replay paused at a gated (requires_approval) step — surface the
+      // inline Approve / Deny prompt for that index instead of finishing.
+      if (res.awaiting_approval) {
+        window.clearInterval(pollId);
+        setStepRunState((s) => s ? {
+          ...s,
+          currentIndex: res.currentIndex,
+          step: res.step ?? s.step,
+          status: 'waiting',
+          pageUrl: res.pageUrl ?? s.pageUrl ?? null,
+        } : s);
+        setPendingGateIndex(res.currentIndex);
+        autoRunAbortRef.current = null;
+        return;
+      }
       // Final state — the snapshot poll's steps[] mid-run is best-effort;
       // this is the authoritative final result with auto-locked selectors
       // already merged into the run's stepRuns state on the worker side.
@@ -1068,6 +1250,7 @@ export function RunScriptModal({
       }
       if (res.done) toast.success('All steps completed (agent timing)!');
       else if (res.interrupted) toast.info('Agent run stopped');
+      else pushActivity('error', `✗ Run stopped at step ${res.currentIndex + 1}`);
     } catch (err: any) {
       if (err?.name === 'AbortError' || err?.name === 'CanceledError' || cancelAutoRunRef.current) {
         setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
@@ -1078,6 +1261,7 @@ export function RunScriptModal({
       const msg = err?.response?.data?.error || err?.message || 'Run failed';
       setStepRunState((s) => s ? { ...s, status: 'error', screenshot: screenshot ?? s.screenshot } : s);
       setError(msg);
+      pushActivity('error', `✗ ${msg}`);
     } finally {
       window.clearInterval(pollId);
       autoRunAbortRef.current = null;
@@ -1116,10 +1300,262 @@ export function RunScriptModal({
     }
   };
 
+  // ── AI Test & Improve (live walk) ─────────────────────────────
+  // Replays the script in the run's EXISTING browser, executing each step so
+  // the walk doubles as a test: it uses the current Variables (failing loudly
+  // if any referenced one is empty), pauses on submit/destructive approval
+  // gates, and at each TARGET step rewrites the selector/name against the LIVE
+  // page before running it. Targets = the selected rows, or the whole script
+  // when none are selected. Mirrors the agent-mode run loop (poll + abortable
+  // + awaiting_approval) so progress shows live in-window and Stop cancels.
+  //
+  // `opts.gates` is passed ONLY when resuming after an approval gate — that
+  // call keeps the same targets, keeps the cursor, and adds the approved index.
+  const handleImprove = async (opts?: { gates?: Set<number> }) => {
+    if (!orgId || !runId) return;
+    if (refining && !opts?.gates) return; // re-entrancy guard (gate resume is allowed)
+    const steps = stepRunState?.steps ?? [];
+    if (steps.length === 0) {
+      toast.error('No steps to improve yet');
+      return;
+    }
+
+    const resuming = !!opts?.gates;
+    const activeGates = opts?.gates ?? new Set<number>();
+
+    // Fresh run: if the instruction names specific steps ("just step 7"), run
+    // and improve ONLY those (targetedOnly) — jumping straight to them, leaving
+    // the rest of the script un-run. Otherwise walk the whole script.
+    let targetIndices: number[];
+    let targetedOnly: boolean;
+    if (resuming) {
+      targetIndices = improveTargetsRef.current;
+      targetedOnly = improveTargetedOnlyRef.current;
+    } else {
+      const parsed = parseStepTargets(aiPrompt, steps.length);
+      if (parsed.mentioned && parsed.indices.length === 0) {
+        toast.error(`No matching step — this script has ${steps.length} step${steps.length === 1 ? '' : 's'}.`);
+        return;
+      }
+      targetedOnly = parsed.indices.length > 0;
+      targetIndices = parsed.indices;
+    }
+
+    const firstTarget = targetIndices.length ? targetIndices[0] : 0;
+
+    if (!resuming) {
+      improveTargetsRef.current = targetIndices;
+      improveTargetedOnlyRef.current = targetedOnly;
+      loggedReportsRef.current = 0;
+      setApprovedGates(new Set());
+      setPendingGateIndex(null);
+      startReplayActivity(firstTarget, {});
+      // Echo the operator's typed instruction so the Activity log records what
+      // was asked for this run.
+      if (aiPrompt.trim()) pushActivity('ai', `💬 You asked: “${aiPrompt.trim()}”`);
+      pushActivity(
+        'ai',
+        targetedOnly
+          ? `Testing & improving step${targetIndices.length === 1 ? '' : 's'} ${targetIndices.map((i) => i + 1).join(', ')} only — running just ${targetIndices.length === 1 ? 'it' : 'them'} on the current page…`
+          : 'Testing & improving the whole script — walking through live…',
+      );
+    }
+
+    setRefining(true);
+    setAiWalking(true);
+    setBottomTab('activity');
+    setError(null);
+    cancelAutoRunRef.current = false;
+    const controller = new AbortController();
+    autoRunAbortRef.current = controller;
+    setStepRunState((s) => s ? { ...s, status: 'running', ...(resuming ? {} : { currentIndex: firstTarget }) } : s);
+
+    // Poll /state every 500ms so the step list + screenshot advance live while
+    // the long-running walk request is in flight (same as agent-mode run).
+    const pollId = window.setInterval(async () => {
+      try {
+        const snap = await getStepRun(orgId, runId);
+        setStepRunState((s) => s ? {
+          ...s,
+          currentIndex: snap.currentIndex,
+          totalSteps:   snap.totalSteps,
+          step:         snap.step,
+          screenshot:   snap.lastScreenshot ?? s.screenshot,
+          extracted:    snap.extracted ?? s.extracted,
+          pageUrl:      snap.pageUrl ?? s.pageUrl ?? null,
+        } : s);
+      } catch { /* best-effort — final return is authoritative */ }
+    }, 500);
+
+    try {
+      const res = await improveWalk(
+        orgId,
+        runId,
+        {
+          params,
+          approvedGates: resuming ? [...activeGates] : [],
+          targetIndices,
+          targetedOnly,
+          instruction: aiPrompt.trim() || undefined,
+          reset: !resuming,
+        },
+        controller.signal,
+      );
+
+      // Pre-flight failure: a referenced variable had no value. Nothing ran.
+      if (res.ok === false) {
+        window.clearInterval(pollId);
+        setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
+        const msg = res.error || 'Missing variable values';
+        setError(msg);
+        pushActivity('error', `✗ ${msg}`);
+        toast.error(msg);
+        setAiWalking(false);
+        autoRunAbortRef.current = null;
+        return;
+      }
+
+      // Adopt the (possibly rewritten) steps so the editor reflects live fixes.
+      if (Array.isArray(res.steps)) {
+        const improved = res.steps as RecordedStep[];
+        setStepRunState((s) => s ? { ...s, steps: improved } : s);
+        setHasChanges(true);
+      }
+      // Log only the newly-appended improve reports (worker returns the full
+      // accumulated list each call, including across gate resumes).
+      const reports = res.improve_reports ?? [];
+      for (let k = loggedReportsRef.current; k < reports.length; k++) {
+        const r = reports[k];
+        pushActivity('ai', `↻ Step ${r.index + 1}${r.name ? ` “${r.name}”` : ''}: ${r.change}${r.confidence ? ` (${r.confidence})` : ''}`);
+      }
+      loggedReportsRef.current = reports.length;
+
+      // Paused at an approval gate — surface inline Approve / Deny. The walk
+      // stays "active" (aiWalking) so Approve resumes it from here.
+      if (res.awaiting_approval) {
+        window.clearInterval(pollId);
+        setStepRunState((s) => s ? {
+          ...s,
+          currentIndex: res.currentIndex,
+          step: res.step ?? s.step,
+          status: 'waiting',
+          pageUrl: res.pageUrl ?? s.pageUrl ?? null,
+        } : s);
+        setPendingGateIndex(res.currentIndex);
+        autoRunAbortRef.current = null;
+        return;
+      }
+
+      // Terminal: complete, interrupted, or failed mid-step.
+      setStepRunState((s) => s ? {
+        currentIndex: res.currentIndex,
+        totalSteps:   res.totalSteps,
+        step:         res.step,
+        steps:        (res.steps as RecordedStep[]) ?? s.steps,
+        screenshot:   res.screenshot,
+        extracted:    res.extracted,
+        done:         res.done,
+        status:       res.done ? 'waiting' : (res.interrupted ? 'waiting' : 'error'),
+        pageUrl:      res.pageUrl ?? s.pageUrl ?? null,
+      } : s);
+      if (res.extracted && Object.keys(res.extracted).length > 0) {
+        setParams((p) => ({ ...p, ...res.extracted }));
+      }
+      if (res.done) {
+        setSelectedStepIndices(new Set());
+        pushActivity('done', targetedOnly
+          ? `✓ Improved step${targetIndices.length === 1 ? '' : 's'} ${targetIndices.map((i) => i + 1).join(', ')}.`
+          : '✓ Test & Improve complete — steps tested and updated.');
+        // Tidy pass (metadata only, page-independent): name steps, rename
+        // variables, prune unused, and CREATE variables (parameterize literal
+        // values) — honoring the instruction. Never touches the live-hardened
+        // selectors. Scoped to the targeted steps on a targeted run, so a
+        // focused run only names/parameterizes those (no whole-script churn).
+        try {
+          pushActivity('ai', targetedOnly ? 'Tidying the targeted step(s)…' : 'Tidying step names and variables…');
+          const tidy = await tidyScript(orgId, {
+            steps: (res.steps as RecordedStep[]) ?? steps,
+            parameters: params,
+            instruction: aiPrompt.trim() || undefined,
+            ...(targetedOnly ? { scopeIndices: targetIndices } : {}),
+          });
+          setStepRunState((s) => s ? {
+            ...s,
+            steps: tidy.steps,
+            totalSteps: tidy.steps.length,
+            step: tidy.steps[s.currentIndex] ?? s.step,
+          } : s);
+          setParams(tidy.parameters ?? {});
+          if (runId) await syncStepRunSteps(orgId, runId, tidy.steps).catch(() => {});
+          const r = tidy.report;
+          if (r?.parameterized?.length) pushActivity('ai', `Created variable${r.parameterized.length === 1 ? '' : 's'}: ${r.parameterized.map((p) => `{{${p.var_name}}} (step ${p.index + 1})`).join(', ')}`);
+          if (r?.renamed?.length) pushActivity('ai', `Renamed variable${r.renamed.length === 1 ? '' : 's'}: ${r.renamed.map((x) => `${x.from} → ${x.to}`).join(', ')}`);
+          if (r?.pruned?.length) pushActivity('ai', `Removed unused variable${r.pruned.length === 1 ? '' : 's'}: ${r.pruned.join(', ')}`);
+          pushActivity('done', `✓ Tidied — ${r?.named ?? 0} step name${r?.named === 1 ? '' : 's'} set${r?.parameterized?.length ? `, ${r.parameterized.length} variable${r.parameterized.length === 1 ? '' : 's'} created` : ''}.`);
+        } catch (e: any) {
+          pushActivity('error', `Tidy skipped: ${e?.response?.data?.error || e?.message || 'failed'}`);
+        }
+        setAiWalking(false);
+        toast.success(targetedOnly ? 'Steps improved' : 'Test & Improve complete');
+      } else if (res.interrupted) {
+        setAiWalking(false);
+        pushActivity('error', '■ Stopped.');
+        toast.info('Stopped');
+      } else {
+        setAiWalking(false);
+        pushActivity('error', `✗ Stopped at step ${res.currentIndex + 1} — fix it and run again.`);
+      }
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || err?.name === 'CanceledError' || cancelAutoRunRef.current) {
+        setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
+        setAiWalking(false);
+        pushActivity('error', '■ Stopped.');
+        toast.info('Stopped');
+        return;
+      }
+      const screenshot = err?.response?.data?.screenshot ?? null;
+      const msg = err?.response?.data?.error || err?.message || 'Improve failed';
+      setStepRunState((s) => s ? { ...s, status: 'error', screenshot: screenshot ?? s.screenshot } : s);
+      setError(msg);
+      pushActivity('error', `✗ ${msg}`);
+      setAiWalking(false);
+    } finally {
+      window.clearInterval(pollId);
+      autoRunAbortRef.current = null;
+      setRefining(false);
+    }
+  };
+
+  // ── Approval gate: Approve / Deny ─────────────────────────────
+  // Approve → add the gated index to approvedGates and re-invoke the same
+  // run path (step or agent) passing the updated set so the worker runs
+  // past it. Deny → abort the in-flight replay via the existing Stop path.
+  const handleApproveGate = async () => {
+    if (pendingGateIndex === null) return;
+    const next = new Set(approvedGates);
+    next.add(pendingGateIndex);
+    setApprovedGates(next);
+    setPendingGateIndex(null);
+    // Resume whichever flow paused us: a live Improve walk, an agent run, or a
+    // single-step run.
+    if (aiWalking) await handleImprove({ gates: next });
+    else if (runMode === 'agent') await handleRunAgentMode(next);
+    else await handleExecuteStep(next);
+  };
+
+  const handleDenyGate = () => {
+    setPendingGateIndex(null);
+    setAiWalking(false);
+    handleStopAutoRun();
+    setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
+    toast.info('Replay stopped at approval gate');
+  };
+
   const handleJumpToStep = async (targetIndex: number) => {
     if (!runId || !orgId || !stepRunState || jumpingTo !== null) return;
     setJumpingTo(targetIndex);
     setError(null);
+    setPendingGateIndex(null);
     try {
       const res = await jumpStepRunToIndex(orgId, runId, targetIndex);
       setStepRunState((s) => s ? {
@@ -1134,6 +1570,13 @@ export function RunScriptModal({
       } : s);
       setEditedStep(res.step ? JSON.stringify(res.step, null, 2) : '');
       setStepEditError('');
+      // Jumping is navigation, NOT a run — fast-forward the activity refs to
+      // the new cursor so the replay-progress effect doesn't emit ✓ entries
+      // for the steps we skipped past. A subsequent real run still logs from
+      // here (startReplayActivity re-baselines on Run).
+      lastLoggedIndexRef.current = res.currentIndex;
+      lastExtractedRef.current = { ...(res.extracted ?? {}) };
+      runningLoggedRef.current = null;
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to jump to step');
     } finally {
@@ -2119,10 +2562,86 @@ export function RunScriptModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultsFingerprint]);
 
+  // ── Derive Activity entries from replay progress ──────────────
+  // Compares the latest stepRunState against the refs to emit one entry
+  // per newly-completed step (with any new extracted keys), a "▶" entry
+  // when a step starts running, and an error entry on failure. Recording
+  // never produces replay activity. Refs are reset by startReplayActivity()
+  // at the top of each run/replay so a re-run logs from the top again.
+  useEffect(() => {
+    if (!stepRunState || isRecording) return;
+    const steps = stepRunState.steps ?? [];
+    const labelFor = (idx: number) => {
+      const s = steps[idx];
+      return s ? stepLabel(s) : `Step ${idx + 1}`;
+    };
+
+    // Newly-completed steps: log a ✓ for every index between the last
+    // logged one and the current cursor.
+    if (stepRunState.currentIndex > lastLoggedIndexRef.current) {
+      for (let idx = lastLoggedIndexRef.current; idx < stepRunState.currentIndex; idx++) {
+        pushActivity('done', `✓ Step ${idx + 1}: ${labelFor(idx)}`);
+      }
+      lastLoggedIndexRef.current = stepRunState.currentIndex;
+      // Surface any extracted keys that appeared since we last looked.
+      const extracted = stepRunState.extracted ?? {};
+      for (const [k, v] of Object.entries(extracted)) {
+        if (lastExtractedRef.current[k] !== v) {
+          pushActivity('done', `→ ${k} = ${v}`);
+        }
+      }
+      lastExtractedRef.current = { ...extracted };
+    }
+
+    // Step currently running — log "▶" once per index.
+    if (
+      stepRunState.status === 'running' &&
+      !stepRunState.done &&
+      runningLoggedRef.current !== stepRunState.currentIndex
+    ) {
+      runningLoggedRef.current = stepRunState.currentIndex;
+      pushActivity('step', `▶ Step ${stepRunState.currentIndex + 1}: ${labelFor(stepRunState.currentIndex)}`);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stepRunState?.currentIndex, stepRunState?.status, stepRunState?.done, stepRunState?.extracted, isRecording]);
+
+  // ── Gate-pause activity ────────────────────────────────────────
+  useEffect(() => {
+    if (pendingGateIndex === null) { lastGateLoggedRef.current = null; return; }
+    if (lastGateLoggedRef.current === pendingGateIndex) return;
+    lastGateLoggedRef.current = pendingGateIndex;
+    const s = stepRunState?.steps?.[pendingGateIndex];
+    pushActivity('gate', `⏸ Awaiting approval: ${s ? stepLabel(s) : `Step ${pendingGateIndex + 1}`}`);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingGateIndex]);
+
+  // ── Auto-scroll the Activity feed to the newest entry ──────────
+  useEffect(() => {
+    const el = activityScrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [activity]);
+
   if (!open) return null;
   if (typeof document === 'undefined') return null;
 
   const isExecuting = stepRunState?.status === 'running' || starting;
+  // ── Bottom-tab derivations ────────────────────────────────────
+  // aiBusy: an Improve (refine) call is in flight. replayRunning: the
+  // step-run worker is actively executing (single-step or agent run).
+  // The Activity tab only appears in the strip while one of these is
+  // true; if the user is parked on Activity when it disappears we fall
+  // back to Variables for rendering so a hidden tab never shows blank.
+  const aiBusy = refining;
+  const replayRunning = stepRunState?.status === 'running';
+  // The Activity tab is present while work is live AND once there's a log to
+  // review — so a quick single step (which we no longer auto-focus) still
+  // leaves the tab reachable instead of flashing and vanishing. It's cleared
+  // on session reset, so a fresh session shows no Activity tab.
+  const showActivityTab = aiBusy || replayRunning || activity.length > 0;
+  // Fall back to Variables when parked on a now-hidden Activity tab so a
+  // hidden tab never renders blank content.
+  const effectiveBottomTab =
+    bottomTab === 'activity' && !showActivityTab ? 'variables' : bottomTab;
   const isRecordMode = mode === 'record';
   // No separate params form — variables are always edited inline in the Variables Panel
   const hasSteps = (stepRunState?.totalSteps ?? 0) > 0 || (stepRunState?.steps?.length ?? 0) > 0;
@@ -2220,12 +2739,6 @@ export function RunScriptModal({
                 {scriptDescription || '+ Add description'}
               </button>
             )}
-          </div>
-
-          {/* Tags — persisted immediately for saved scripts, carried into
-              createScript on first save for brand-new recordings. */}
-          <div className="min-w-0 w-56 shrink-0">
-            <TagPicker tags={allTags} selected={scriptTagIds} onChange={persistTags} onCreate={(name) => createTag({ name })} placeholder="Tags…" />
           </div>
 
           {/* Linked login — chip + Log in button. Available in BOTH record
@@ -2517,15 +3030,17 @@ export function RunScriptModal({
                       Record / Extract fire + cancel from the Action picker. */}
                   {runId && toolMode === 'test' && (
                     isExecuting ? (
-                      <Button variant="destructive" size="sm" className="h-7 w-28 shrink-0 justify-center" onClick={handleStopAutoRun}>
+                      // Bright red Stop — matches the active-mode stop button in
+                      // the toolbar (green start ↔ red stop convention).
+                      <Button size="sm" className="h-7 w-28 shrink-0 justify-center bg-red-600 text-white hover:bg-red-700" onClick={handleStopAutoRun}>
                         <X className="mr-1.5 h-3 w-3" />
                         Stop
                       </Button>
                     ) : (
                       <Button
                         size="sm"
-                        className="h-7 w-28 shrink-0 justify-center"
-                        onClick={runMode === 'agent' ? handleRunAgentMode : handleExecuteStep}
+                        className="h-7 w-28 shrink-0 justify-center bg-green-600 text-white hover:bg-green-700"
+                        onClick={() => runMode === 'agent' ? handleRunAgentMode() : handleExecuteStep()}
                         disabled={isRecording || isCapturingWaitFor || isCapturingExtract || !hasSteps || !!stepRunState?.done}
                         title={stepRunState?.done ? 'Run complete — click any step to re-run from there.' : undefined}
                       >
@@ -2583,24 +3098,48 @@ export function RunScriptModal({
                   // Current/completed highlighting only applies when NOT actively recording
                   const isCurrent   = !isRecording && stepRunState ? (i === stepRunState.currentIndex && !stepRunState.done) : false;
                   const isCompleted = !isRecording && stepRunState ? i < stepRunState.currentIndex : false;
+                  // ── Live per-step replay status ──────────────────────
+                  // Derived purely from stepRunState (currentIndex/status) +
+                  // pendingGateIndex so the rows visibly track a running
+                  // replay. Recording mode never shows replay status.
+                  //   done  → i < currentIndex
+                  //   running → i === currentIndex && status==='running'
+                  //   awaiting → i === pendingGateIndex (or current+awaiting)
+                  //   failed → i === currentIndex && status==='error'
+                  //   pending → otherwise
+                  const rowStatus: 'done' | 'running' | 'awaiting' | 'failed' | 'pending' =
+                    isRecording || !stepRunState ? 'pending' :
+                    pendingGateIndex === i ? 'awaiting' :
+                    i < stepRunState.currentIndex ? 'done' :
+                    (i === stepRunState.currentIndex && !stepRunState.done && stepRunState.status === 'running') ? 'running' :
+                    (i === stepRunState.currentIndex && !stepRunState.done && stepRunState.status === 'error') ? 'failed' :
+                    'pending';
                   // Show recording position + live steps BEFORE the current step (after last executed).
                   // currentIndex > 0: show after the last executed step (i === currentIndex - 1).
                   // currentIndex === 0: handled by the header element above the map.
                   // Show recording insertion indicator AFTER the current step
                   const showLiveInsert = isRecording && !showLiveDirectly && stepRunState &&
                     i === stepRunState.currentIndex;
-                  const isNew       = newStepIndices.has(i);
                   const isJumping   = jumpingTo === i;
                   const isHovered   = hoveredStep === i && !isExecuting && !isRecording;
+                  // Steps impacted by the variable being hovered/edited in the
+                  // Variables panel (reverse of the step→variable hover).
+                  const isVarHighlighted = highlightVarSteps?.has(i) ?? false;
                   return (
                     <div key={i}>
                       <div
                         className={cn(
-                          'py-1.5 flex items-center gap-1.5 group relative',
+                          'min-h-7 py-1 flex items-center gap-1.5 group relative',
                           isRecording ? 'px-3' : 'px-1.5 cursor-pointer',
                           isCurrent  ? 'bg-brand/10 font-medium' : 'text-muted-foreground',
-                          isNew && 'bg-green-500/5',
-                          isHovered && !isCurrent && 'bg-muted/40',
+                          isVarHighlighted && 'bg-purple-500/10 ring-1 ring-inset ring-purple-400/40',
+                          isHovered && !isCurrent && !isVarHighlighted && 'bg-muted/40',
+                          // Live replay status accents — subtle left border +
+                          // tinted background so the running/failed/awaiting row
+                          // stands out while a test replay walks the list.
+                          rowStatus === 'running' && 'bg-brand/5 border-l-2 border-brand',
+                          rowStatus === 'failed' && 'bg-danger/5 border-l-2 border-danger',
+                          rowStatus === 'awaiting' && 'border-l-2 border-amber-500',
                           !isRecording && dropStepIdx === i && dragStepIdx !== i && 'border-t-2 border-brand',
                         )}
                         draggable={!isExecuting && !isRecording}
@@ -2611,11 +3150,13 @@ export function RunScriptModal({
                         onMouseEnter={() => setHoveredStep(i)}
                         onMouseLeave={() => setHoveredStep(null)}
                         onClick={() => {
+                          if (inlineRenameIndex === i) return; // mid-rename, ignore
                           // Click jumps to that step. When the run is
                           // complete, clicking effectively rewinds and
                           // re-runs from there (handleJumpToStep clears
                           // the done flag and replays from the target).
-                          if (inlineRenameIndex === i) return; // mid-rename, ignore
+                          // Selection is handled exclusively by the row's
+                          // always-on checkbox (which stops propagation).
                           if (!isCurrent && !isExecuting && !isRecording) handleJumpToStep(i);
                         }}
                         onDoubleClick={(e) => {
@@ -2628,21 +3169,33 @@ export function RunScriptModal({
                           setEditingStepIndex(i);
                         }}
                       >
-                        {/* Drag handle — only in test mode */}
+                        {/* Drag handle — only in test mode (hidden while recording),
+                            revealed on row hover so default rows stay clean. The drag
+                            listeners live on the row container, so hiding the handle
+                            visually doesn't affect reorder. */}
                         {!isRecording && (
                           <div className={cn(
-                            'cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-muted-foreground shrink-0',
+                            'cursor-grab active:cursor-grabbing text-muted-foreground/30 hover:text-muted-foreground shrink-0 opacity-0 group-hover:opacity-100 transition-opacity',
                             isExecuting && 'invisible'
                           )}>
                             <GripVertical className="h-3.5 w-3.5" />
                           </div>
                         )}
-                        {/* Step number — replaced by green check (completed) or green + (new) */}
+                        {/* Step number — the index is ALWAYS shown (variables
+                            reference step numbers, so they must stay visible).
+                            A live replay status icon (running / failed /
+                            awaiting) overlays it transiently during a test run;
+                            otherwise the number, with a small green check tucked
+                            beside completed steps. */}
                         <span className="w-5 shrink-0 text-right tabular-nums flex items-center justify-end">
-                          {isCompleted ? (
+                          {rowStatus === 'running' ? (
+                            <Loader2 className="h-3.5 w-3.5 text-brand animate-spin" />
+                          ) : rowStatus === 'failed' ? (
+                            <XCircle className="h-3.5 w-3.5 text-danger" />
+                          ) : rowStatus === 'awaiting' ? (
+                            <ShieldAlert className="h-3.5 w-3.5 text-amber-500" />
+                          ) : (isCompleted || rowStatus === 'done') ? (
                             <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
-                          ) : isNew ? (
-                            <Plus className="h-3.5 w-3.5 text-green-500" />
                           ) : (
                             <>{i + 1}</>
                           )}
@@ -2695,41 +3248,67 @@ export function RunScriptModal({
                             iframe
                           </span>
                         )}
-                        {/* Actions: edit + duplicate + delete (on hover) + selector warning (persistent). */}
+                        {/* Approval-gate marker — step pauses for human approval. */}
+                        {s.requires_approval && (
+                          <span
+                            className="shrink-0 inline-flex items-center"
+                            title="Needs approval — replay pauses here for a human to approve before running"
+                          >
+                            <ShieldAlert className="h-3 w-3 text-amber-500" />
+                          </span>
+                        )}
+                        {/* Reliability dot from the AI refine pass (display-only). */}
+                        {s._reliability && (
+                          <ReliabilityBadge tier={s._reliability.tier} risks={s._reliability.risks} />
+                        )}
+                        {/* Actions: edit / duplicate / delete collapsed into an
+                            always-visible ⋮ menu + selector warning (persistent). */}
                         <div className="ml-auto shrink-0 flex items-center gap-1">
-                          {isHovered && (
-                            <>
-                              <button
-                                className="text-muted-foreground hover:text-foreground transition-colors"
-                                onClick={(e) => { e.stopPropagation(); setEditingStepIndex(i); }}
-                                title="Edit step — name, selector, JSON"
-                              >
-                                <Pencil className="h-3 w-3" />
-                              </button>
-                              <button
-                                className="text-muted-foreground hover:text-foreground transition-colors"
-                                onClick={(e) => { e.stopPropagation(); handleDuplicateStep(i); }}
-                                title="Duplicate step"
-                              >
-                                <Copy className="h-3 w-3" />
-                              </button>
-                              <button
-                                className="text-muted-foreground hover:text-destructive transition-colors"
-                                onClick={(e) => { e.stopPropagation(); handleDeleteStep(i); }}
-                                title="Delete step"
-                              >
-                                <Trash2 className="h-3 w-3" />
-                              </button>
-                            </>
-                          )}
                           {needsSelectorReview(s) && (
                             <span title="Selector needs review — run this step to auto-select"><AlertTriangle className="h-3 w-3 text-amber-500" /></span>
                           )}
+                          <RowActionsMenu
+                            title="Step actions"
+                            triggerClassName="h-6 w-6 p-0"
+                            actions={[
+                              {
+                                label: 'Edit',
+                                icon: <Pencil className="h-4 w-4" />,
+                                onSelect: () => setEditingStepIndex(i),
+                              },
+                              {
+                                label: 'Duplicate',
+                                icon: <Copy className="h-4 w-4" />,
+                                onSelect: () => handleDuplicateStep(i),
+                              },
+                              {
+                                label: 'Delete',
+                                icon: <Trash2 className="h-4 w-4" />,
+                                onSelect: () => handleDeleteStep(i),
+                                destructive: true,
+                              },
+                            ]}
+                          />
                         </div>
-                        {isCurrent && !isHovered ? (
-                          <ChevronRight className="h-3 w-3 shrink-0 text-brand" />
-                        ) : null}
                       </div>
+                      {/* Approval-gate prompt — replay paused at this gated step. */}
+                      {pendingGateIndex === i && (
+                        <div className="px-3 py-2 flex items-center gap-2 bg-amber-500/10 border-y border-amber-500/30">
+                          <ShieldAlert className="h-4 w-4 shrink-0 text-amber-500" />
+                          <div className="min-w-0 flex-1">
+                            <p className="text-xs font-medium text-amber-700 dark:text-amber-300">Approval required</p>
+                            <p className="text-[10px] text-muted-foreground truncate">
+                              “{stepLabel(s)}” needs approval before it runs.
+                            </p>
+                          </div>
+                          <Button size="sm" variant="outline" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); handleDenyGate(); }}>
+                            Deny
+                          </Button>
+                          <Button size="sm" className="h-6 px-2 text-[11px]" onClick={(e) => { e.stopPropagation(); handleApproveGate(); }}>
+                            Approve
+                          </Button>
+                        </div>
+                      )}
                       {/* Recording insertion point — shown after the current step */}
                       {showLiveInsert && (
                         <>
@@ -2741,7 +3320,7 @@ export function RunScriptModal({
                             <span className="text-xs text-red-400">Recording — steps insert here</span>
                           </div>
                           {liveRecordedSteps.map((r, ri) => (
-                            <div key={`rec-${ri}`} className="px-3 py-1.5 flex items-center gap-2 text-muted-foreground bg-red-500/5">
+                            <div key={`rec-${ri}`} className="min-h-7 px-3 py-1 flex items-center gap-2 text-muted-foreground bg-red-500/5">
                               <Plus className="h-3 w-3 shrink-0 text-green-500" />
                               <span className="truncate flex-1">{stepLabel(r)}</span>
                               {r.frame_selector && (
@@ -2777,24 +3356,162 @@ export function RunScriptModal({
                 </div>
               )}
 
-              {/* ── Bottom panel — Variables only. Selector + JSON
-                  editors moved to the step-edit modal so the operator
-                  has one editing surface (and Variables can stay
-                  pinned without competing for tab space). ── */}
-              {(() => {
-                const vars = analyzeVariables(stepsToShow);
-                return (
-                  <BottomPanel
-                    variables={vars}
-                    params={params}
-                    onParamsChange={setParams}
-                    onRenameVariable={handleRenameVariable}
-                    onDeleteVariable={handleDeleteVariable}
-                    hoveredStep={hoveredStep}
-                    extracted={stepRunState?.extracted ?? {}}
-                  />
-                );
-              })()}
+              {/* ── Single tabbed bottom panel ──────────────────────
+                  One compact strip (Variables / Ask AI / Activity) over a
+                  fixed-height scroll area showing the active tab. Activity
+                  only appears in the strip while a run or AI action is in
+                  flight; the effective tab falls back to Variables if the
+                  user was parked on a now-hidden Activity tab. ── */}
+              {/* Bottom panel — visually separated from the steps above with a
+                  distinct surface + a soft top shadow so the divide is clear. */}
+              <div className="shrink-0 flex flex-col border-t border-border bg-muted/30 shadow-[0_-10px_24px_-16px_rgba(0,0,0,0.4)]">
+                <div className="h-72 overflow-y-auto bg-background">
+                  {/* Variables tab */}
+                  {effectiveBottomTab === 'variables' && (() => {
+                    const vars = analyzeVariables(stepsToShow);
+                    return (
+                      <VariablesPanel
+                        variables={vars}
+                        params={params}
+                        onParamsChange={setParams}
+                        onRenameVariable={handleRenameVariable}
+                        onDeleteVariable={handleDeleteVariable}
+                        hoveredStep={hoveredStep}
+                        onHoverVariable={setHighlightVarSteps}
+                      />
+                    );
+                  })()}
+
+                  {/* Ask AI tab — one instruction (aiPrompt) steering a single
+                      Improve action that cleans up the recorded steps offline. */}
+                  {effectiveBottomTab === 'ai' && (
+                    <div className="px-3 py-3 bg-brand/[0.03] space-y-2.5">
+                      <div className="flex items-start gap-2">
+                        <Sparkles className="h-3.5 w-3.5 text-brand mt-1 shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-xs font-medium">Ask AI · Test &amp; Improve</p>
+                          <p className="text-[10px] text-muted-foreground leading-snug">
+                            <span className="text-foreground">Test &amp; Improve</span> walks the whole script live in this browser — running each step with your Variables so it doubles as a test, pausing for approval before any submit, and rewriting selectors against the real page. If a referenced Variable has no value, it stops before running. When it finishes it tidies up — naming steps, renaming variables, dropping unused ones, and creating variables from values when you ask (e.g. “create a variable for step 4’s value”). <span className="text-foreground">Name a step</span> in the box (e.g. “just step 7”) to run &amp; improve only that step on the current page.
+                          </p>
+                        </div>
+                      </div>
+                      {aiWalking && (
+                        <div className="flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-700 dark:text-amber-300">
+                          <Loader2 className="h-3 w-3 animate-spin shrink-0" />
+                          <span>Walking the script live — editing is locked. Use <span className="font-medium">Stop</span> to cancel.</span>
+                        </div>
+                      )}
+                      <Input
+                        value={aiPrompt}
+                        onChange={(e) => setAiPrompt(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === 'Enter' && !refining && !aiWalking && hasSteps) handleImprove(); }}
+                        placeholder='Steer it — e.g. “just step 7”, “the date field moved”, “don’t rename variables”'
+                        className="h-8 text-xs"
+                        disabled={refining || aiWalking}
+                      />
+                      <div className="flex items-center gap-1.5">
+                        {/* Primary: Test & Improve — live walk in the run's browser. */}
+                        <Button
+                          size="sm"
+                          className="h-7 flex-1 justify-center"
+                          onClick={() => handleImprove()}
+                          disabled={refining || aiWalking || !hasSteps}
+                        >
+                          {refining || aiWalking
+                            ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                            : <Wand2 className="mr-1.5 h-3.5 w-3.5" />}
+                          Test &amp; Improve
+                        </Button>
+                      </div>
+                      {/* Reliability summary from the last improve pass. */}
+                      {refineSummary && !refining && (
+                        <div className="flex items-start gap-1.5 rounded-md border bg-background px-2 py-1.5">
+                          {refineOverall && (
+                            <Badge
+                              variant={refineOverall === 'reliable' ? 'success' : refineOverall === 'fragile' ? 'danger' : 'warning'}
+                              className="shrink-0 text-[9px] px-1.5 py-0 uppercase"
+                            >
+                              {refineOverall}
+                            </Badge>
+                          )}
+                          <p className="text-[10px] text-muted-foreground leading-snug">{refineSummary}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Activity tab — live log of replay / AI progress. Only
+                      reachable while work is in flight (showActivityTab).
+                      Auto-scrolls via activityScrollRef. */}
+                  {effectiveBottomTab === 'activity' && (
+                    <div className="px-3 py-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Activity</span>
+                        {activity.length > 0 && (
+                          <button
+                            type="button"
+                            className="text-[10px] text-muted-foreground/70 hover:text-foreground transition-colors"
+                            onClick={() => setActivity([])}
+                            title="Clear activity"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                      <div
+                        ref={activityScrollRef}
+                        className="overflow-y-auto font-mono text-[10px] leading-relaxed space-y-0.5"
+                      >
+                        {activity.map((a) => (
+                          <div
+                            key={a.id}
+                            className={cn(
+                              'whitespace-pre-wrap break-words',
+                              a.kind === 'done'  && 'text-green-600 dark:text-green-400',
+                              a.kind === 'error' && 'text-destructive',
+                              a.kind === 'gate'  && 'text-amber-600 dark:text-amber-400',
+                              a.kind === 'ai'    && 'text-brand',
+                              a.kind === 'step'  && 'text-muted-foreground',
+                            )}
+                          >
+                            {a.text}
+                          </div>
+                        ))}
+                        {activity.length === 0 && (
+                          <p className="text-muted-foreground/50 italic">Running…</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+                {/* Tab strip at the BOTTOM of the panel — the active tab
+                    connects upward to the content above it. */}
+                <div className="flex items-center gap-0.5 px-2 py-1 border-t border-border">
+                  {([
+                    { id: 'variables' as const, label: 'Variables' },
+                    { id: 'ai' as const, label: 'Ask AI' },
+                    ...(showActivityTab ? [{ id: 'activity' as const, label: 'Activity' }] : []),
+                  ]).map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setBottomTab(t.id)}
+                      className={cn(
+                        'flex items-center gap-1 rounded-b px-2.5 py-1 text-[11px] font-medium transition-colors',
+                        effectiveBottomTab === t.id
+                          ? 'bg-background text-foreground border border-t-0'
+                          : 'text-muted-foreground hover:text-foreground',
+                      )}
+                    >
+                      {t.id === 'ai' && <Sparkles className="h-3 w-3 text-brand" />}
+                      {t.label}
+                      {t.id === 'activity' && (aiBusy || replayRunning) && (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      )}
+                    </button>
+                  ))}
+                </div>
+              </div>
             </>
           )}
           </div>
@@ -3056,9 +3773,9 @@ function ModeActionPicker({
   // another mode. The box itself is NEVER a button — it stays purely
   // informational.
   const activeStatus =
-    isRecording        ? { label: 'Recording…',       Icon: CircleDot, iconClass: 'text-red-500 animate-pulse', stopIcon: Square, stopTitle: 'Stop recording', onStop: onStopRecording } :
-    isCapturingWaitFor ? { label: 'Waiting for click', Icon: Loader2,   iconClass: 'animate-spin text-brand',     stopIcon: X,      stopTitle: 'Cancel wait',     onStop: onCancelWait } :
-    isCapturingExtract ? { label: 'Click to extract',  Icon: Loader2,   iconClass: 'animate-spin text-brand',     stopIcon: X,      stopTitle: 'Cancel extract',  onStop: onCancelExtract } :
+    isRecording        ? { label: 'Recording…',       stopIcon: Square, stopTitle: 'Stop recording', onStop: onStopRecording, mode: 'record' as ToolMode } :
+    isCapturingWaitFor ? { label: 'Waiting for click', stopIcon: X,      stopTitle: 'Cancel wait',     onStop: onCancelWait,     mode: 'record' as ToolMode } :
+    isCapturingExtract ? { label: 'Click to extract',  stopIcon: X,      stopTitle: 'Cancel extract',  onStop: onCancelExtract,  mode: 'extract' as ToolMode } :
     null;
   const locked = disabled || !!activeStatus || isExecuting;
 
@@ -3086,39 +3803,25 @@ function ModeActionPicker({
   const currentActions = actionsByMode[toolMode];
   const selectedAction = currentActions[Math.min(selectedIdxFor(toolMode), currentActions.length - 1)] ?? currentActions[0]!;
 
-  // The info box shows live status while active, else the selected action.
-  const BoxIcon = activeStatus ? activeStatus.Icon : selectedAction.icon;
-  const boxIconClass = activeStatus ? activeStatus.iconClass : '';
-  const boxLabel = activeStatus ? activeStatus.label : selectedAction.label;
-  const StopIcon = activeStatus?.stopIcon ?? Square;
+  // The status text shows live status while active, else "Mode : Action"
+  // (e.g. "Test : Manual") so both the mode and the chosen action are clear.
+  const modeLabel = MODE_META.find((m) => m.key === toolMode)?.label ?? toolMode;
+  const boxLabel = activeStatus ? activeStatus.label : `${modeLabel} : ${selectedAction.label}`;
 
   return (
     <div className="flex items-center gap-2">
-      {/* Icon-only Stop / Cancel — appears to the LEFT of the info box only
-          while an action is running. Keeps the box itself a pure display. */}
-      {activeStatus && (
-        <Button
-          variant="destructive"
-          size="sm"
-          className="h-8 w-8 shrink-0 p-0"
-          onClick={activeStatus.onStop}
-          disabled={disabled}
-          title={activeStatus.stopTitle}
-        >
-          <StopIcon className="h-3.5 w-3.5 fill-current" />
-        </Button>
-      )}
-
-      {/* Info box — display only, never a button. Styled like a read-only
-          field (inset, muted) so it never reads as clickable. Shows the
-          selected action, or the live status while one is running. */}
+      {/* Status text — display only, never a box/button. Plain inline text
+          indicating the current mode/action, or the live status while one
+          is running. */}
       <div
-        className="flex h-8 w-44 shrink-0 items-center gap-1.5 rounded-md border border-border bg-muted/40 px-2.5 text-xs font-medium text-foreground cursor-default"
+        className="flex h-8 w-44 shrink-0 items-center justify-end px-1 text-right text-xs font-medium text-info cursor-default"
         title={activeStatus ? activeStatus.label : selectedAction.desc}
       >
-        <BoxIcon className={cn('h-3.5 w-3.5 shrink-0', boxIconClass || 'text-muted-foreground')} />
         <span className="truncate">{boxLabel}</span>
       </div>
+
+      {/* Short divider tying the status text to the mode buttons. */}
+      <div className="h-5 w-px bg-border shrink-0" />
 
       {/* Right: icon-only mode buttons. Clicking one switches to that mode
           AND opens its action menu (the mode name is the menu heading);
@@ -3129,6 +3832,27 @@ function ModeActionPicker({
           const activeMode = toolMode === m.key;
           const modeActions = actionsByMode[m.key];
           const modeSelectedIdx = selectedIdxFor(m.key);
+
+          // The mode that's currently running turns INTO its Stop/Cancel
+          // button (one button toggles record↔stop, capture↔cancel) rather
+          // than a separate control. Other modes are disabled while active.
+          if (activeStatus && activeStatus.mode === m.key) {
+            const SIcon = activeStatus.stopIcon;
+            return (
+              <button
+                key={m.key}
+                type="button"
+                onClick={activeStatus.onStop}
+                disabled={disabled}
+                className="flex h-7 w-9 items-center justify-center rounded bg-red-600 text-white shadow-sm transition-colors hover:bg-red-700"
+                title={activeStatus.stopTitle}
+                aria-label={activeStatus.stopTitle}
+              >
+                <SIcon className="h-3.5 w-3.5 fill-current" />
+              </button>
+            );
+          }
+
           return (
             <DropdownMenu key={m.key}>
               <DropdownMenuTrigger asChild>
@@ -3144,7 +3868,7 @@ function ModeActionPicker({
                   title={`${m.label} actions`}
                   aria-label={`${m.label} actions`}
                 >
-                  <Icon className={cn('h-4 w-4 shrink-0', m.key === 'record' && isRecording && 'text-red-500 animate-pulse')} />
+                  <Icon className="h-4 w-4 shrink-0" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-[260px]">
