@@ -22,6 +22,8 @@ interface AiStepDialogProps {
   readOnly?: boolean;
   saving?: boolean;
   onSave?: (data: AiStepFormData) => Promise<void>;
+  orgId?: string | null;
+  onSkillsChanged?: () => void;
 }
 
 export function AiStepDialog({
@@ -33,6 +35,8 @@ export function AiStepDialog({
   readOnly = false,
   saving = false,
   onSave,
+  orgId,
+  onSkillsChanged,
 }: AiStepDialogProps) {
   const [form, setForm] = useState<AiStepFormData>({
     name: '',
@@ -80,6 +84,8 @@ export function AiStepDialog({
           connectors={connectors}
           skills={skills}
           readOnly={readOnly}
+          orgId={orgId}
+          onSkillsChanged={onSkillsChanged}
         />
 
         <DialogFooter>

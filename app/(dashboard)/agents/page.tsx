@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { getAgents, deleteAgent, duplicateAgent, runAgent, updateAgent, type Agent } from '@/lib/api/agents';
+import { listClients } from '@/lib/api/clients';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -12,7 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy, Search, Tag as TagIcon } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy, Search, Tag as TagIcon, Sparkles } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { useTags } from '@/lib/hooks/use-tags';
@@ -38,6 +39,8 @@ export default function AgentsPage() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [tagDialogAgent, setTagDialogAgent] = useState<Agent | null>(null);
+  // client_id → name, for the Client column.
+  const [clientsById, setClientsById] = useState<Record<string, string>>({});
 
   // Search + sort live entirely client-side. The list is small enough
   // (hundreds, not thousands) that filtering / sorting in memory is
@@ -56,6 +59,14 @@ export default function AgentsPage() {
     if (selectedOrgId) loadAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId, tagFilter, tagMatch]);
+
+  // Client names for the Client column (id → name).
+  useEffect(() => {
+    if (!selectedOrgId) return;
+    listClients(selectedOrgId)
+      .then((cs) => setClientsById(Object.fromEntries(cs.map((c) => [c.id, c.name]))))
+      .catch(() => { /* column falls back to a dash */ });
+  }, [selectedOrgId]);
 
   const loadAgents = async (silent = false) => {
     if (!selectedOrgId) return;
@@ -277,6 +288,18 @@ export default function AgentsPage() {
                   label: 'Created',
                   sortable: true,
                   render: (a) => new Date(a.created_at).toLocaleDateString(),
+                },
+                {
+                  key: 'client',
+                  label: 'Client',
+                  render: (a) => a.client_id
+                    ? (
+                      <Badge variant="outline" className="gap-1 border-brand/40 text-brand">
+                        <Sparkles className="h-3 w-3" />
+                        <span className="max-w-[120px] truncate">{clientsById[a.client_id] ?? 'Client'}</span>
+                      </Badge>
+                    )
+                    : <span className="text-muted-foreground">—</span>,
                 },
                 {
                   // Tags is the last data column everywhere; not sortable

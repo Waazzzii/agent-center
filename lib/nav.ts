@@ -49,6 +49,7 @@ export const orgMainNavItems: NavItem[] = [
   { label: 'Action Required', href: '/interactions',    permissionKeys: ['agent_center_user'] },
   { label: 'Analytics',       href: '/agent-analytics', permissionKeys: ['agent_center_user'] },
   { label: 'Billing & Usage', href: '/billing',         permissionKeys: ['agent_center_user'] },
+  { label: 'Clients',         href: '/clients',         permissionKeys: ['agent_center_user'] },
   { label: 'Access',          href: '/access',          permissionKeys: ['agent_center_user'] },
 ];
 

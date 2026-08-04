@@ -13,6 +13,7 @@ import {
 import { Plus, Trash2, ArrowUpFromLine } from 'lucide-react';
 import { InputsList, parseVars } from './InputsList';
 import { MultiSelectTags } from '@/components/ui/multi-select-tags';
+import { SkillChips } from './SkillChips';
 
 export interface ConnectorOption { id: string; label: string; }
 
@@ -40,6 +41,13 @@ interface Props {
   readOnly?: boolean;
   /** When provided (workflow context), Required Inputs are colored by availability. */
   availableVars?: string[];
+  /** Org id — enables inline skill create/edit from the skill chips. */
+  orgId?: string | null;
+  /** Called after a skill is created/updated so the parent can refetch the skills list. */
+  onSkillsChanged?: () => void;
+  /** Show the Skills section. Off in the workflow flyout — skills are managed on
+   *  the step card there. Default true (standalone AI-step editor). */
+  showSkills?: boolean;
 }
 
 /**
@@ -50,19 +58,7 @@ interface Props {
  * Rendering is identical across contexts so the read-only view matches the
  * edit view field-for-field.
  */
-export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = false, availableVars }: Props) {
-  const toggleConnector = (id: string) => setForm((f) => ({
-    ...f,
-    connector_ids: f.connector_ids.includes(id)
-      ? f.connector_ids.filter((x) => x !== id)
-      : [...f.connector_ids, id],
-  }));
-  const toggleSkill = (id: string) => setForm((f) => ({
-    ...f,
-    skill_ids: f.skill_ids.includes(id)
-      ? f.skill_ids.filter((x) => x !== id)
-      : [...f.skill_ids, id],
-  }));
+export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = false, availableVars, orgId, onSkillsChanged, showSkills = true }: Props) {
   const addOutput = () => setForm((f) => ({
     ...f,
     // Required by default — opt-out by unchecking the box. Matches the
@@ -237,15 +233,16 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
         </div>
       )}
 
-      {skills.length > 0 && (
+      {showSkills && (!readOnly || form.skill_ids.length > 0) && (
         <div className="space-y-1">
           <Label>Skills</Label>
-          <MultiSelectTags
-            options={skills.map((s) => ({ value: s.id, label: s.name }))}
-            selected={form.skill_ids}
+          <SkillChips
+            orgId={orgId ?? null}
+            skills={skills}
+            selectedIds={form.skill_ids}
             onChange={(ids) => setForm((f) => ({ ...f, skill_ids: ids }))}
-            placeholder="Select skills…"
-            disabled={readOnly}
+            onSkillsChanged={onSkillsChanged}
+            readOnly={readOnly}
           />
         </div>
       )}

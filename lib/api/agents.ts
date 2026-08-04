@@ -10,6 +10,10 @@ export interface Agent {
   requires_browser: boolean;
   /** ID of the persisted browser session (cookies/storage) for this agent. Null until a browser run completes. */
   browser_session_id?: string | null;
+  /** Owning agent-kit client (one per agent). When set, the agent is
+   *  client-gated: runs require a reserved `_client_prompt` input and a pinned
+   *  pre-process step runs first. Null = not client-assigned. */
+  client_id?: string | null;
   created_at: string;
   updated_at: string;
   /** Agents that use this agent as a sub-agent target.  Empty = can have sub-agent actions. */
@@ -196,6 +200,17 @@ export async function createAgent(orgId: string, data: { name: string; descripti
 
 export async function updateAgent(orgId: string, agentId: string, data: { name?: string; description?: string; is_active?: boolean; requires_browser?: boolean; tag_ids?: string[] }) {
   const res = await agentClient.patch<Agent>(`/api/admin/${orgId}/agents/${agentId}`, data);
+  return res.data;
+}
+
+/**
+ * Assign (or clear) the owning agent-kit client for an agent — one client per
+ * agent. Assigning gates the agent (runs require `_client_prompt`) and creates
+ * the reserved pre-process step; passing `null` clears it and removes that step.
+ * Returns the refreshed agent.
+ */
+export async function setAgentClient(orgId: string, agentId: string, clientId: string | null) {
+  const res = await agentClient.put<Agent>(`/api/admin/${orgId}/agents/${agentId}/client`, { client_id: clientId });
   return res.data;
 }
 

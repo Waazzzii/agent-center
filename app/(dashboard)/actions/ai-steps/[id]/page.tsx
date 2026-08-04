@@ -165,6 +165,8 @@ export default function EditAiStepPage() {
             setForm={setForm as any}
             connectors={connectors}
             skills={skills}
+            orgId={selectedOrgId}
+            onSkillsChanged={() => { if (selectedOrgId) getSkills(selectedOrgId, { limit: 100 }).then((r) => setSkills(r.items ?? [])).catch(() => {}); }}
           />
           <div className="mt-4 space-y-1 border-t pt-4">
             <Label>Tags</Label>
