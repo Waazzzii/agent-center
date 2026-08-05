@@ -66,8 +66,12 @@ import { cn } from '@/lib/utils';
 const CLIENT_PREPROCESS_PROMPT =
   'You are the intake step for this agent. The client has sent this request:\n\n' +
   '{{_client_prompt}}\n\n' +
-  'If files were attached they appear in _client_media as temporary URLs (kept ~7 days) — ' +
-  'note them and download/use them as the request requires before they expire.\n\n' +
+  'Any attached files appear in _client_media. IMPORTANT: these live in a TEMPORARY ' +
+  'store that is automatically wiped after ~7 days — the URLs are not durable. If the ' +
+  'workflow needs to keep or reference a file, it must first MOVE it into permanent ' +
+  'storage using the appropriate media tool (the backend/MCP decides where it should ' +
+  'live, e.g. content vs. knowledge base). Never save or hand off a temporary _client_media ' +
+  'URL as if it were permanent.\n\n' +
   'Interpret the request and produce the structured inputs the rest of this agent needs ' +
   'to fulfil it. Be explicit and unambiguous — the following steps depend on your output.';
 
