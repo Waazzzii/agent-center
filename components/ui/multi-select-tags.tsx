@@ -22,6 +22,9 @@ export interface MultiSelectOption {
   label: string;
 }
 
+/** Stable listener: stop a native event from bubbling to document. */
+const stopEvent = (e: Event) => e.stopPropagation();
+
 interface Props {
   options: MultiSelectOption[];
   selected: string[];
@@ -40,7 +43,27 @@ export function MultiSelectTags({ options, selected, onChange, placeholder = 'Se
   const [query, setQuery] = useState('');
   const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
   const triggerRef = useRef<HTMLDivElement>(null);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+
+  // Attach the floating menu via a callback ref so we can wire native,
+  // bubble-phase listeners the moment the node mounts. Portaling to <body>
+  // is what lets the menu escape a scrollable dialog's clipping `overflow`,
+  // but a Radix *modal* Dialog then treats a click on our out-of-tree menu as
+  // an "outside" interaction — closing the whole dialog and yanking focus out
+  // of the search box. Stopping pointerdown/focusin here (before they reach
+  // Radix's document-level listeners) keeps the menu usable inside the modal.
+  const setMenuNode = useCallback((node: HTMLDivElement | null) => {
+    const prev = menuRef.current;
+    if (prev) {
+      prev.removeEventListener('pointerdown', stopEvent);
+      prev.removeEventListener('focusin', stopEvent);
+    }
+    menuRef.current = node;
+    if (node) {
+      node.addEventListener('pointerdown', stopEvent);
+      node.addEventListener('focusin', stopEvent);
+    }
+  }, []);
 
   // Position the floating menu relative to the trigger, flipping up and
   // sizing to whichever side has more room so the list isn't cramped.
@@ -55,6 +78,10 @@ export function MultiSelectTags({ options, selected, onChange, placeholder = 'Se
     const maxHeight = Math.max(160, Math.floor(dropUp ? spaceAbove : spaceBelow));
     setMenuStyle({
       position: 'fixed',
+      // Above the dialog layer (z-50) and clickable even though the modal
+      // sets pointer-events:none on <body>, which the menu would inherit.
+      zIndex: 60,
+      pointerEvents: 'auto',
       left: r.left,
       width: r.width,
       maxHeight,
@@ -144,9 +171,9 @@ export function MultiSelectTags({ options, selected, onChange, placeholder = 'Se
       {/* Dropdown — portaled to <body> so it floats above overflow containers */}
       {open && menuStyle && typeof document !== 'undefined' && createPortal(
         <div
-          ref={menuRef}
+          ref={setMenuNode}
           style={menuStyle}
-          className="z-50 flex flex-col overflow-hidden rounded-md border bg-popover shadow-md"
+          className="flex flex-col overflow-hidden rounded-md border bg-popover shadow-md"
         >
           {showSearch && (
             <div className="border-b p-1.5 shrink-0">
