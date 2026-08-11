@@ -10,9 +10,10 @@ export interface Agent {
   requires_browser: boolean;
   /** ID of the persisted browser session (cookies/storage) for this agent. Null until a browser run completes. */
   browser_session_id?: string | null;
-  /** Owning agent-kit client (one per agent). When set, the agent is
-   *  client-gated: runs require a reserved `_client_prompt` input and a pinned
-   *  pre-process step runs first. Null = not client-assigned. */
+  /** Owning agent-kit client (one per agent). When set, the agent is runnable
+   *  from that client's agent kit, which passes the reserved `_client_prompt` /
+   *  `_client_media` / `_client_video` inputs straight to the agent's own steps.
+   *  Null = not client-assigned. */
   client_id?: string | null;
   created_at: string;
   updated_at: string;
@@ -205,8 +206,8 @@ export async function updateAgent(orgId: string, agentId: string, data: { name?:
 
 /**
  * Assign (or clear) the owning agent-kit client for an agent — one client per
- * agent. Assigning gates the agent (runs require `_client_prompt`) and creates
- * the reserved pre-process step; passing `null` clears it and removes that step.
+ * agent. Assigning makes the agent runnable from that client's kit (which passes
+ * the reserved `_client_*` inputs); passing `null` clears the assignment.
  * Returns the refreshed agent.
  */
 export async function setAgentClient(orgId: string, agentId: string, clientId: string | null) {

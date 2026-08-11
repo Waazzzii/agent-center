@@ -60,21 +60,6 @@ import {
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
-// Fixed client pre-process prompt — mirrors CLIENT_PREPROCESS_PROMPT in
-// agent-backend's executor. Shown read-only in the pre-process flyout; not
-// editable and not stored per agent.
-const CLIENT_PREPROCESS_PROMPT =
-  'You are the intake step for this agent. The client has sent this request:\n\n' +
-  '{{_client_prompt}}\n\n' +
-  'Any attached files appear in _client_media. IMPORTANT: these live in a TEMPORARY ' +
-  'store that is automatically wiped after ~7 days — the URLs are not durable. If the ' +
-  'workflow needs to keep or reference a file, it must first MOVE it into permanent ' +
-  'storage using the appropriate media tool (the backend/MCP decides where it should ' +
-  'live, e.g. content vs. knowledge base). Never save or hand off a temporary _client_media ' +
-  'URL as if it were permanent.\n\n' +
-  'Interpret the request and produce the structured inputs the rest of this agent needs ' +
-  'to fulfil it. Be explicit and unambiguous — the following steps depend on your output.';
-
 // ─── Cron description helper ──────────────────────────────────
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -288,8 +273,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // is one focused workflow view. Opened from the gear icon in the
   // header action cluster.
   const [settingsOpen, setSettingsOpen] = useState(false);
-  // Read-only flyout showing the fixed client pre-process prompt.
-  const [preprocessOpen, setPreprocessOpen] = useState(false);
 
   // Access groups (used in action dialogs for approval group assignment)
   const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
@@ -780,16 +763,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   };
 
   // Assign / clear the owning client. Applies immediately (not part of the
-  // dirty-save flow) since it creates/removes the reserved pre-process step;
-  // reload picks up the new step + gating state.
+  // dirty-save flow). A client-assigned agent receives the reserved client
+  // inputs (_client_prompt / _client_media / _client_video) straight from the
+  // kit chat — no pre-process step.
   const handleSetClient = async (clientId: string | null) => {
     if (!selectedOrgId || !agent) return;
     setSavingClient(true);
     try {
       const updated = await setAgentClient(selectedOrgId, agentId, clientId);
       toast.success(clientId ? 'Client assigned' : 'Client removed');
-      // Update in place: merge the agent's new client_id, then refresh just the
-      // workflow data (no spinner) so the pinned pre-process step appears/clears.
       setAgent((prev) => (prev ? { ...prev, ...updated } : prev));
       await refreshData();
     } catch (err: any) {
@@ -1153,37 +1135,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Steps</p>
               </div>
 
-              {/* Reserved client pre-process — shown (read-only) when a client is
-                  assigned. Not a stored step: the executor runs a fixed intake
-                  prompt first at runtime. Click to view the prompt. */}
-              {agent.client_id && (
-                <div>
-                  <div className="flex items-stretch gap-2">
-                    <Card
-                      className="group relative flex-1 min-w-0 py-0 cursor-pointer border-brand/40 bg-brand/[0.03]"
-                      onClick={() => setPreprocessOpen(true)}
-                    >
-                      <div className="absolute -top-2.5 -left-2.5 z-10 flex items-center gap-1">
-                        <span className="inline-flex items-center gap-1 rounded-full bg-brand px-1.5 py-0.5 text-[10px] font-bold text-white ring-2 ring-background">
-                          <Sparkles className="h-2.5 w-2.5" /> Client
-                        </span>
-                      </div>
-                      <CardContent className="py-3 pl-5 pr-3">
-                        <div className="min-w-0">
-                          <div className="truncate text-sm font-medium">Client pre-process</div>
-                          <p className="mt-0.5 text-xs text-muted-foreground">
-                            Runs first · interprets the client&apos;s <code className="text-[11px]">_client_prompt</code> · view only
-                          </p>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  </div>
-                  <div className="flex justify-center py-1">
-                    <ArrowDown className="h-4 w-4 text-muted-foreground/50" />
-                  </div>
-                </div>
-              )}
-
               <div>
                 {actions.map((action, idx) => {
                   // Paired login + browser_script render as one visual
@@ -1416,8 +1367,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               />
             </div>
 
-            {/* Active toggle */}
-            {/* Client assignment — gates the agent + adds the pre-process step */}
+            {/* Client assignment — owns the agent for a kit client; the reserved
+                client inputs flow straight to the agent's own steps. */}
             <div className="rounded-md border px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
@@ -1426,8 +1377,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {agent?.client_id
-                      ? 'Client-gated — runs require a prompt; a pinned pre-process step runs first.'
-                      : 'Assign a client to gate this agent and add a pre-process step.'}
+                      ? 'Assigned to a client — runnable from its agent kit, which passes _client_prompt / _client_media / _client_video to this agent.'
+                      : 'Assign a client to make this agent runnable from that client’s agent kit.'}
                   </p>
                 </div>
                 <select
@@ -2014,31 +1965,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             >
               {savingAction ? 'Saving…' : editingAction ? 'Update' : 'Add Action'}
             </Button>
-          </SheetFooter>
-        </SheetContent>
-      </Sheet>
-
-      {/* ── Client pre-process flyout (read-only) ─────────────── */}
-      <Sheet open={preprocessOpen} onOpenChange={setPreprocessOpen}>
-        <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col gap-0 p-0">
-          <SheetHeader className="border-b px-4 py-4 sm:px-6">
-            <SheetTitle className="flex items-center gap-2">
-              <Sparkles className="h-4 w-4 text-brand" /> Client pre-process
-            </SheetTitle>
-          </SheetHeader>
-          <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 space-y-3">
-            <p className="text-sm text-muted-foreground">
-              A fixed intake step that runs first whenever this agent is run for its client — before any of your steps.
-              It interprets the client&apos;s prompt (and any attached files) into inputs for the workflow. It isn&apos;t
-              editable and isn&apos;t stored as a step. If a run has no client prompt, it&apos;s skipped.
-            </p>
-            <div>
-              <Label className="text-xs text-muted-foreground">Prompt</Label>
-              <pre className="mt-1 whitespace-pre-wrap rounded-md border bg-muted/40 p-3 text-xs leading-relaxed">{CLIENT_PREPROCESS_PROMPT}</pre>
-            </div>
-          </div>
-          <SheetFooter className="border-t px-4 py-4 sm:px-6">
-            <Button variant="outline" onClick={() => setPreprocessOpen(false)}>Close</Button>
           </SheetFooter>
         </SheetContent>
       </Sheet>

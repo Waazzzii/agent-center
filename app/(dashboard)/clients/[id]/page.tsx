@@ -107,7 +107,7 @@ export default function ClientDetailPage() {
     if (!selectedOrgId) return;
     const confirmed = await confirm({
       title: 'Unassign agent',
-      description: `Remove "${a.name}" from this client? Its reserved pre-process step will be removed and the agent will no longer be client-gated. The agent itself is kept.`,
+      description: `Remove "${a.name}" from this client? It will no longer be runnable from the client's agent kit. The agent itself is kept.`,
       confirmText: 'Unassign',
       cancelText: 'Cancel',
       variant: 'destructive',
