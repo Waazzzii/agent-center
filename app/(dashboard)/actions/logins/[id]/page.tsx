@@ -8,11 +8,14 @@ import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   getLogin, updateLogin, deleteLogin, verifyLogin, startLogout,
   setLoginCredentials, clearLoginCredentials, testAutoLogin,
+  getLoginCredentialKeys, deleteLoginCredentialKey,
+  setLoginTotp, clearLoginTotp, previewLoginTotp,
   listLoginRuns,
-  type Login, type LoginRunAudit,
+  type Login, type LoginRunAudit, type TotpPreview,
 } from '@/lib/api/logins';
+import { isReservedParam } from '@/lib/script-params';
 import { getBrowserRunStatus } from '@/lib/api/agents';
-import { listScripts, type BrowserScript } from '@/lib/api/scripts';
+import { listScripts, deleteScript, type BrowserScript } from '@/lib/api/scripts';
 import {
   getAgentAccessGroups,
   getLoginAccessGroups,
@@ -35,16 +38,28 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from '@/components/ui/dialog';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   Loader2, LogIn, LogOut, Save, Trash2,
   CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
-  Sparkles, Plus, X as XIcon, Eye, EyeOff, KeyRound,
+  Sparkles, Plus, X as XIcon, Eye, EyeOff, KeyRound, Pencil, Info,
+  Settings2, History, Camera, Image as ImageIcon,
 } from 'lucide-react';
+import { decodeQrFromFile, imageFromTransfer, cameraSupported } from '@/lib/qr-decode';
+import { QrScannerDialog } from '@/components/actions/QrScannerDialog';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
-import { LoginFormBody, type LoginFormData } from '@/components/actions/LoginFormBody';
+// LoginFormBody is no longer rendered here — the name moved into the page
+// header, the URL into a disclosure under Login, and the verify script into
+// its own card. The type is still the shape of this page's form state, and
+// the component itself is still used by the create page and LoginChip.
+import { type LoginFormData } from '@/components/actions/LoginFormBody';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import { RunScriptModal } from '@/components/record/RunScriptModal';
 import { SlackChannelInput } from '@/components/notifications/SlackChannelInput';
@@ -60,6 +75,175 @@ function StatusPill({ status }: { status: Login['status'] }) {
   // mid-check, so operators don't read it as a settled outcome.
   if (status === 'verifying') return <Badge variant="neutral" className="gap-1"><Loader2 className="h-3 w-3 animate-spin" />Verifying…</Badge>;
   return <Badge variant="neutral" className="gap-1"><HelpCircle className="h-3 w-3" />Not Yet Checked</Badge>;
+}
+
+/** Cap on the control itself. The row spans the card; the input doesn't
+ *  need to. */
+const CONTROL_W = 'max-w-lg';
+
+/**
+ * A small ⓘ next to a label. Explanatory copy lives in here rather than as
+ * a line of prose under every control — the explanation is needed once,
+ * while the vertical space it costs is paid on every render.
+ */
+function InfoBubble({ children }: { children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          // Not a form control: keep it out of the tab order and let the
+          // label it annotates carry the accessible description.
+          tabIndex={-1}
+          className="text-muted-foreground/60 hover:text-foreground transition-colors shrink-0"
+          aria-label="More information"
+        >
+          <Info className="h-3 w-3" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="right" className="max-w-xs leading-snug">
+        {children}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
+ * One labelled control: label above, control below, explanation behind an
+ * ⓘ on the label row.
+ */
+function Field({
+  label, info, required = false, action, children, className,
+}: {
+  label: string;
+  /** Explanation shown in the ⓘ tooltip. Omit when the label says it all. */
+  info?: React.ReactNode;
+  required?: boolean;
+  /** Rendered at the right end of the label row, e.g. a destructive link. */
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+}) {
+  return (
+    <div className={cn('space-y-1.5', className)}>
+      <div className={cn('flex items-center gap-1.5', CONTROL_W)}>
+        <Label className="text-xs">
+          {label}{required && <span className="text-destructive"> *</span>}
+        </Label>
+        {info && <InfoBubble>{info}</InfoBubble>}
+        {action && <div className="ml-auto shrink-0">{action}</div>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/**
+ * Indented block for things that BELONG to the field aboveit (the script's
+ * credentials under the script that declares them), so the relationship is
+ * visible rather than stated in prose.
+ */
+function FieldNest({ children }: { children: React.ReactNode }) {
+  return <div className="pl-3">{children}</div>;
+}
+
+/**
+ * One script slot (login or verify) — picker, edit, and record.
+ *
+ * The empty case is the point of this component. When no scripts of the
+ * kind exist there is nothing to pick, so the dropdown is suppressed and
+ * recording becomes the only offered action. An empty select reads as
+ * "something is broken"; a single labelled button reads as "do this next".
+ *
+ * Login scripts are hidden from the general Scripts list (they belong to
+ * their login), so this row is also the only way to open one for editing.
+ */
+function ScriptSlot({
+  label, info, scripts, value, onChange, onRecord, onEdit, onDelete,
+  recordLabel, emptyHint, allowNone = false, noneLabel = '— None —', required = false,
+}: {
+  label: string;
+  info?: React.ReactNode;
+  scripts: BrowserScript[];
+  value: string | null;
+  onChange: (id: string | null) => void;
+  onRecord: () => void;
+  onEdit: (script: BrowserScript) => void;
+  /** Delete the selected script outright. Omit to hide the action. */
+  onDelete?: (script: BrowserScript) => void;
+  recordLabel: string;
+  emptyHint?: string;
+  allowNone?: boolean;
+  noneLabel?: string;
+  required?: boolean;
+}) {
+  const selected = scripts.find((s) => s.id === value) ?? null;
+
+  return (
+    <Field label={label} info={info} required={required}>
+      {scripts.length === 0 ? (
+        <div className="flex items-center gap-2.5">
+          <Button type="button" variant="outline" size="sm" onClick={onRecord} className="shrink-0">
+            <Plus className="h-3.5 w-3.5 mr-1" />
+            {recordLabel}
+          </Button>
+          {emptyHint && (
+            <span className="text-[10px] text-muted-foreground leading-snug">{emptyHint}</span>
+          )}
+        </div>
+      ) : (
+        <div className={cn('flex items-center gap-2', CONTROL_W)}>
+          <Select
+            value={value ?? '__none__'}
+            onValueChange={(v) => onChange(v === '__none__' ? null : v)}
+          >
+            <SelectTrigger className="flex-1 min-w-0">
+              <SelectValue placeholder="Select a script…" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__" disabled={!allowNone}>
+                {allowNone ? noneLabel : 'Select a script…'}
+              </SelectItem>
+              {scripts.map((s) => (
+                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {selected && (
+            <Button
+              type="button" variant="outline" size="icon"
+              className="h-9 w-9 shrink-0"
+              onClick={() => onEdit(selected)}
+              title={`Open "${selected.name}" in the editor`}
+            >
+              <Pencil className="h-4 w-4" />
+            </Button>
+          )}
+          <Button
+            type="button" variant="outline" size="icon"
+            className="h-9 w-9 shrink-0"
+            onClick={onRecord}
+            title={recordLabel}
+          >
+            <Plus className="h-4 w-4" />
+          </Button>
+          {/* Deleting lives here because this page is the script's only
+              home — they're hidden from the Scripts list, so there was
+              nowhere else to remove one from. */}
+          {selected && onDelete && (
+            <Button
+              type="button" variant="ghost" size="icon"
+              className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
+              onClick={() => onDelete(selected)}
+              title={`Delete "${selected.name}"`}
+            >
+              <Trash2 className="h-4 w-4" />
+            </Button>
+          )}
+        </div>
+      )}
+    </Field>
+  );
 }
 
 function formatRelative(iso: string | null): string {
@@ -106,11 +290,56 @@ export default function EditLoginPage() {
   // The credentials editor below tracks proposed values that haven't
   // been submitted yet; users click "Update credentials" explicitly to
   // commit.
+  // `scripts` = the 'login' pool (auto-login slot). `verifyScripts` = the
+  // 'login_verify' pool. Separate because each slot offers only its own kind.
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
+  const [verifyScripts, setVerifyScripts] = useState<BrowserScript[]>([]);
   const [scriptId, setScriptId] = useState<string | null>(null);
-  const [credEntries, setCredEntries] = useState<{ key: string; value: string; reveal: boolean }[]>([]);
+  // Credential KEYS are no longer typed by hand — they're the login script's
+  // declared inputs. `storedCredKeys` is what's actually on file (names only,
+  // never values) so each row can show Set / Not set. `credDrafts` holds
+  // values the operator has typed but not yet submitted.
+  const [storedCredKeys, setStoredCredKeys] = useState<string[]>([]);
+  const [credDrafts, setCredDrafts] = useState<Record<string, string>>({});
+  const [revealedCred, setRevealedCred] = useState<Record<string, boolean>>({});
   const [savingCreds, setSavingCreds] = useState(false);
   const [recordModalOpen, setRecordModalOpen] = useState(false);
+  const [recordVerifyModalOpen, setRecordVerifyModalOpen] = useState(false);
+  // Login scripts are no longer listed on the general Scripts page — this
+  // login IS their home, so the page has to be able to open one for editing.
+  const [editScript, setEditScript] = useState<BrowserScript | null>(null);
+  // Verify scripts can't simply be deleted: verify_script_id is NOT NULL, so
+  // Postgres refuses while a login points at one. Deleting therefore means
+  // REPLACING — this holds the script on its way out plus the chosen stand-in.
+  const [verifyToDelete, setVerifyToDelete] = useState<BrowserScript | null>(null);
+  const [verifyReplacementId, setVerifyReplacementId] = useState<string | null>(null);
+  const [tab, setTab] = useState<'setup' | 'runs' | 'access'>('setup');
+  const [editingName, setEditingName] = useState(false);
+
+  // ── TOTP (authenticator 2FA) state ───────────────────────────────
+  // Same write-only model as credentials: the seed goes up once and is
+  // never echoed back. `totpPreview` holds a CURRENT code fetched from the
+  // server (never the seed) so the operator can compare it against their
+  // phone and know immediately that enrollment worked — otherwise the
+  // first signal of a mistyped key is a failed agent run hours later.
+  const [totpInput, setTotpInput] = useState('');
+  const [savingTotp, setSavingTotp] = useState(false);
+  const [totpPreview, setTotpPreview] = useState<TotpPreview | null>(null);
+  const [totpPreviewLoading, setTotpPreviewLoading] = useState(false);
+  // QR capture. A TOTP QR encodes exactly the otpauth:// URI, so every
+  // capture path (paste, drop, file picker, camera) decodes to the same
+  // string the operator could have typed — and enrolls through the same
+  // endpoint. `decodingQr` covers the image paths, which are fast but not
+  // instant on a large screenshot.
+  const [decodingQr, setDecodingQr] = useState(false);
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [canUseCamera, setCanUseCamera] = useState(false);
+  const totpFileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Camera availability is a client-only check (getUserMedia + secure
+  // context), so it has to happen after mount or SSR and the client render
+  // disagree. Hiding the button beats offering one that always fails.
+  useEffect(() => { setCanUseCamera(cameraSupported()); }, []);
 
   // Slack channel override for this login profile. Empty string =
   // "no override; fall through to program / org-default cascade".
@@ -387,24 +616,34 @@ export default function EditLoginPage() {
         });
         return;
       }
-      const [loginData, groups, loginGroups, scriptsData] = await Promise.all([
+      // The two slots draw from different pools now (migration 283): the
+      // auto-login picker offers only 'login' scripts, the verify picker
+      // only 'login_verify'. Fetched separately rather than one list
+      // filtered client-side so each picker can't drift from the server's
+      // definition of what belongs in it.
+      const [loginData, groups, loginGroups, loginScriptsData, verifyScriptsData, credKeys] = await Promise.all([
         getLogin(selectedOrgId, id),
         getAgentAccessGroups(selectedOrgId),
         getLoginAccessGroups(selectedOrgId, id),
-        listScripts(selectedOrgId).catch(() => ({ scripts: [] as BrowserScript[] })),
+        listScripts(selectedOrgId, { kinds: ['login'] }).catch(() => ({ scripts: [] as BrowserScript[] })),
+        listScripts(selectedOrgId, { kinds: ['login_verify'] }).catch(() => ({ scripts: [] as BrowserScript[] })),
+        getLoginCredentialKeys(selectedOrgId, id).catch(() => [] as string[]),
       ]);
       setLogin(loginData);
       setForm({ name: loginData.name, url: loginData.url, verify_script_id: loginData.verify_script_id ?? null });
       setAllGroups(groups);
       setLoginGroupIds(loginGroups.map((g) => g.id));
-      setScripts(scriptsData.scripts ?? []);
+      setScripts(loginScriptsData.scripts ?? []);
+      setVerifyScripts(verifyScriptsData.scripts ?? []);
+      setStoredCredKeys(credKeys);
       setScriptId(loginData.auto_login_script_id ?? null);
       setSlackChannelId(loginData.notification_slack_channel_id ?? '');
-      // Reset credentials editor on initial / explicit reload — we never
-      // display existing values (encrypted), so the editor always starts
-      // blank. SSE-driven silent refreshes skip this so half-typed entries
-      // aren't wiped.
-      setCredEntries([]);
+      // Reset the credential drafts on initial / explicit reload — we never
+      // display existing values (encrypted), so every field starts blank.
+      // SSE-driven silent refreshes skip this so half-typed entries aren't
+      // wiped mid-edit.
+      setCredDrafts({});
+      setRevealedCred({});
     } catch {
       if (!silent) toast.error('Failed to load login');
     } finally {
@@ -495,31 +734,121 @@ export default function EditLoginPage() {
   };
 
   /**
-   * Commit credentials separately from the main save. Reasoning: we
-   * never display existing values, so a "form dirty?" check is impossible
-   * for credentials — every save would overwrite. Forcing a dedicated
-   * button makes the overwrite intentional. Empty entries are stripped
-   * (key must be non-blank); zero valid entries is a no-op with a toast.
+   * The credential KEYS this login needs — the declared inputs of its
+   * linked login script, minus engine-supplied reserved names ({{_totp}}
+   * comes from the 2FA enrollment, not from credentials).
+   *
+   * Derived rather than hand-typed so a key can't be misspelled into a
+   * value that silently substitutes blank at runtime — historically the
+   * single most common auto-login failure.
+   */
+  const linkedLoginScript = scripts.find((s) => s.id === scriptId) ?? null;
+
+  /**
+   * The login profile's `url` is no longer something operators should
+   * maintain by hand — the scripts define the flow. It can't be dropped
+   * outright though: the MANUAL (HITL) login path calls
+   * navigateWorkerRun(logId, login.url) to open the operator's browser
+   * somewhere, so an empty url means a blank window and a stuck human.
+   *
+   * So: derive it from the login script's first `navigate` step and keep the
+   * field as a rarely-touched override. Same value, no upkeep.
+   */
+  const scriptStartUrl = useMemo(() => {
+    const nav = (linkedLoginScript?.steps ?? []).find(
+      (s: any) => s?.action === 'navigate' && typeof s?.url === 'string' && s.url.trim(),
+    ) as { url?: string } | undefined;
+    return nav?.url?.trim() ?? null;
+  }, [linkedLoginScript]);
+
+  /**
+   * Keep the manual-login URL in step with the linked script.
+   *
+   * Adopts the script's start URL when the field is empty, AND whenever the
+   * operator switches to a DIFFERENT script — the old value belonged to the
+   * old script, so carrying it over would silently point manual logins at
+   * the wrong site.
+   *
+   * It does NOT re-stomp on every render, so a deliberate edit sticks: a
+   * script's first navigate is sometimes a deep link the automation can hit
+   * but a human shouldn't start from. The "Use script's URL" action re-syncs
+   * on demand after such an edit.
+   */
+  const lastScriptForUrlRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const previous = lastScriptForUrlRef.current;
+    const switchedScript = previous !== undefined && previous !== scriptId;
+    lastScriptForUrlRef.current = scriptId;
+    if (!scriptStartUrl) return;
+    setForm((f) => (switchedScript || !f.url.trim() ? { ...f, url: scriptStartUrl } : f));
+  }, [scriptStartUrl, scriptId]);
+  const requiredCredKeys = useMemo(() => {
+    const declared = Object.keys(linkedLoginScript?.parameters ?? {});
+    return declared.filter((k) => !isReservedParam(k));
+  }, [linkedLoginScript]);
+
+  /**
+   * Keys that are stored but no longer referenced by the script — usually
+   * left behind after the script was re-recorded. Surfaced so they can be
+   * removed rather than sitting encrypted and forgotten.
+   */
+  const orphanCredKeys = useMemo(
+    () => storedCredKeys.filter((k) => !requiredCredKeys.includes(k)),
+    [storedCredKeys, requiredCredKeys],
+  );
+
+  /**
+   * Commit credential values. Submits ONLY the keys the operator actually
+   * typed into — the backend merges, so untouched keys keep their stored
+   * values. That's what makes "change just the password" possible when the
+   * API can never show us the username.
    */
   const handleSaveCredentials = async () => {
     if (!selectedOrgId || !id) return;
     const credentials: Record<string, string> = {};
-    for (const e of credEntries) {
-      const k = e.key.trim();
-      if (k) credentials[k] = e.value;
+    for (const [k, v] of Object.entries(credDrafts)) {
+      if (v.trim() === '') continue;   // blank = leave as-is (see api docs)
+      credentials[k] = v;
     }
     if (Object.keys(credentials).length === 0) {
-      toast.error('Add at least one credential key + value first');
+      toast.error('Enter a value for at least one credential first');
       return;
     }
     setSavingCreds(true);
     try {
       const updated = await setLoginCredentials(selectedOrgId, id, credentials);
       setLogin(updated);
-      setCredEntries([]); // clear editor — values are now encrypted server-side
-      toast.success('Credentials saved');
+      setCredDrafts({});      // values are encrypted server-side now
+      setRevealedCred({});
+      setStoredCredKeys(await getLoginCredentialKeys(selectedOrgId, id).catch(() => storedCredKeys));
+      toast.success(`Saved ${Object.keys(credentials).length} credential(s)`);
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to save credentials');
+    } finally {
+      setSavingCreds(false);
+    }
+  };
+
+  /** Remove a single stored credential (blank-means-unchanged on save, so
+   *  clearing one needs its own explicit action). */
+  const handleRemoveCredentialKey = async (key: string) => {
+    if (!selectedOrgId || !id) return;
+    const ok = await confirm({
+      title: `Remove "${key}"?`,
+      description: 'The stored value is deleted. Any script step using it will fill blank until you set it again.',
+      confirmText: 'Remove',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setSavingCreds(true);
+    try {
+      const updated = await deleteLoginCredentialKey(selectedOrgId, id, key);
+      setLogin(updated);
+      setCredDrafts((p) => { const n = { ...p }; delete n[key]; return n; });
+      setStoredCredKeys(await getLoginCredentialKeys(selectedOrgId, id).catch(() => storedCredKeys.filter((k) => k !== key)));
+      toast.success(`Removed "${key}"`);
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to remove credential');
     } finally {
       setSavingCreds(false);
     }
@@ -573,12 +902,212 @@ export default function EditLoginPage() {
     try {
       const updated = await clearLoginCredentials(selectedOrgId, id);
       setLogin(updated);
-      setCredEntries([]);
+      setCredDrafts({});
+      setRevealedCred({});
+      setStoredCredKeys([]);
       toast.success('Credentials removed');
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to remove credentials');
     } finally {
       setSavingCreds(false);
+    }
+  };
+
+  /**
+   * Fetch the current code from the server. Deliberately server-computed so
+   * the seed never reaches the browser. Silent on failure — this is polled
+   * on a timer, and a toast per tick would be unusable.
+   */
+  const refreshTotpPreview = useCallback(async (opts?: { silent?: boolean }) => {
+    if (!selectedOrgId || !id) return;
+    if (!opts?.silent) setTotpPreviewLoading(true);
+    try {
+      setTotpPreview(await previewLoginTotp(selectedOrgId, id));
+    } catch {
+      setTotpPreview(null);
+    } finally {
+      if (!opts?.silent) setTotpPreviewLoading(false);
+    }
+  }, [selectedOrgId, id]);
+
+  /**
+   * Local countdown. Ticks the displayed seconds down once a second and
+   * re-fetches from the server when the window rolls, so the operator sees
+   * the code change in step with their authenticator app rather than a
+   * frozen number that silently goes wrong.
+   */
+  // Depends only on "is 2FA enrolled", NOT on totpPreview — the functional
+  // updater reads the latest value, so the interval is created once and left
+  // alone. Including totpPreview would tear down and recreate the timer on
+  // every tick, letting the countdown drift.
+  useEffect(() => {
+    if (!login?.totp_secret_id) return;
+    const timer = setInterval(() => {
+      setTotpPreview((prev) => {
+        if (!prev) return prev;
+        const next = prev.seconds_remaining - 1;
+        // Window rolled — pull the new code. Kicked off from inside the
+        // updater but harmless: refreshTotpPreview is async and only sets
+        // state once it resolves.
+        if (next <= 0) { void refreshTotpPreview({ silent: true }); return prev; }
+        return { ...prev, seconds_remaining: next };
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [login?.totp_secret_id, refreshTotpPreview]);
+
+  /** Load a preview whenever the login has 2FA enrolled. */
+  useEffect(() => {
+    if (login?.totp_secret_id) void refreshTotpPreview({ silent: true });
+    else setTotpPreview(null);
+  }, [login?.totp_secret_id, refreshTotpPreview]);
+
+  /**
+   * Enroll straight from a decoded QR, bypassing the text box.
+   *
+   * Deliberately does NOT round-trip the seed through `totpInput`: putting a
+   * scanned secret into React state leaves it sitting in a DOM input (and in
+   * any devtools inspection of the tree) long after it's been stored. Decode
+   * → submit → forget.
+   */
+  const enrollFromQrText = async (text: string) => {
+    if (!selectedOrgId || !id) return;
+    setSavingTotp(true);
+    try {
+      const updated = await setLoginTotp(selectedOrgId, id, text);
+      setLogin(updated);
+      setTotpInput('');
+      await refreshTotpPreview();
+      toast.success('2FA enrolled from QR — check the last 3 digits match your authenticator app');
+    } catch (err: any) {
+      // Most likely cause of a failure here: the QR decoded fine but wasn't
+      // an otpauth:// code (a WiFi QR, a link). The backend message says so.
+      toast.error(err.response?.data?.error || 'That QR code is not a 2FA setup code');
+    } finally {
+      setSavingTotp(false);
+    }
+  };
+
+  /** Decode an image (pasted, dropped, or picked) and enroll from it. */
+  const handleQrImage = async (file: Blob) => {
+    setDecodingQr(true);
+    try {
+      const text = await decodeQrFromFile(file);
+      if (!text) {
+        toast.error('No QR code found in that image — try a tighter crop or a larger screenshot');
+        return;
+      }
+      await enrollFromQrText(text);
+    } catch {
+      toast.error('Could not read that image');
+    } finally {
+      setDecodingQr(false);
+    }
+  };
+
+  const handleSaveTotp = async () => {
+    if (!selectedOrgId || !id) return;
+    const input = totpInput.trim();
+    if (!input) {
+      toast.error('Paste the setup key, or scan the QR code');
+      return;
+    }
+    setSavingTotp(true);
+    try {
+      const updated = await setLoginTotp(selectedOrgId, id, input);
+      setLogin(updated);
+      // Clear immediately — leaving a seed sitting in a DOM input after
+      // it's been stored is a needless exposure.
+      setTotpInput('');
+      await refreshTotpPreview();
+      toast.success('2FA enrolled — check the last 3 digits match your authenticator app');
+    } catch (err: any) {
+      // The backend returns a 400 whose message names the actual problem
+      // (bad base32 char, HOTP URI, missing secret). Surface it verbatim —
+      // it's the actionable part.
+      toast.error(err.response?.data?.error || 'Failed to store the 2FA secret');
+    } finally {
+      setSavingTotp(false);
+    }
+  };
+
+  const handleClearTotp = async () => {
+    if (!selectedOrgId || !id) return;
+    const ok = await confirm({
+      title: 'Remove 2FA enrollment?',
+      description: 'Scripts using {{_totp}} will fill blank and 2FA-protected logins will fall back to manual login until you re-enroll.',
+      confirmText: 'Remove',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setSavingTotp(true);
+    try {
+      const updated = await clearLoginTotp(selectedOrgId, id);
+      setLogin(updated);
+      setTotpPreview(null);
+      setTotpInput('');
+      toast.success('2FA enrollment removed');
+    } catch (err: any) {
+      toast.error(err.response?.data?.error || 'Failed to remove 2FA enrollment');
+    } finally {
+      setSavingTotp(false);
+    }
+  };
+
+
+  /**
+   * Delete the login script from the login that owns it.
+   *
+   * Order matters: agent_logins holds an FK to the script, so the delete is
+   * REFUSED while this login still points at it. Unlink first, persist that,
+   * then delete — the other order produces a confusing FK error on a button
+   * that looks like it should just work.
+   *
+   * Only the LOGIN slot gets this. verify_script_id is a required column
+   * (the API rejects null), so a linked verify script genuinely cannot be
+   * removed — record or pick a replacement first, then delete the orphan
+   * from the Scripts list with "Show login scripts" enabled.
+   */
+  const handleDeleteScript = async (target: BrowserScript) => {
+    if (!selectedOrgId || !id) return;
+    const ok = await confirm({
+      title: `Delete "${target.name}"?`,
+      description: 'This login falls back to manual sign-in until you set another. The script is deleted permanently.',
+      confirmText: 'Delete',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    try {
+      await updateLogin(selectedOrgId, id, { auto_login_script_id: null });
+      await deleteScript(selectedOrgId, target.id);
+      setScriptId(null);
+      setScripts((prev) => prev.filter((x) => x.id !== target.id));
+      toast.success(`Deleted "${target.name}"`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to delete the script');
+    }
+  };
+
+  /**
+   * Swap the login onto a different verify script, then delete the old one.
+   *
+   * Order is forced by the schema: verify_script_id is required and its FK is
+   * ON DELETE RESTRICT, so the replacement must be persisted BEFORE the old
+   * script can go. Doing it the other way round just earns a 409.
+   */
+  const handleReplaceAndDeleteVerify = async () => {
+    if (!selectedOrgId || !id || !verifyToDelete || !verifyReplacementId) return;
+    const doomed = verifyToDelete;
+    try {
+      await updateLogin(selectedOrgId, id, { verify_script_id: verifyReplacementId });
+      await deleteScript(selectedOrgId, doomed.id);
+      setForm((f) => ({ ...f, verify_script_id: verifyReplacementId }));
+      setVerifyScripts((prev) => prev.filter((x) => x.id !== doomed.id));
+      setVerifyToDelete(null);
+      setVerifyReplacementId(null);
+      toast.success(`Replaced and deleted "${doomed.name}"`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to replace the verify script');
     }
   };
 
@@ -717,20 +1246,59 @@ export default function EditLoginPage() {
   const needsLogin = login.status === 'needs_login';
 
   return (
+    // Radix tooltips need a Provider in scope; there isn't a global one, so
+    // it's scoped to this page. delayDuration 200 — these are ⓘ affordances
+    // the operator points at deliberately, not accidental hovers.
+    <TooltipProvider delayDuration={200}>
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <LogIn className="h-5 w-5 text-brand" /> {login.name}
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Edit login profile</p>
+      {/* Header — the name is edited here rather than in a form field below.
+          It's the page's title, so a separate "Name" input just duplicated
+          it. Renders as plain heading text with an edit button; the input
+          chrome only appears once you're actually editing, so the page
+          isn't carrying a permanent box around its own title. */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-center gap-2 min-w-0 flex-1">
+          <LogIn className="h-5 w-5 text-brand shrink-0" />
+          {editingName ? (
+            <Input
+              autoFocus
+              value={form.name}
+              onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
+              onBlur={() => setEditingName(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') { e.preventDefault(); setEditingName(false); }
+                // Escape abandons the edit and restores the saved name.
+                if (e.key === 'Escape') {
+                  setForm((f) => ({ ...f, name: login.name }));
+                  setEditingName(false);
+                }
+              }}
+              placeholder="Login name"
+              aria-label="Login name"
+              className={cn(
+                'text-2xl font-bold tracking-tight h-auto py-0.5 px-2 min-w-0',
+                !form.name.trim() && 'border-destructive focus-visible:ring-destructive/30',
+              )}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setEditingName(true)}
+              className="group flex items-center gap-2 min-w-0 text-left rounded px-1 -mx-1 hover:bg-muted/40 transition-colors"
+              title="Rename this login"
+            >
+              <h1 className="text-2xl font-bold tracking-tight truncate">
+                {form.name || <span className="text-muted-foreground font-normal italic">Unnamed login</span>}
+              </h1>
+              <Pencil className="h-3.5 w-3.5 shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />
+            </button>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           <Button variant="outline" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
             <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.url.trim() || !form.verify_script_id}>
+          <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.verify_script_id}>
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Save className="h-3.5 w-3.5 mr-1" />}
             Save
           </Button>
@@ -740,15 +1308,15 @@ export default function EditLoginPage() {
       {/* Status + actions card */}
       <Card>
         <CardContent className="py-2 px-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex items-center gap-3 flex-wrap">
               <StatusPill status={login.status} />
               <span className="text-xs text-muted-foreground">
-                Last checked: {formatRelative(login.last_checked_at)}
+                Checked {formatRelative(login.last_checked_at)}
               </span>
               {login.last_logged_in_at && (
                 <span className="text-xs text-muted-foreground">
-                  Last login: {formatRelative(login.last_logged_in_at)}
+                  · Logged in {formatRelative(login.last_logged_in_at)}
                 </span>
               )}
             </div>
@@ -831,31 +1399,38 @@ export default function EditLoginPage() {
         </CardContent>
       </Card>
 
-      {/* Form */}
-      <Card>
-        <CardContent className="py-3 px-5">
-          <LoginFormBody
-            form={form}
-            setForm={setForm}
-            verifyScriptOptions={scripts.map((s) => ({ id: s.id, name: s.name }))}
-          />
-        </CardContent>
-      </Card>
+      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="space-y-3">
+        {/* Equal min-width on every trigger so the pill group doesn't
+            resize as labels change length — a ragged tab bar is the first
+            thing that makes a page look unfinished. */}
+        <TabsList className="h-10">
+          <TabsTrigger value="setup" className="min-w-[128px] gap-1.5">
+            <Settings2 className="h-3.5 w-3.5" /> Setup
+          </TabsTrigger>
+          <TabsTrigger value="runs" className="min-w-[128px] gap-1.5">
+            <History className="h-3.5 w-3.5" /> Runs
+          </TabsTrigger>
+          {/* Both things on this tab answer "who handles it when this login
+              needs a human" — the groups allowed to act, and where the ping
+              goes. "Handoff" names that rather than listing the two widgets. */}
+          <TabsTrigger value="access" className="min-w-[128px] gap-1.5">
+            <Users className="h-3.5 w-3.5" /> Handoff
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Automate Login */}
+        <TabsContent value="setup" className="space-y-3 mt-0">
+
+      {/* Login */}
       <Card>
-        <CardContent className="py-3 px-5 space-y-4">
+        <CardContent className="py-3 px-5 space-y-3">
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-0.5">
               <Label className="flex items-center gap-1.5">
                 <Sparkles className="h-3.5 w-3.5 text-brand" />
-                Automate login (optional)
+                Login
               </Label>
               <p className="text-xs text-muted-foreground max-w-2xl">
-                When verify fails, the agent will try the linked browser script with the stored
-                credentials before falling through to manual login. Requires <strong>both</strong> a
-                script and credentials to be configured. 2FA-protected sites should leave this
-                unconfigured — they still fall through to manual login as today.
+Agents sign in unattended when the script and its values are set.
               </p>
             </div>
             {/* Status badges at a glance + test button. Test is only
@@ -875,6 +1450,14 @@ export default function EditLoginPage() {
                 </Badge>
               ) : (
                 <Badge variant="neutral" className="gap-1 text-[10px]">No credentials</Badge>
+              )}
+              {/* Only shown once enrolled — an explicit "No 2FA" badge would
+                  read as a warning on the overwhelming majority of logins
+                  that legitimately don't have 2FA at all. */}
+              {login.totp_secret_id && (
+                <Badge variant="success" className="gap-1 text-[10px]">
+                  <ShieldCheck className="h-2.5 w-2.5" /> 2FA enrolled
+                </Badge>
               )}
               {/* Test Auto-Login button intentionally hidden from
                   operators. Runs a synthetic verify → auto-login →
@@ -931,140 +1514,412 @@ export default function EditLoginPage() {
             </div>
           )}
 
-          {/* Script picker + inline record */}
-          <div className="space-y-1.5">
-            <Label className="text-xs">Browser script</Label>
-            <div className="flex items-center gap-2">
-              <Select
-                value={scriptId ?? '__none__'}
-                onValueChange={(v) => setScriptId(v === '__none__' ? null : v)}
-              >
-                <SelectTrigger className="flex-1">
-                  <SelectValue placeholder="Select a script…" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none__">— None (HITL only) —</SelectItem>
-                  {scripts.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {/* Inline record: opens the existing RunScriptModal in record
-                  mode, pre-seeded with the login URL so the operator lands
-                  on the right page to record the flow. On save, the new
-                  script auto-links to this login. */}
-              <Button
+          {/* Manual login URL — first field. Auto-filled from the login
+              script's first navigate step, so it's normally untouched, but
+              it can't be dropped: the manual (HITL) path navigates the
+              operator's browser here and an empty value means a blank
+              window and a stuck human. */}
+          <Field
+            label="Login URL"
+            action={scriptStartUrl && form.url !== scriptStartUrl ? (
+              <button
                 type="button"
-                variant="outline"
-                size="icon"
-                className="h-9 w-9 shrink-0"
-                onClick={() => setRecordModalOpen(true)}
-                title="Record a new login script"
+                onClick={() => setForm((f) => ({ ...f, url: scriptStartUrl }))}
+                className="text-[10px] text-brand hover:underline"
               >
-                <Plus className="h-4 w-4" />
-              </Button>
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              The script should fill the login form and submit. Use{' '}
-              <code className="font-mono">{'{{username}}'}</code>,{' '}
-              <code className="font-mono">{'{{password}}'}</code> (or any keys you set in credentials
-              below) as variables — they get substituted with the encrypted values at runtime.
-            </p>
-          </div>
+                Use script&apos;s URL
+              </button>
+            ) : undefined}
+            info="Where a manual login opens in the browser. Agents never use this — they follow the login script. Auto-filled from the script's first navigate step."
+          >
+            <Input
+              value={form.url}
+              onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
+              placeholder="https://app.example.com/login"
+              className={cn('font-mono text-xs', CONTROL_W)}
+            />
+          </Field>
 
-          {/* Credentials key-value editor */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between">
-              <Label className="text-xs">Credentials</Label>
-              {login.credentials_secret_id && (
-                <button
-                  type="button"
-                  onClick={handleClearCredentials}
-                  disabled={savingCreds}
-                  className="text-[10px] text-destructive hover:underline disabled:opacity-50"
-                >
-                  Remove stored credentials
-                </button>
-              )}
-            </div>
-            <p className="text-[10px] text-muted-foreground">
-              {login.credentials_secret_id
-                ? 'Credentials are on file. Stored values are not shown — enter new keys + values below and click "Update credentials" to replace them.'
-                : 'Add key-value pairs the script will receive as parameters. Stored encrypted at rest; never echoed back by the API.'}
-            </p>
-            <div className="space-y-1.5">
-              {credEntries.map((e, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <Input
-                    placeholder="key (e.g. username)"
-                    value={e.key}
-                    onChange={(ev) => setCredEntries((prev) => prev.map((p, idx) => idx === i ? { ...p, key: ev.target.value } : p))}
-                    className="flex-1 font-mono text-xs"
-                  />
-                  <Input
-                    type={e.reveal ? 'text' : 'password'}
-                    placeholder="value"
-                    value={e.value}
-                    onChange={(ev) => setCredEntries((prev) => prev.map((p, idx) => idx === i ? { ...p, value: ev.target.value } : p))}
-                    className="flex-1 font-mono text-xs"
-                    autoComplete="off"
-                  />
-                  <Button
+          {/* Script slot. With no login scripts in the org there's nothing
+              to choose from, so the dropdown is suppressed entirely and
+              recording is the only offered action — an empty select reads
+              as "something is broken" rather than "nothing exists yet". */}
+          <ScriptSlot
+            label="Login script"
+            info={<>Fills the sign-in form and submits. Every <code className="font-mono">{'{{variable}}'}</code> it declares becomes a credential below, stored encrypted.</>}
+            scripts={scripts}
+            value={scriptId}
+            onChange={setScriptId}
+            onRecord={() => setRecordModalOpen(true)}
+            onEdit={(s) => setEditScript(s)}
+            onDelete={handleDeleteScript}
+            recordLabel="Record login script"
+            emptyHint="Record the sign-in once; agents replay it."
+            allowNone
+            noneLabel="— None (manual login only) —"
+          />
+
+          {/* Credentials — rows derived from the login script's inputs.
+              Keys are no longer typed by hand: a misspelled key used to
+              substitute blank at runtime with no visible cause, which was
+              the most common auto-login failure. The script declares what
+              it needs; this just fills in the values. */}
+          {/* Nested under the script row, with a left accent, because these
+              keys ARE the script's variables — the relationship is shown
+              rather than explained. */}
+          {scriptId && (
+          <FieldNest>
+            <div className="rounded-md border border-l-2 border-l-brand/40 bg-muted/20 px-3 py-2 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[10px] text-muted-foreground">
+                  {requiredCredKeys.length > 0
+                    ? <>Variables from <span className="font-mono">{linkedLoginScript?.name}</span> — encrypted, never shown again</>
+                    : <><span className="font-mono">{linkedLoginScript?.name}</span> declares no <code className="font-mono">{'{{variables}}'}</code> yet</>}
+                </span>
+                {login.credentials_secret_id && (
+                  <button
                     type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    onClick={() => setCredEntries((prev) => prev.map((p, idx) => idx === i ? { ...p, reveal: !p.reveal } : p))}
-                    title={e.reveal ? 'Hide' : 'Show'}
+                    onClick={handleClearCredentials}
+                    disabled={savingCreds}
+                    className="text-[10px] text-destructive hover:underline disabled:opacity-50 shrink-0"
                   >
-                    {e.reveal ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                  </Button>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-8 w-8 shrink-0"
-                    onClick={() => setCredEntries((prev) => prev.filter((_, idx) => idx !== i))}
-                    title="Remove this entry"
-                  >
-                    <XIcon className="h-3.5 w-3.5" />
-                  </Button>
+                    Remove all
+                  </button>
+                )}
+              </div>
+
+              {requiredCredKeys.map((key) => {
+                const isSet = storedCredKeys.includes(key);
+                const draft = credDrafts[key] ?? '';
+                return (
+                  <div key={key} className="flex items-center gap-2">
+                    {/* Key is fixed — it comes from the script. */}
+                    <code
+                      className="font-mono text-xs w-36 shrink-0 truncate text-purple-500 dark:text-purple-400"
+                      title={`{{${key}}}`}
+                    >
+                      {key}
+                    </code>
+                    <Input
+                      type={revealedCred[key] ? 'text' : 'password'}
+                      placeholder={isSet ? '•••••••• (unchanged)' : 'Enter value'}
+                      value={draft}
+                      onChange={(ev) => setCredDrafts((p) => ({ ...p, [key]: ev.target.value }))}
+                      className={cn('flex-1 min-w-0 font-mono text-xs h-8', CONTROL_W)}
+                      autoComplete="off"
+                    />
+                    <Badge
+                      variant={isSet ? 'success' : 'neutral'}
+                      className="gap-1 text-[9px] shrink-0"
+                    >
+                      {isSet ? <CheckCircle2 className="h-2 w-2" /> : null}
+                      {isSet ? 'Set' : 'Not set'}
+                    </Badge>
+                    {/* No per-key delete. These keys are declared by the login
+                        script, so clearing one doesn't remove a field — it
+                        leaves the script filling BLANK at that step, which
+                        fails the login with no visible cause. Values can be
+                        overwritten; the key set belongs to the script. */}
+                    <Button
+                      type="button" variant="ghost" size="icon"
+                      className="h-8 w-8 shrink-0"
+                      onClick={() => setRevealedCred((p) => ({ ...p, [key]: !p[key] }))}
+                      title={revealedCred[key] ? 'Hide' : 'Show what you typed'}
+                    >
+                      {revealedCred[key] ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+                    </Button>
+                  </div>
+                );
+              })}
+
+              {/* Stored keys the script no longer references — usually left
+                  over from a re-record. Read-only: the only useful action is
+                  to delete them. */}
+              {orphanCredKeys.length > 0 && (
+                <div className="rounded-md border border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20 px-2.5 py-2 space-y-1.5">
+                  <p className="text-[10px] text-amber-700 dark:text-amber-400">
+                    Stored but no longer used by{' '}
+                    <span className="font-mono">{linkedLoginScript?.name ?? 'the linked script'}</span>:
+                  </p>
+                  {orphanCredKeys.map((key) => (
+                    <div key={key} className="flex items-center gap-2">
+                      <code className="font-mono text-xs flex-1 truncate">{key}</code>
+                      <Button
+                        type="button" variant="ghost" size="sm"
+                        className="h-6 text-[10px]"
+                        onClick={() => handleRemoveCredentialKey(key)}
+                        disabled={savingCreds}
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
                 </div>
-              ))}
-              <div className="flex items-center gap-2 pt-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setCredEntries((prev) => [...prev, { key: '', value: '', reveal: false }])}
-                >
-                  <Plus className="h-3.5 w-3.5 mr-1" />
-                  Add credential
-                </Button>
-                {credEntries.length > 0 && (
+              )}
+
+              {requiredCredKeys.length > 0 && (
+                <div className="flex items-center gap-2 pt-1">
                   <Button
                     type="button"
                     size="sm"
                     onClick={handleSaveCredentials}
-                    disabled={savingCreds || credEntries.every((e) => !e.key.trim())}
+                    disabled={savingCreds || Object.values(credDrafts).every((v) => !v.trim())}
                   >
                     {savingCreds ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <KeyRound className="h-3.5 w-3.5 mr-1" />}
-                    Update credentials
+                    Save
                   </Button>
-                )}
-              </div>
+                  {requiredCredKeys.some((k) => !storedCredKeys.includes(k)) && (
+                    <span className="text-[10px] text-amber-600 dark:text-amber-500">
+                      {requiredCredKeys.filter((k) => !storedCredKeys.includes(k)).length} unset — those
+                      fields will fill blank.
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
+          </FieldNest>
+          )}
+
+          {/* Two-factor (TOTP) enrollment */}
+          <div className="border-t pt-3">
+          <Field
+            label="Two-factor"
+            action={login.totp_secret_id ? (
+              <button
+                type="button"
+                onClick={handleClearTotp}
+                disabled={savingTotp}
+                className="text-[10px] text-destructive hover:underline disabled:opacity-50 shrink-0"
+              >
+                Remove
+              </button>
+            ) : undefined}
+            info={<>Paste the setup key from the site&apos;s 2FA screen (use its &ldquo;can&apos;t scan the QR code?&rdquo; option), scan the QR, or import from your authenticator app&apos;s export QR. The login script then references <code className="font-mono">{'{{_totp}}'}</code>.</>}
+          >
+            {/* ENROLLED and NOT-ENROLLED are mutually exclusive states, not a
+                form with extra bits shown. Once a secret is on file the only
+                sensible action is Remove — leaving the input, the scan/upload
+                buttons and the security warning on screen made a solved
+                problem look unsolved. Removing brings the capture UI back. */}
+            {!login.totp_secret_id && (
+              <>
+                {/* Storing the seed alongside the password means this account
+                    is effectively single-factor for automation. That is the
+                    point, but the operator should make the call knowingly
+                    rather than discover it in a post-incident review. Shown
+                    only here — it's a decision prompt, not a standing notice. */}
+                <p className="text-[10px] text-amber-600 dark:text-amber-500 leading-snug pb-1">
+                  Storing the secret lets this login run unattended, but the second factor no longer
+                  protects this account. Prefer a service account over a personal one.
+                </p>
+
+                {/* The field accepts a pasted or dropped QR IMAGE as well as
+                    text. Screenshot-and-paste is the fastest path in practice:
+                    the operator is already on the 2FA setup page, on the same
+                    screen, so pointing a webcam at their own monitor is the
+                    worse route. Camera is there for a QR on another device. */}
+                <div
+                  className={cn('flex items-center gap-2', CONTROL_W)}
+                  onDrop={(ev) => {
+                    const img = imageFromTransfer(ev.dataTransfer);
+                    if (!img) return;          // let a text drop behave normally
+                    ev.preventDefault();
+                    void handleQrImage(img);
+                  }}
+                  onDragOver={(ev) => {
+                    if (imageFromTransfer(ev.dataTransfer)) ev.preventDefault();
+                  }}
+                >
+                  <Input
+                    type="password"
+                    placeholder="Setup key, otpauth:// URI, or paste a QR screenshot"
+                    value={totpInput}
+                    onChange={(ev) => setTotpInput(ev.target.value)}
+                    className="flex-1 min-w-0 font-mono text-xs"
+                    autoComplete="off"
+                    spellCheck={false}
+                    onPaste={(ev) => {
+                      // An image on the clipboard is a QR screenshot; plain
+                      // text falls through to normal paste-the-key behaviour.
+                      const img = imageFromTransfer(ev.clipboardData);
+                      if (!img) return;
+                      ev.preventDefault();
+                      void handleQrImage(img);
+                    }}
+                    onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); void handleSaveTotp(); } }}
+                  />
+                  <Button
+                    type="button"
+                    size="sm"
+                    onClick={handleSaveTotp}
+                    disabled={savingTotp || decodingQr || !totpInput.trim()}
+                    className="shrink-0"
+                  >
+                    {savingTotp ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <ShieldCheck className="h-3.5 w-3.5 mr-1" />}
+                    Enroll
+                  </Button>
+                </div>
+
+                {/* QR capture row. Hidden file input rather than a visible one
+                    so the two affordances read as equals. */}
+                <div className="flex items-center gap-2 flex-wrap">
+                  {canUseCamera && (
+                    <Button
+                      type="button" variant="outline" size="sm" className="text-xs"
+                      onClick={() => setScannerOpen(true)}
+                      disabled={savingTotp || decodingQr}
+                    >
+                      <Camera className="h-3.5 w-3.5 mr-1" /> Scan with camera
+                    </Button>
+                  )}
+                  <Button
+                    type="button" variant="outline" size="sm" className="text-xs"
+                    onClick={() => totpFileInputRef.current?.click()}
+                    disabled={savingTotp || decodingQr}
+                  >
+                    {decodingQr
+                      ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
+                      : <ImageIcon className="h-3.5 w-3.5 mr-1" />}
+                    {decodingQr ? 'Reading QR…' : 'Upload QR image'}
+                  </Button>
+                  <input
+                    ref={totpFileInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={(ev) => {
+                      const file = ev.target.files?.[0];
+                      // Reset first so picking the SAME file twice re-fires.
+                      ev.target.value = '';
+                      if (file) void handleQrImage(file);
+                    }}
+                  />
+                  <span className="text-[10px] text-muted-foreground">
+                    …or paste / drop a screenshot of the QR into the field above.
+                  </span>
+                </div>
+              </>
+            )}
+
+            {/* Enrolled: variable name + a masked liveness check. Nothing to
+                configure, so nothing to configure is shown. */}
+            {login.totp_secret_id && (
+              <div className={cn('rounded-md border bg-muted/40 px-3 py-2 space-y-1.5', CONTROL_W)}>
+                {/* Lead with the VARIABLE NAME, mirroring how credentials
+                    show their key and how the script editor renders
+                    variables. The code below is proof the secret is right;
+                    this line is what you actually type into a script. */}
+                <div className="flex items-center gap-2">
+                  <code className="font-mono text-xs text-purple-500 dark:text-purple-400">
+                    {'{{_totp}}'}
+                  </code>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard?.writeText('{{_totp}}')
+                        .then(() => toast.success('Copied {{_totp}}'))
+                        .catch(() => toast.error('Could not copy'));
+                    }}
+                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                    title="Copy the variable name"
+                  >
+                    Copy
+                  </button>
+                  <span className="text-[10px] text-muted-foreground ml-auto">
+                    Use in the login script&apos;s 2FA step
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-3 border-t pt-1.5">
+                  {totpPreview ? (
+                    <>
+                      {/* Masked to the last 3 digits, and masked on the SERVER
+                          — the full code never reaches this browser. Enough to
+                          confirm the secret is right, not enough to sign in
+                          with. The code is for the script, not for a human. */}
+                      <code className="font-mono text-lg tracking-[0.25em] tabular-nums">
+                        <span className="text-muted-foreground/50" aria-hidden="true">
+                          {'•'.repeat(Math.max(0, (totpPreview.digits || 6) - totpPreview.code_suffix.length))}
+                        </span>
+                        <span>{totpPreview.code_suffix}</span>
+                        <span className="sr-only">
+                          Code ending in {totpPreview.code_suffix.split('').join(' ')}
+                        </span>
+                      </code>
+                      <div className="flex items-center gap-1.5 text-[10px] text-muted-foreground">
+                        <span className="tabular-nums">{totpPreview.seconds_remaining}s</span>
+                        {/* Countdown bar — cheap visual that the code is live
+                            rather than a stale render. */}
+                        <span className="h-1 w-16 rounded-full bg-muted-foreground/20 overflow-hidden">
+                          <span
+                            className="block h-full bg-brand transition-[width] duration-1000 ease-linear"
+                            style={{ width: `${Math.max(0, Math.min(100, (totpPreview.seconds_remaining / (totpPreview.period || 30)) * 100))}%` }}
+                          />
+                        </span>
+                      </div>
+                      <span className="text-[10px] text-muted-foreground ml-auto text-right">
+                        Last 3 match your app
+                        {totpPreview.account ? <> for <span className="font-mono">{totpPreview.account}</span></> : null}
+                      </span>
+                    </>
+                  ) : (
+                    <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                      {totpPreviewLoading
+                        ? <><Loader2 className="h-3 w-3 animate-spin" /> Checking…</>
+                        : <>
+                            <AlertCircle className="h-3 w-3 text-destructive" />
+                            Bad stored secret — re-enroll.
+                          </>}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </Field>
           </div>
+
         </CardContent>
       </Card>
 
+      {/* Verify Login */}
+      <Card>
+        <CardContent className="py-3 px-5 space-y-3">
+          <Label className="flex items-center gap-1.5">
+            <CheckCircle2 className="h-3.5 w-3.5 text-brand" />
+            Verify Login
+          </Label>
+          <ScriptSlot
+            label="Verify script"
+            required
+            info={<>Runs before every action to confirm the session is still signed in. Completing = signed in; any step failure or timeout = not signed in.<br /><br />Every login must have one, so this script can&apos;t be deleted while it&apos;s selected. To remove it, pick or record a replacement first, then delete the old one from <strong>Scripts</strong> with &ldquo;Show login scripts&rdquo; enabled.</>}
+            scripts={verifyScripts}
+            value={form.verify_script_id}
+            onChange={(v) => setForm((f) => ({ ...f, verify_script_id: v }))}
+            onRecord={() => setRecordVerifyModalOpen(true)}
+            onEdit={(s) => setEditScript(s)}
+            // "Delete" opens a replace-then-delete flow rather than a plain
+            // confirm: verify_script_id is NOT NULL with an ON DELETE
+            // RESTRICT FK, so the login must be pointed at a replacement
+            // before the old script can go.
+            onDelete={(s) => { setVerifyReplacementId(null); setVerifyToDelete(s); }}
+            recordLabel="Record verify script"
+            emptyHint="Open a page only a signed-in user can see."
+          />
+        </CardContent>
+      </Card>
+
+        </TabsContent>
+
+        <TabsContent value="access" className="space-y-3 mt-0">
+
       {/* Access groups */}
       <Card>
-        <CardContent className="py-3 px-5 space-y-2">
-          <Label>Access Groups</Label>
-          <p className="text-xs text-muted-foreground">
-            Controls who gets notified and who can complete this login when an agent pauses for HITL. Groups are shared across every agent that uses this login profile.
-          </p>
+        <CardContent className="py-3 px-5">
+          <Field
+            label="Access groups"
+            info="Who gets notified and who can complete this login when an agent pauses for a human. Shared across every agent that uses this login profile."
+          >
+          <div className={cn('space-y-2', CONTROL_W)}>
           <MultiSelectTags
             options={allGroups.map((g) => ({ value: g.id, label: `${g.name} (${g.member_count})` }))}
             selected={loginGroupIds}
@@ -1086,6 +1941,8 @@ export default function EditLoginPage() {
               </span>
             </div>
           )}
+          </div>
+          </Field>
         </CardContent>
       </Card>
 
@@ -1103,6 +1960,10 @@ export default function EditLoginPage() {
           />
         </CardContent>
       </Card>
+
+        </TabsContent>
+
+        <TabsContent value="runs" className="space-y-3 mt-0">
 
       {/* Recent run history — covers manual login/logout, verify, auto-login
           test, and the login action inside agent runs (linked back to the
@@ -1239,6 +2100,9 @@ export default function EditLoginPage() {
         </CardContent>
       </Card>
 
+        </TabsContent>
+      </Tabs>
+
       {/* Browser HITL dialog */}
       {activeSession && (
         <BrowserHITLDialog
@@ -1282,6 +2146,10 @@ export default function EditLoginPage() {
         open={recordModalOpen}
         onClose={() => setRecordModalOpen(false)}
         mode="record"
+        // Stamp it as a login script so it appears in this login's picker.
+        // Without this it would save as 'regular' and be invisible here.
+        recordKind="login"
+        ownerLoginId={id}
         onSaved={async () => {
           // Re-fetch scripts; pick the newest one (it was just created)
           // and auto-select it for this login. The operator can confirm
@@ -1289,7 +2157,9 @@ export default function EditLoginPage() {
           // linkage to the login profile.
           if (!selectedOrgId) return;
           try {
-            const data = await listScripts(selectedOrgId);
+            // Same 'login' pool the picker draws from — refetching unfiltered
+            // here would repopulate it with every script in the org.
+            const data = await listScripts(selectedOrgId, { kinds: ['login'] });
             const all = data.scripts ?? [];
             setScripts(all);
             // "Newest" = max created_at. Sorts the cached list and picks.
@@ -1305,6 +2175,145 @@ export default function EditLoginPage() {
           }
         }}
       />
+
+      {/* Replace-and-delete for the verify script.
+          A login must always have a verify script (verify_script_id is NOT
+          NULL, FK ON DELETE RESTRICT), so "delete" here really means
+          "swap, then delete". Confirm stays disabled until a replacement is
+          chosen — there is no valid state where the old one simply goes. */}
+      <Dialog
+        open={!!verifyToDelete}
+        onOpenChange={(v) => { if (!v) { setVerifyToDelete(null); setVerifyReplacementId(null); } }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Replace &ldquo;{verifyToDelete?.name}&rdquo;?</DialogTitle>
+            <DialogDescription className="text-xs">
+              Every login needs a verify script, so pick the one that takes over. The old script is
+              then deleted permanently.
+            </DialogDescription>
+          </DialogHeader>
+
+          {(() => {
+            const alternatives = verifyScripts.filter((sc) => sc.id !== verifyToDelete?.id);
+            if (alternatives.length === 0) {
+              return (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-amber-600 dark:text-amber-500 leading-snug">
+                    There&apos;s no other verify script to switch to. Record one first, then delete this.
+                  </p>
+                  <Button
+                    type="button" variant="outline" size="sm"
+                    onClick={() => { setVerifyToDelete(null); setRecordVerifyModalOpen(true); }}
+                  >
+                    <Plus className="h-3.5 w-3.5 mr-1" /> Record verify script
+                  </Button>
+                </div>
+              );
+            }
+            return (
+              <div className="space-y-1.5">
+                <Label className="text-xs">Use this one instead</Label>
+                <Select
+                  value={verifyReplacementId ?? '__none__'}
+                  onValueChange={(v) => setVerifyReplacementId(v === '__none__' ? null : v)}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select a replacement…" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__" disabled>Select a replacement…</SelectItem>
+                    {alternatives.map((sc) => (
+                      <SelectItem key={sc.id} value={sc.id}>{sc.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            );
+          })()}
+
+          <DialogFooter>
+            <Button
+              type="button" variant="outline" size="sm"
+              onClick={() => { setVerifyToDelete(null); setVerifyReplacementId(null); }}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="button" size="sm" variant="destructive"
+              onClick={handleReplaceAndDeleteVerify}
+              disabled={!verifyReplacementId}
+              title={!verifyReplacementId ? 'Choose a replacement first' : undefined}
+            >
+              Replace and delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Camera QR scan. Closes itself on a hit; the decoded otpauth:// URI
+          goes straight to enrollment without touching the text field. */}
+      <QrScannerDialog
+        open={scannerOpen}
+        onClose={() => setScannerOpen(false)}
+        onResult={(text) => {
+          setScannerOpen(false);
+          void enrollFromQrText(text);
+        }}
+      />
+
+      {/* Record a VERIFY script. Separate instance from the login recorder
+          purely so recordKind differs — without it the new script saves as
+          'regular' and never appears in the verify picker. */}
+      <RunScriptModal
+        script={null}
+        orgId={selectedOrgId}
+        open={recordVerifyModalOpen}
+        onClose={() => setRecordVerifyModalOpen(false)}
+        mode="record"
+        recordKind="login_verify"
+        ownerLoginId={id}
+        onSaved={async () => {
+          if (!selectedOrgId) return;
+          try {
+            const data = await listScripts(selectedOrgId, { kinds: ['login_verify'] });
+            const all = data.scripts ?? [];
+            setVerifyScripts(all);
+            const newest = [...all].sort((a, b) =>
+              new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+            )[0];
+            if (newest) {
+              setForm((f) => ({ ...f, verify_script_id: newest.id }));
+              toast.success(`Recorded "${newest.name}" — click Save to link it to this login`);
+            }
+          } catch {
+            toast.error('Recording saved, but failed to refresh the verify script list');
+          }
+        }}
+      />
+
+      {/* Edit an existing login script. Same modal as the Scripts page —
+          this login page is simply the entry point, since login scripts no
+          longer appear in the general list. */}
+      <RunScriptModal
+        script={editScript}
+        orgId={selectedOrgId}
+        open={!!editScript}
+        onClose={() => setEditScript(null)}
+        mode="test"
+        // This editor was opened from THIS login, so {{_totp}} can resolve
+        // even before the link has been saved on the page.
+        ownerLoginId={id}
+        onSaved={async () => {
+          if (!selectedOrgId) return;
+          // Refresh so the picker reflects a renamed script.
+          try {
+            const data = await listScripts(selectedOrgId, { kinds: ['login'] });
+            setScripts(data.scripts ?? []);
+          } catch {
+            /* non-fatal — the link is unchanged, only the cached name */
+          }
+        }}
+      />
     </div>
+    </TooltipProvider>
   );
 }

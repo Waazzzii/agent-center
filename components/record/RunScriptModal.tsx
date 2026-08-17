@@ -49,9 +49,10 @@ import {
   runLinkedLoginInStepRun,
   getScriptAgentUsage,
   propagateScriptLogin,
-  refineScript,
+  refineScriptStream,
   improveWalk,
   tidyScript,
+  SCRIPT_KIND_LABELS,
   type BrowserScript,
   type RecordedStep,
   type RefineReport,
@@ -60,6 +61,9 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { RowActionsMenu } from '@/components/ui/row-actions-menu';
 import { listLogins, type Login } from '@/lib/api/logins';
+import { isReservedParam } from '@/lib/script-params';
+import { GuidedRecordDialog } from './GuidedRecordDialog';
+import type { ScriptKind } from '@/lib/api/scripts';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import { VariablesPanel } from './panels/VariablesPanel';
@@ -82,6 +86,24 @@ interface RunScriptModalProps {
   onRecordingStop?: (steps: RecordedStep[]) => void;
   /** Called after a script is successfully saved (record mode). */
   onSaved?: () => void;
+  /**
+   * Kind to stamp on a script created in this session. Recording launched
+   * from a login profile's auto-login slot passes 'login', its verify slot
+   * 'login_verify' — otherwise the new script would default to 'regular'
+   * and be invisible in the very picker that asked for it.
+   */
+  recordKind?: ScriptKind;
+  /**
+   * The login profile this editor was opened FROM, when applicable.
+   *
+   * Needed because a login script has no `login_id` of its own (that column
+   * is the session binding, meaningless for the script that performs the
+   * login) and the reverse link — agent_logins.auto_login_script_id — only
+   * exists once the login page has been SAVED. Opening the editor straight
+   * after picking a script, which is the normal flow, leaves neither
+   * direction populated. The page that owns the login just tells us.
+   */
+  ownerLoginId?: string | null;
 }
 
 /**
@@ -172,6 +194,8 @@ export function RunScriptModal({
   onOpenScript,
   onRecordingStop,
   onSaved,
+  recordKind,
+  ownerLoginId = null,
 }: RunScriptModalProps) {
   const browserClientId = useBrowserClientId();
   const router = useRouter();
@@ -199,10 +223,36 @@ export function RunScriptModal({
   // `availableLogins` is fetched once when the modal opens — small
   // list, doesn't need pagination.
   const [linkedLoginId, setLinkedLoginId] = useState<string | null>(null);
+  // What this script is FOR — drives which picker it appears in. Mirrors
+  // script.kind, seeded on open and persisted immediately on change.
+  const [scriptKind, setScriptKind] = useState<ScriptKind>('regular');
   const [availableLogins, setAvailableLogins] = useState<Login[]>([]);
-  const [loginPickerOpen, setLoginPickerOpen] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const linkedLogin = availableLogins.find((l) => l.id === linkedLoginId) ?? null;
+
+  /**
+   * Live hints so the server can resolve {{_totp}} for a TEST run.
+   *
+   * Sent from here rather than derived server-side from the saved script,
+   * because the editor knows things the stored copy does not: a 2FA step
+   * added but not yet saved, a login linked seconds ago, or a brand-new
+   * recording that has no row at all.
+   *
+   * A getter, not a const: this component body is ~4k lines and `stepRunState`
+   * is declared below. Reading it lazily keeps the hint next to the login it
+   * belongs with instead of scattered by declaration order.
+   */
+  const buildReservedHints = () => ({
+    // ownerLoginId covers the login-script case, where linkedLoginId is
+    // null by design. See the prop's docstring.
+    loginId: linkedLoginId ?? ownerLoginId,
+    needsTotp: (stepRunState?.steps ?? []).some((st) =>
+      [st.value, st.selector, st.url, st.text].some(
+        (f) => typeof f === 'string' && f.includes('{{_totp}}'),
+      ),
+    ),
+  });
+
   // Auto-login eligibility: the linked login must have BOTH a script and
   // credentials configured before the in-editor "Log in" button works.
   const canAutoLogin = !!(linkedLogin?.auto_login_script_id && linkedLogin?.credentials_secret_id);
@@ -310,6 +360,44 @@ export function RunScriptModal({
   const [aiPrompt, setAiPrompt] = useState('');
   const [refining, setRefining] = useState(false);
   const [refineSummary, setRefineSummary] = useState<string | null>(null);
+  // ── Guided recording ──────────────────────────────────────────
+  // A new recording opens with instructions, then cleans itself up on stop.
+  // The full editor below is still there for power users; it just isn't the
+  // thing you have to understand in order to capture a working script.
+  const [guidedOpen, setGuidedOpen] = useState(false);
+  // Non-null while post-processing runs. Everything is disabled and an
+  // overlay narrates progress, because the step list is being rewritten
+  // underneath — letting someone edit mid-refine would lose their edit.
+  const [postProcessing, setPostProcessing] = useState<string | null>(null);
+  // Set when the operator cancels while the browser is still warming up. The
+  // start request is already in flight and can't be recalled, so the handler
+  // checks this on arrival and immediately releases the slot — otherwise a
+  // cancelled recording would strand a VM that nothing ever reclaims.
+  const warmupCancelledRef = useRef(false);
+  const [warmupFailed, setWarmupFailed] = useState(false);
+  // Mirror of guidedOpen for callbacks that would otherwise close over a
+  // stale value (handleProvisioningError is a useCallback).
+  const guidedOpenRef = useRef(false);
+  // Between stopping the recording and post-processing: ask what proves the
+  // script actually worked. Without a final assertion a script "succeeds"
+  // whenever its last click lands, even if the site rejected the request —
+  // a silent-failure machine. Holds the raw steps until the answer arrives.
+  const [confirmPending, setConfirmPending] = useState<RecordedStep[] | null>(null);
+  const postProcessScrollRef = useRef<HTMLDivElement>(null);
+  // Lets the operator interrupt the AI pass. Safe at any point: nothing is
+  // mutated until the response lands, so cancelling leaves the raw
+  // recording exactly as captured.
+  const postProcessAbortRef = useRef<AbortController | null>(null);
+  /**
+   * The recording exactly as captured, kept ONLY in memory for the life of
+   * this editor session so the cleanup can be undone.
+   *
+   * Deliberately not persisted: a rollback is useful for the minute after a
+   * refine, not next week, and storing a second copy of every script forever
+   * to serve that minute is a bad trade. Closing the editor drops it.
+   */
+  const preRefineRef = useRef<{ steps: RecordedStep[]; parameters: Record<string, string> } | null>(null);
+  const [canUndoRefine, setCanUndoRefine] = useState(false);
   const [refineOverall, setRefineOverall] = useState<RefineReport['overall'] | null>(null);
   // True for the lifetime of a Test & Improve walk (including while paused at an
   // approval gate), so the approve path knows to RESUME the walk rather than a
@@ -483,11 +571,31 @@ export function RunScriptModal({
 
     function startFresh() {
       if (mode === 'record') {
-        handleStartRecordSession();
+        // Instructions BEFORE the browser opens, not after. Recording
+        // quality is decided in the first thirty seconds, and the two
+        // failure modes (wandering around the app, impatient re-clicking)
+        // are both cheap to prevent and expensive to fix afterwards.
+        // Only the primary open is gated — the orphan-recovery paths below
+        // are already an interruption and don't need a second modal.
+        //
+        // The browser boots IN PARALLEL with the reading. Provisioning a VM
+        // slot is the slowest part of starting a recording, and it has no
+        // dependency on anything in the dialog, so serialising them just
+        // made the operator wait twice. Cancelling tears the slot down —
+        // see handleCancelGuided.
+        warmupCancelledRef.current = false;
+        setWarmupFailed(false);
+        guidedOpenRef.current = true;
+        setGuidedOpen(true);
+        void handleStartRecordSession();
       } else {
         setScriptName(script?.name ?? '');
         setScriptDescription(script?.description ?? '');
         setLinkedLoginId(script?.login_id ?? null);
+        // Seed from the saved script; for a new recording fall back to the
+        // kind the caller asked for (recordKind), so the chip shows what
+        // the script will be saved as.
+        setScriptKind(script?.kind ?? recordKind ?? 'regular');
         // Variables start BLANK every session — the operator must enter
         // current values for the specific run they're doing. Persisting
         // values across sessions was actively dangerous: agents picked
@@ -672,7 +780,14 @@ export function RunScriptModal({
   const buildParameters = (steps: RecordedStep[]): Record<string, string> => {
     const vars = analyzeVariables(steps);
     const result: Record<string, string> = {};
-    for (const name of vars.keys()) result[name] = '';
+    // Reserved engine-supplied variables ({{_totp}}) must NOT be persisted
+    // as parameters — a declared entry renders as an empty operator field
+    // and shadows the value the executor injects at run time. This mirrors
+    // the same exclusion in the backend's refine pass.
+    for (const name of vars.keys()) {
+      if (isReservedParam(name)) continue;
+      result[name] = '';
+    }
     return result;
   };
 
@@ -716,6 +831,10 @@ export function RunScriptModal({
     clearActiveBrowserSession();
     const msg = err?.response?.data?.error || err?.message || 'Browser session failed to start';
     toast.error(msg);
+    // While the guided dialog is up, keep it up and mark the warm-up failed
+    // rather than yanking the whole recorder away mid-read — the operator
+    // gets to see what happened and dismiss deliberately.
+    if (guidedOpenRef.current) { setWarmupFailed(true); return; }
     onClose();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onClose]);
@@ -727,6 +846,28 @@ export function RunScriptModal({
     onReady: handleProvisioningReady,
     onError: handleProvisioningError,
   });
+
+  /**
+   * Cancel out of the guided dialog, releasing whatever the warm-up got to.
+   *
+   * Three possible states, all of which have to be handled or a browser slot
+   * leaks: already live (runId), still provisioning (provisioningRunId), or
+   * the start request still in flight (neither — the ref makes the handler
+   * abort on arrival).
+   */
+  const handleCancelGuided = async () => {
+    warmupCancelledRef.current = true;
+    guidedOpenRef.current = false;
+    setGuidedOpen(false);
+    const pending = runId ?? provisioningRunId;
+    if (orgId && pending) {
+      await abortStepRun(orgId, pending).catch(() => {});
+    }
+    clearActiveBrowserSession();
+    setProvisioningRunId(null);
+    setRunId(null);
+    onClose();
+  };
 
   // ── Record mode: start ────────────────────────────────────────
   // Uses _draft as the script ID so no script is persisted until the user saves.
@@ -740,6 +881,15 @@ export function RunScriptModal({
       setScriptName(autoName);
 
       const res = await startStepRun(orgId, '_draft', {}, undefined, browserClientId);
+
+      // Cancelled while this was in flight (guided warm-up). The slot exists
+      // now, so release it rather than letting it idle until the pool's
+      // max-lifetime reaper gets to it.
+      if (warmupCancelledRef.current) {
+        await abortStepRun(orgId, res.runId).catch(() => {});
+        clearActiveBrowserSession();
+        return;
+      }
 
       // 202: no VM slot was immediately available — provisioning in background
       if ('status' in res && res.status === 'provisioning') {
@@ -763,6 +913,7 @@ export function RunScriptModal({
     } catch (err: any) {
       const msg = err?.response?.data?.error || err?.message || 'Failed to start recording';
       toast.error(msg);
+      if (guidedOpenRef.current) { setWarmupFailed(true); return; }
       onClose();
     } finally {
       setStarting(false);
@@ -796,11 +947,235 @@ export function RunScriptModal({
         if (res.insertedStart != null) {
           setNewStepIndices(new Set(Array.from({ length: res.insertedCount }, (_, k) => res.insertedStart! + k)));
         }
+        // Ask for a success assertion BEFORE post-processing. The browser is
+        // still sitting on the final page, which is the only moment the
+        // operator can point at the thing that proves it worked.
+        setConfirmPending(res.steps ?? []);
       }
     } catch (err: any) {
       toast.error(err?.response?.data?.message || err?.message || 'Failed to stop recording');
     } finally {
       setStarting(false);
+    }
+  };
+
+  /**
+   * Clean up a fresh recording: denoise, harden selectors, parameterize
+   * literals, flag destructive steps. Runs automatically on stop.
+   *
+   * Failure is NON-FATAL by design — the raw recording is still a usable
+   * script, so a refine error degrades to "you have the recording, tidy it
+   * yourself" rather than losing the capture the operator just performed.
+   */
+  /**
+   * Capture the "how do we know it worked?" element, then post-process.
+   *
+   * Runs the existing wait-for element picker against the page the recording
+   * ended on. Cancelling the picker falls through to post-processing without
+   * an assertion rather than stranding the operator.
+   */
+  const handleConfirmPick = async () => {
+    const raw = confirmPending ?? [];
+    setConfirmPending(null);
+    if (!orgId || !runId) { await runPostProcessing(raw); return; }
+
+    setIsCapturingWaitFor(true);
+    const controller = new AbortController();
+    captureAbortRef.current = controller;
+    let confirmStep: RecordedStep | null = null;
+    try {
+      const result = await captureStepRunWaitFor(orgId, runId, controller.signal);
+      confirmStep = {
+        action: 'wait_for',
+        name: `Confirm: ${result.description || 'expected result is on screen'}`,
+        selector: result.selector,
+        waitFor: { selector: result.selector, description: result.description },
+        elementSnapshot: result.elementSnapshot ?? undefined,
+      };
+    } catch (err: any) {
+      const cancelled = err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.name === 'CanceledError';
+      if (!cancelled) {
+        toast.error(err?.response?.data?.error || err?.message || 'Could not capture that element');
+      }
+    } finally {
+      captureAbortRef.current = null;
+      setIsCapturingWaitFor(false);
+    }
+    await runPostProcessing(raw, confirmStep);
+  };
+
+  /**
+   * Write steps + parameters straight to the script, creating it on first
+   * save. Shared by the post-refine auto-save and the undo, so both take the
+   * identical path — an undo that persisted differently from a save would be
+   * a nasty way to lose work.
+   */
+  const persistSteps = async (steps: RecordedStep[], parameters: Record<string, string>) => {
+    if (!orgId) return;
+    const name = scriptName.trim() || 'Untitled Script';
+    if (mode === 'record') {
+      if (tempScriptId) {
+        await updateScript(orgId, tempScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {}, login_id: linkedLoginId });
+      } else {
+        const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: linkedLoginId, kind: recordKind });
+        setTempScriptId(created.id);
+      }
+    } else if (script) {
+      await updateScript(orgId, script.id, { steps, parameters });
+    }
+    if (runId) await syncStepRunSteps(orgId, runId, steps).catch(() => {});
+    setHasSavedSession(true);
+    setHasChanges(false);
+    onSaved?.();
+  };
+
+  /** Put the raw recording back and persist it, discarding the cleanup. */
+  const handleUndoRefine = async () => {
+    const snap = preRefineRef.current;
+    if (!snap) return;
+    try {
+      setStepRunState((st) => st ? { ...st, steps: snap.steps, totalSteps: snap.steps.length } : st);
+      setParams(snap.parameters);
+      setRefineSummary(null);
+      await persistSteps(snap.steps, snap.parameters);
+      preRefineRef.current = null;
+      setCanUndoRefine(false);
+      pushActivity('done', 'Reverted to the raw recording.');
+      toast.success('Reverted to the raw recording');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || err?.message || 'Failed to revert');
+    }
+  };
+
+  /**
+   * @param confirmStep Appended as the final step AFTER refinement, not
+   *   before. Refine's denoise pass drops trailing steps that appear to do
+   *   nothing — which is exactly the shape of a wait-for on the last page.
+   *   Appending afterwards makes it impossible to lose, and it isn't part of
+   *   the recording anyway: it's an assertion the operator chose.
+   */
+  const runPostProcessing = async (rawSteps: RecordedStep[], confirmStep?: RecordedStep | null) => {
+    if (!orgId || rawSteps.length === 0) return;
+    // Snapshot BEFORE anything changes so undo is exact.
+    preRefineRef.current = { steps: rawSteps, parameters: { ...params } };
+    setPostProcessing('Cleaning up the recording…');
+    setBottomTab('activity');
+    pushActivity('ai', `Recorded ${rawSteps.length} step${rawSteps.length === 1 ? '' : 's'}.`);
+    if (confirmStep) {
+      pushActivity('ai', `Success check: ${confirmStep.waitFor?.description || confirmStep.selector}`);
+    }
+    // refineScript is ONE request with no streaming, so there is no true
+    // per-step progress to report mid-flight — say what's happening and how
+    // long it takes rather than inventing fake stages.
+    pushActivity('ai', 'Analyzing with AI — removing redundant steps, hardening selectors, finding variables…');
+    // The model reads the whole script before emitting its first token, so
+    // there is a genuine quiet stretch before step 1 appears. Count it out
+    // loud: silence with a spinner reads as "hung", silence with a clock
+    // reads as "working".
+    const tickStart = Date.now();
+    const tick = window.setInterval(() => {
+      const secs = Math.round((Date.now() - tickStart) / 1000);
+      setPostProcessing(`Reading the script… ${secs}s`);
+    }, 1000);
+    const stopTick = () => window.clearInterval(tick);
+    try {
+      // The recorder has no configured start URL — the operator navigates
+      // inside the live browser — so take it from the capture itself.
+      const startUrl = rawSteps.find((s) => s.action === 'navigate' && s.url)?.url;
+      const controller = new AbortController();
+      postProcessAbortRef.current = controller;
+      // Streamed so the operator watches the script being rebuilt rather
+      // than a spinner. The connection lives exactly as long as the pass.
+      const result = await refineScriptStream(
+        orgId,
+        { steps: rawSteps, context: { start_url: startUrl || undefined } },
+        (ev) => {
+          if (ev.type === 'step') {
+            stopTick();   // first event means the model is writing now
+            // The model only reports steps it CHANGED, so these arrive
+            // sparse — index is the step's real position, not a counter.
+            if (ev.dropped) {
+              pushActivity('ai', `✕ ${ev.index + 1}. removed (redundant)`);
+            } else {
+              const label = ev.name || ev.action || `step ${ev.index + 1}`;
+              pushActivity('ai', `→ ${ev.index + 1}. ${label}`);
+            }
+            setPostProcessing(`Rewriting step ${ev.index + 1}…`);
+          } else if (ev.type === 'error') {
+            pushActivity('error', ev.error);
+          }
+        },
+        controller.signal,
+      );
+      const refined = result.steps ?? rawSteps;
+      // Appended AFTER refinement — see the param docs.
+      const cleaned = confirmStep ? [...refined, confirmStep] : refined;
+      const dropped = rawSteps.length - refined.length;
+
+      setStepRunState((s) => s ? { ...s, steps: cleaned, totalSteps: cleaned.length } : s);
+      setParams((p) => ({ ...(result.parameters ?? {}), ...p }));
+      setRefineSummary(result.report?.summary ?? null);
+      // Every step is new to the operator after a rewrite; the "new step"
+      // highlight would just paint the whole list.
+      setNewStepIndices(new Set());
+      setHasChanges(true);
+
+      if (dropped > 0) {
+        pushActivity('ai', `Removed ${dropped} redundant step${dropped === 1 ? '' : 's'}`);
+      }
+      for (const st of result.report?.steps ?? []) {
+        if (st.change && st.change !== 'left unchanged') {
+          pushActivity('ai', `Step ${st.index + 1}: ${st.change}`);
+        }
+      }
+      const varNames = Object.keys(result.parameters ?? {});
+      if (varNames.length > 0) {
+        pushActivity('ai', `Variables: ${varNames.map((v) => `{{${v}}}`).join(', ')}`);
+      }
+      const gated = cleaned.filter((s) => s.requires_approval).length;
+      if (gated > 0) {
+        pushActivity('ai', `Flagged ${gated} step${gated === 1 ? '' : 's'} for approval before submitting`);
+      }
+      if (confirmStep) {
+        pushActivity('ai', `Added a final check — the script now fails if the expected result isn't there`);
+      }
+      // Auto-save. The operator did the work (recorded it) and the cleanup
+      // is the system's contribution — making them press Save afterwards
+      // just adds a way to lose it by closing the tab. Undo covers regret;
+      // an unsaved script covers nothing.
+      try {
+        await persistSteps(cleaned, result.parameters ?? {});
+        setCanUndoRefine(true);
+        pushActivity('done', `✓ Saved — ${cleaned.length} step${cleaned.length === 1 ? '' : 's'}. Undo is available until you close the editor.`);
+        toast.success(`Cleaned up and saved — ${cleaned.length} step${cleaned.length === 1 ? '' : 's'}`);
+      } catch (saveErr: any) {
+        // The cleaned steps are in the editor either way; only the write
+        // failed, so tell them to Save rather than implying data loss.
+        setHasChanges(true);
+        pushActivity('error', `Cleaned up, but saving failed: ${saveErr?.message ?? 'unknown'}. Press Save.`);
+        toast.warning('Cleaned up, but the save failed — press Save');
+      }
+    } catch (err: any) {
+      const cancelled = err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.name === 'CanceledError';
+      if (cancelled) {
+        // Nothing was applied, so the raw recording stands. Append the
+        // success check anyway — the operator explicitly chose it and it
+        // does not depend on the AI pass.
+        if (confirmStep) {
+          setStepRunState((st) => st ? { ...st, steps: [...(st.steps ?? []), confirmStep], totalSteps: (st.steps?.length ?? 0) + 1 } : st);
+          setHasChanges(true);
+        }
+        pushActivity('done', 'Cleanup cancelled — the raw recording is intact. Use Refine when you want it.');
+        toast.info('Cleanup cancelled — your recording is intact');
+      } else {
+        const msg = err?.response?.data?.error || err?.message || 'cleanup failed';
+        pushActivity('error', `Cleanup skipped: ${msg}. Your recording is intact — use Refine to retry.`);
+        toast.warning('Recorded, but automatic cleanup failed — the raw steps are intact');
+      }
+    } finally {
+      stopTick();
+      postProcessAbortRef.current = null;
+      setPostProcessing(null);
     }
   };
 
@@ -845,7 +1220,7 @@ export function RunScriptModal({
       if (targetScriptId) {
         await updateScript(orgId, targetScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {}, login_id: loginId });
       } else {
-        const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: loginId });
+        const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: loginId, kind: recordKind });
         targetScriptId = created.id;
         setTempScriptId(created.id);
       }
@@ -923,8 +1298,15 @@ export function RunScriptModal({
   // already using this script — the operator gets a confirm dialog
   // showing the count before we touch other agents. Idempotent at
   // the backend, so re-running with the same login_id is a no-op.
+
+  /**
+   * Still used by record mode, where a login can be linked as part of
+   * saving a brand-new script. The interactive PICKER moved to the Scripts
+   * list (LinkLoginDialog) — changing a saved script's link rewrites the
+   * paired login step in every agent using it, which is a configuration
+   * decision, not something to do from inside a live browser session.
+   */
   const handleSetLinkedLogin = async (loginId: string | null) => {
-    setLoginPickerOpen(false);
     if (!orgId || mode === 'record' || !script?.id) {
       setLinkedLoginId(loginId);
       // Record mode (or unsaved): the link lives in state until Save, but we
@@ -1088,7 +1470,10 @@ export function RunScriptModal({
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
     try {
-      const res = await executeStepRunStep(orgId, runId, params, controller.signal, [...activeGates]);
+      // script id lets the server resolve {{_totp}} from the linked login
+      // (see withReservedParams) — without it a 2FA step fills blank here
+      // while working fine under an agent.
+      const res = await executeStepRunStep(orgId, runId, params, controller.signal, [...activeGates], script?.id ?? tempScriptId, buildReservedHints());
       // Worker returned 200 with interrupted=true — operator's Stop
       // signaled the worker BEFORE the HTTP abort raced it. The worker
       // has already flipped status back to 'waiting' and didn't
@@ -1215,7 +1600,7 @@ export function RunScriptModal({
     }, 500);
 
     try {
-      const res = await runRemainingStepsAgentMode(orgId, runId, params, controller.signal, [...activeGates]);
+      const res = await runRemainingStepsAgentMode(orgId, runId, params, controller.signal, [...activeGates], script?.id ?? tempScriptId, buildReservedHints());
       // Replay paused at a gated (requires_approval) step — surface the
       // inline Approve / Deny prompt for that index instead of finishing.
       if (res.awaiting_approval) {
@@ -1398,6 +1783,8 @@ export function RunScriptModal({
           targetedOnly,
           instruction: aiPrompt.trim() || undefined,
           reset: !resuming,
+          scriptId: script?.id ?? tempScriptId,
+          reserved: buildReservedHints(),
         },
         controller.signal,
       );
@@ -2392,7 +2779,7 @@ export function RunScriptModal({
         } else {
           // First save — create the script now, carrying any login linked
           // during recording so it sticks without a second round-trip.
-          const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: linkedLoginId });
+          const created = await createScript(orgId, { name, steps, parameters, test_values: {}, login_id: linkedLoginId, kind: recordKind });
           setTempScriptId(created.id);
         }
         // Sync steps to the worker so jumps/executions use the saved version
@@ -2619,6 +3006,11 @@ export function RunScriptModal({
   useEffect(() => {
     const el = activityScrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
+    // The post-processing overlay renders the same entries over the top of
+    // the editor, so it needs its own pin-to-bottom or new lines land below
+    // the fold and it reads as though nothing is happening.
+    const overlay = postProcessScrollRef.current;
+    if (overlay) overlay.scrollTop = overlay.scrollHeight;
   }, [activity]);
 
   if (!open) return null;
@@ -2631,7 +3023,10 @@ export function RunScriptModal({
   // The Activity tab only appears in the strip while one of these is
   // true; if the user is parked on Activity when it disappears we fall
   // back to Variables for rendering so a hidden tab never shows blank.
-  const aiBusy = refining;
+  // Post-processing rewrites the step list wholesale, so it counts as busy
+  // for every AI/replay control — the overlay hides them, but a stray
+  // keyboard shortcut shouldn't fire a second pass underneath it either.
+  const aiBusy = refining || postProcessing != null;
   const replayRunning = stepRunState?.status === 'running';
   // The Activity tab is present while work is live AND once there's a log to
   // review — so a quick single step (which we no longer auto-focus) still
@@ -2664,6 +3059,7 @@ export function RunScriptModal({
   const stepCount = showLiveDirectly
     ? liveRecordedSteps.length
     : (stepRunState?.totalSteps ?? script?.steps?.length ?? 0);
+
 
   // A step needs selector review if it has multiple candidates (untested) or
   // has a selector but no candidates (picker-added wait_for, untested).
@@ -2747,56 +3143,33 @@ export function RunScriptModal({
               login_id); in test mode it's persisted immediately. Linking
               also offers to restart the browser with the login's profile —
               see handleSetLinkedLogin. */}
-          {(mode === 'record' || script?.id) && (
+          {/* Hidden for login + login-check scripts. `login_id` is the
+              SESSION BINDING — "run this script inside that login's
+              authenticated session" — which is incoherent for the script
+              that PERFORMS the login: it would be asking to already be
+              logged in before logging in. Those scripts belong to their
+              login profile and are reached from its page, so there is
+              nothing to pick here either. */}
+          {(mode === 'record' || script?.id) && scriptKind === 'regular' && (
             <div className="flex items-center gap-1.5 shrink-0">
-              <DropdownMenu open={loginPickerOpen} onOpenChange={setLoginPickerOpen}>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type="button"
-                    className={cn(
-                      'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border transition-colors',
-                      linkedLogin
-                        ? 'border-brand/30 bg-brand/5 text-brand hover:bg-brand/10'
-                        : 'border-dashed border-border text-muted-foreground hover:bg-muted/40'
-                    )}
-                    title={linkedLogin ? `Linked to: ${linkedLogin.name}` : 'No login linked — click to link one'}
-                  >
-                    <KeyRound className="h-3 w-3" />
-                    <span className="max-w-[140px] truncate">
-                      {linkedLogin?.name ?? 'Link login'}
-                    </span>
-                    {linkedLogin && <ChevronRight className="h-3 w-3 rotate-90 opacity-60" />}
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="start" className="w-56">
-                  {availableLogins.length === 0 ? (
-                    <DropdownMenuItem disabled className="text-xs text-muted-foreground">
-                      No logins configured for this org
-                    </DropdownMenuItem>
-                  ) : (
-                    <>
-                      {availableLogins.map((l) => (
-                        <DropdownMenuItem
-                          key={l.id}
-                          onSelect={() => handleSetLinkedLogin(l.id)}
-                          className="text-xs"
-                        >
-                          {l.id === linkedLoginId && <CheckCircle2 className="h-3 w-3 mr-1.5 text-brand" />}
-                          <span className="truncate">{l.name}</span>
-                        </DropdownMenuItem>
-                      ))}
-                      {linkedLoginId && (
-                        <DropdownMenuItem
-                          onSelect={() => handleSetLinkedLogin(null)}
-                          className="text-xs text-destructive border-t mt-1 pt-1.5"
-                        >
-                          <X className="h-3 w-3 mr-1.5" /> Unlink
-                        </DropdownMenuItem>
-                      )}
-                    </>
+              {/* Read-only. Linking is a configuration decision with
+                  blast radius — it rewrites the paired login step in every
+                  agent using this script — so it lives on the Scripts list,
+                  not in the recorder toolbar where it read as a per-session
+                  preference. In here the only login action is "Log in". */}
+              {linkedLogin && (
+                <span
+                  className={cn(
+                    'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border',
+                    'border-brand/30 bg-brand/5 text-brand',
                   )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                  title={`Runs inside the "${linkedLogin.name}" session. Change this from the Scripts list.`}
+                >
+                  <KeyRound className="h-3 w-3" />
+                  <span className="max-w-[140px] truncate">{linkedLogin.name}</span>
+                </span>
+              )}
+
 
               {/* Only render the Log in button when the linked login
                   actually has auto-login configured (both an
@@ -3140,7 +3513,18 @@ export function RunScriptModal({
                           rowStatus === 'running' && 'bg-brand/5 border-l-2 border-brand',
                           rowStatus === 'failed' && 'bg-danger/5 border-l-2 border-danger',
                           rowStatus === 'awaiting' && 'border-l-2 border-amber-500',
-                          !isRecording && dropStepIdx === i && dragStepIdx !== i && 'border-t-2 border-brand',
+                          // Drop indicator, drawn on the side the step will
+                          // actually land. handleDropStep removes the dragged
+                          // step first, so for a DOWNWARD drag onto row i the
+                          // rows above shift up and the item ends up AFTER
+                          // row i — a line above it (the old fixed border-t)
+                          // pointed at the wrong gap, most obviously when
+                          // dropping onto the last row.
+                          !isRecording && dropStepIdx === i && dragStepIdx !== i && (
+                            dragStepIdx !== null && dragStepIdx < i
+                              ? 'border-b-2 border-brand'
+                              : 'border-t-2 border-brand'
+                          ),
                         )}
                         draggable={!isExecuting && !isRecording}
                         onDragStart={isRecording ? undefined : () => setDragStepIdx(i)}
@@ -3423,6 +3807,25 @@ export function RunScriptModal({
                           Test &amp; Improve
                         </Button>
                       </div>
+                      {/* Undo the automatic cleanup. Available only while
+                          this editor session is open — the snapshot lives in
+                          memory, so closing discards it and nothing extra is
+                          ever written to the database. */}
+                      {canUndoRefine && !aiBusy && (
+                        <div className="flex items-center gap-2 rounded-md border border-dashed px-2 py-1.5">
+                          <span className="text-[10px] text-muted-foreground flex-1 leading-snug">
+                            Cleaned up and saved automatically.
+                          </span>
+                          <Button
+                            type="button" variant="ghost" size="sm"
+                            className="h-6 text-[10px] shrink-0"
+                            onClick={handleUndoRefine}
+                            title="Restore the recording exactly as captured"
+                          >
+                            <RotateCcw className="h-3 w-3 mr-1" /> Undo cleanup
+                          </Button>
+                        </div>
+                      )}
                       {/* Reliability summary from the last improve pass. */}
                       {refineSummary && !refining && (
                         <div className="flex items-start gap-1.5 rounded-md border bg-background px-2 py-1.5">
@@ -3517,6 +3920,58 @@ export function RunScriptModal({
           </div>
         </div>
       </div>
+
+      {/* Post-processing overlay. Covers the whole editor rather than
+          disabling controls piecemeal: the step list is being REPLACED
+          underneath, so any edit made during the rewrite would be silently
+          discarded. It also keeps the simple path simple — the operator
+          watches it work instead of wondering which of forty controls to
+          touch next. */}
+      {postProcessing && (
+        <div className="absolute inset-0 z-[60] bg-background/95 backdrop-blur-sm flex items-center justify-center p-6">
+          <div className="w-full max-w-lg space-y-3">
+            <div className="flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin text-brand" />
+              <span className="text-sm font-medium">{postProcessing}</span>
+            </div>
+            <div className="flex items-start justify-between gap-3">
+              <p className="text-xs text-muted-foreground flex-1">
+                Removing redundant steps, hardening selectors, turning the values you typed into
+                variables, and flagging anything that submits.
+              </p>
+              <Button
+                type="button" variant="outline" size="sm" className="shrink-0 text-xs"
+                onClick={() => postProcessAbortRef.current?.abort()}
+              >
+                Cancel
+              </Button>
+            </div>
+            {/* Live narration — the same activity entries the Activity tab
+                shows, so nothing new has to be learned to read it. */}
+            <div
+              ref={postProcessScrollRef}
+              className="rounded-md border bg-muted/30 h-64 overflow-y-auto p-2 space-y-1"
+            >
+              {activity.slice(-40).map((a) => (
+                <div
+                  key={a.id}
+                  className={cn(
+                    'text-[11px] leading-snug font-mono',
+                    a.kind === 'error' ? 'text-destructive'
+                      : a.kind === 'done' ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-muted-foreground',
+                  )}
+                >
+                  {a.text}
+                </div>
+              ))}
+              {activity.length === 0 && (
+                <div className="text-[11px] text-muted-foreground">Starting…</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>,
     document.body
   );
@@ -3530,6 +3985,57 @@ export function RunScriptModal({
   return (
     <>
       {portal}
+
+      {/* Instructions shown before the recording browser opens. Cancelling
+          closes the whole recorder — there's nothing to record into yet. */}
+      <GuidedRecordDialog
+        open={guidedOpen}
+        targetUrl={linkedLogin?.url ?? null}
+        kindLabel={
+          recordKind === 'login' ? 'login script'
+            : recordKind === 'login_verify' ? 'login check'
+            : 'script'
+        }
+        // The session was kicked off when the dialog opened, so "ready" is
+        // simply "we have a runId". Start is disabled until then — the
+        // recorder has nothing to attach to before that.
+        browserStatus={warmupFailed ? 'failed' : runId ? 'ready' : 'starting'}
+        // Nothing to start: the session is already live behind the dialog.
+        onStart={() => { guidedOpenRef.current = false; setGuidedOpen(false); }}
+        onCancel={handleCancelGuided}
+      />
+
+      {/* "How do we know it worked?" — asked between stopping the recording
+          and cleaning it up, while the browser is still on the final page.
+          Without it a script passes whenever its last click lands, even if
+          the site rejected the request. */}
+      <Dialog open={confirmPending !== null} onOpenChange={(v) => { if (!v) { const r = confirmPending ?? []; setConfirmPending(null); void runPostProcessing(r); } }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">How do we know it worked?</DialogTitle>
+            <DialogDescription className="text-xs">
+              Point at something on the page that only appears when the task succeeded — a
+              confirmation message, a new row, an order number. The script will wait for it and
+              fail if it never shows.
+            </DialogDescription>
+          </DialogHeader>
+          <p className="text-[11px] text-muted-foreground leading-snug">
+            Without this the script counts as successful as soon as its last click lands, even if
+            the site silently rejected it.
+          </p>
+          <DialogFooter className="gap-2">
+            <Button
+              type="button" variant="outline" size="sm"
+              onClick={() => { const r = confirmPending ?? []; setConfirmPending(null); void runPostProcessing(r); }}
+            >
+              Skip
+            </Button>
+            <Button type="button" size="sm" onClick={handleConfirmPick}>
+              <Clock className="h-3.5 w-3.5 mr-1" /> Pick the element
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Step edit modal — opened by the pencil button on a step row.
           Consolidates name, selector, and JSON editing in one place so

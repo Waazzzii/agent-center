@@ -10,7 +10,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Trash2, Pencil, Copy, Search, Tag as TagIcon } from 'lucide-react';
+import { Trash2, Pencil, Copy, Search, Tag as TagIcon, KeyRound } from 'lucide-react';
 import { listScripts, deleteScript, createScript, updateScript, getScriptLoginUsage, type BrowserScript } from '@/lib/api/scripts';
 import { RunScriptModal } from './RunScriptModal';
 import { useTags } from '@/lib/hooks/use-tags';
@@ -18,6 +18,7 @@ import { TagFilter } from '@/components/tags/tag-filter';
 import { TagList } from '@/components/tags/tag-badge';
 import { TagAssignDialog } from '@/components/tags/tag-assign-dialog';
 import { RowActionsMenu } from '@/components/ui/row-actions-menu';
+import { LinkLoginDialog } from './LinkLoginDialog';
 
 interface ScriptsListProps {
   orgId: string | null;
@@ -51,7 +52,13 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const { tags } = useTags(orgId);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
+  // Login + verify scripts belong to their login profile and are edited from
+  // the login's own page, so they're hidden here by default. The toggle is a
+  // debugging escape hatch — chasing a broken login script with no way to
+  // open it from the list is painful.
+  const [showLoginScripts, setShowLoginScripts] = useState(false);
   const [tagDialogScript, setTagDialogScript] = useState<BrowserScript | null>(null);
+  const [linkLoginScript, setLinkLoginScript] = useState<BrowserScript | null>(null);
 
   // Sorted + filtered view. Search is a substring match against name OR
   // description so operators who remember the description but not the exact
@@ -80,7 +87,13 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
     if (!orgId) return;
     setLoading(true);
     try {
-      const data = await listScripts(orgId, { tagIds: tagFilter, tagMatch });
+      const data = await listScripts(orgId, {
+        tagIds: tagFilter,
+        tagMatch,
+        // Login + login-check scripts belong to their login profile and are
+        // edited from that login's page. Undefined = every kind (the toggle).
+        kinds: showLoginScripts ? undefined : ['regular'],
+      });
       setScripts(data.scripts ?? []);
     } catch (err: any) {
       toast.error(err?.message || 'Failed to load scripts');
@@ -93,7 +106,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId, refreshKey, tagFilter, tagMatch]);
+  }, [orgId, refreshKey, tagFilter, tagMatch, showLoginScripts]);
 
   /**
    * Duplicate a script — copies name + steps + parameters + test_values
@@ -202,7 +215,21 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
               {search && (
                 <span className="text-xs text-muted-foreground">{visibleScripts.length} of {scripts.length}</span>
               )}
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-3">
+                {/* Escape hatch, not a primary filter — deliberately plain
+                    and low-contrast so it doesn't compete with tag filtering. */}
+                <label
+                  className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none"
+                  title="Login and verify scripts belong to a login profile and are normally edited from that login's page."
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3 accent-current cursor-pointer"
+                    checked={showLoginScripts}
+                    onChange={(e) => setShowLoginScripts(e.target.checked)}
+                  />
+                  Show login scripts
+                </label>
                 <TagFilter tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />
               </div>
             </div>
@@ -276,6 +303,17 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                         actions={[
                           { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => setRunModalScript(s) },
                           { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogScript(s) },
+                          // Linking lives here, not in the recorder toolbar:
+                          // it rewrites the paired login step in every agent
+                          // using this script, so it belongs with the script's
+                          // configuration rather than a live browser session.
+                          // Meaningless for login/login-check scripts, which
+                          // ARE the login.
+                          ...(s.kind === 'regular' ? [{
+                            label: s.login_id ? 'Change linked login' : 'Link login',
+                            icon: <KeyRound className="h-4 w-4" />,
+                            onSelect: () => setLinkLoginScript(s),
+                          }] : []),
                           { label: duplicatingId === s.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === s.id, onSelect: () => handleDuplicate(s) },
                           { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => setScriptToDelete(s) },
                         ]}
@@ -288,6 +326,17 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                         actions={[
                           { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => setRunModalScript(s) },
                           { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogScript(s) },
+                          // Linking lives here, not in the recorder toolbar:
+                          // it rewrites the paired login step in every agent
+                          // using this script, so it belongs with the script's
+                          // configuration rather than a live browser session.
+                          // Meaningless for login/login-check scripts, which
+                          // ARE the login.
+                          ...(s.kind === 'regular' ? [{
+                            label: s.login_id ? 'Change linked login' : 'Link login',
+                            icon: <KeyRound className="h-4 w-4" />,
+                            onSelect: () => setLinkLoginScript(s),
+                          }] : []),
                           { label: duplicatingId === s.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === s.id, onSelect: () => handleDuplicate(s) },
                           { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => setScriptToDelete(s) },
                         ]}
@@ -307,6 +356,14 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
         open={!!runModalScript}
         onClose={() => { setRunModalScript(null); load(); }}
         onSaved={() => load()}
+      />
+
+      <LinkLoginDialog
+        open={!!linkLoginScript}
+        onClose={() => setLinkLoginScript(null)}
+        orgId={orgId}
+        script={linkLoginScript}
+        onLinked={() => load()}
       />
 
       <TagAssignDialog

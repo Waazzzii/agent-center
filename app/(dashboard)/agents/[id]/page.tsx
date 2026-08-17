@@ -292,6 +292,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         getConnectors(selectedOrgId),
         getSkills(selectedOrgId),
         getAgentAccessGroups(selectedOrgId),
+        // Deliberately UNFILTERED by kind. This list does double duty: it
+        // populates the browser_script action picker AND resolves names for
+        // actions that already exist. Filtering to 'regular' would be the
+        // right end state, but any existing action pointing at a login
+        // script would render with a blank label. Needs a label-fallback
+        // pass before it can be narrowed.
         listScripts(selectedOrgId),
         listAiSteps(selectedOrgId).catch(() => [] as AiStep[]),
         listLogins(selectedOrgId).catch(() => [] as Login[]),
@@ -338,6 +344,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     try {
       const [actionsData, scriptsData, aiStepsData, loginsData, approvalStepsData, skillsData] = await Promise.all([
         getActions(selectedOrgId, agentId),
+        // Deliberately UNFILTERED by kind. This list does double duty: it
+        // populates the browser_script action picker AND resolves names for
+        // actions that already exist. Filtering to 'regular' would be the
+        // right end state, but any existing action pointing at a login
+        // script would render with a blank label. Needs a label-fallback
+        // pass before it can be narrowed.
         listScripts(selectedOrgId),
         listAiSteps(selectedOrgId).catch(() => [] as AiStep[]),
         listLogins(selectedOrgId).catch(() => [] as Login[]),
@@ -1789,13 +1801,25 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       <SelectValue placeholder="Select a browser script…" />
                     </SelectTrigger>
                     <SelectContent>
-                      {browserScripts.length === 0 ? (
-                        <SelectItem value="_none" disabled>No scripts available</SelectItem>
-                      ) : (
-                        browserScripts.map((s) => (
+                      {(() => {
+                        // Only real browser scripts belong in an agent action.
+                        // Login + login-check scripts are run BY the login
+                        // machinery, not scheduled as workflow steps.
+                        //
+                        // The full list is still loaded (it resolves display
+                        // names for existing actions), so an action already
+                        // pointing at a login script keeps its entry here —
+                        // otherwise it would render blank and look deleted.
+                        const selectable = browserScripts.filter(
+                          (s) => s.kind === 'regular' || s.id === actionForm.scriptId,
+                        );
+                        if (selectable.length === 0) {
+                          return <SelectItem value="_none" disabled>No scripts available</SelectItem>;
+                        }
+                        return selectable.map((s) => (
                           <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                        ))
-                      )}
+                        ));
+                      })()}
                     </SelectContent>
                   </Select>
                   {/* Browser scripts are recorded/edited in their own full-screen
@@ -2103,18 +2127,25 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 </div>
               </button>
             ) : (
-              <div className="rounded-lg border border-dashed p-3 space-y-2.5 mt-0.5">
-                <div className="flex items-center gap-2">
-                  <Monitor className="h-4 w-4 text-sky-500 shrink-0" />
-                  <p className="text-sm font-medium">Browser Steps</p>
+              /* Same card as the enabled state — icon, title, description —
+                 just muted, with the unlock action inline on the right.
+                 It used to render as a differently-shaped dashed panel with
+                 its own heading and a chip preview, which made a temporarily
+                 unavailable option look like a different kind of thing. */
+              <div className="flex items-center gap-3 rounded-lg border px-3 py-2.5 bg-muted/30">
+                <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0 opacity-50">
+                  <CircleDot className="h-4 w-4 text-violet-700 dark:text-violet-400" />
                 </div>
-                <p className="text-xs text-muted-foreground leading-relaxed">
-                  <strong>Browser Login</strong> and <strong>Browser Script</strong> steps require browser mode to be enabled for this agent. Enable it below, then add browser steps.
-                </p>
+                <div className="min-w-0 opacity-60">
+                  <p className="font-medium text-sm">Browser Script</p>
+                  <p className="text-xs text-muted-foreground">
+                    Needs browser mode enabled for this agent
+                  </p>
+                </div>
                 <Button
                   size="sm"
                   variant="outline"
-                  className="text-xs border-info/40 text-info hover:bg-info-soft hover:border-info/60"
+                  className="ml-auto shrink-0 text-xs border-info/40 text-info hover:bg-info-soft hover:border-info/60"
                   onClick={async () => {
                     if (!selectedOrgId) return;
                     try {
@@ -2126,18 +2157,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     }
                   }}
                 >
-                  <Monitor className="mr-1.5 h-3.5 w-3.5" />Enable Browser
+                  <Monitor className="mr-1.5 h-3.5 w-3.5" />Enable
                 </Button>
-                <div className="flex gap-2 opacity-40 pointer-events-none pt-0.5">
-                  <div className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 flex-1">
-                    <LogIn className="h-3.5 w-3.5 text-sky-500" />
-                    <span className="text-xs">Browser Login</span>
-                  </div>
-                  <div className="flex items-center gap-2 rounded-md border px-2.5 py-1.5 flex-1">
-                    <CircleDot className="h-3.5 w-3.5 text-violet-500" />
-                    <span className="text-xs">Browser Script</span>
-                  </div>
-                </div>
               </div>
             )}
           </div>

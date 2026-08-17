@@ -1,8 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Trash2 } from 'lucide-react';
+import { Plus, Trash2, Lock } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { RESERVED_PARAMS, isReservedParam } from '@/lib/script-params';
 import type { RecordedStep, SelectorCandidate } from '@/lib/api/scripts';
 
 export interface VariableRef {
@@ -37,6 +38,13 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
 
   const handleSubmitRename = (oldName: string) => {
     const safeName = editingValue.trim().replace(/\s+/g, '_').replace(/\W/g, '');
+    // Renaming a normal variable INTO a reserved name would make the engine
+    // start overwriting it at runtime. Reserved rows themselves aren't
+    // renameable (they render without the rename affordance).
+    if (isReservedParam(safeName) || isReservedParam(oldName)) {
+      setEditingName(null);
+      return;
+    }
     onRenameVariable(oldName, safeName || oldName);
     setEditingName(null);
   };
@@ -76,6 +84,35 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
               readIn.length ? `Read in step${plural(readIn)} ${readIn.join(', ')}` : null,
             ].filter(Boolean).join(' · ')
           : 'Manual value — not referenced by any step';
+
+        // Engine-supplied variables ({{_totp}}) render as a locked row: no
+        // rename, no delete, and crucially no value input. An editable box
+        // here would invite an operator to paste a static 2FA code that
+        // expires 30 seconds later, and a rename would silently sever the
+        // engine's injection so the field fills blank at runtime.
+        const reserved = isReservedParam(name) ? RESERVED_PARAMS[name] : null;
+        if (reserved) {
+          return (
+            <div
+              key={name}
+              onMouseEnter={flagImpact}
+              onMouseLeave={clearImpact}
+              className={cn(
+                'flex items-center gap-2 rounded px-2 py-1 border transition-colors',
+                isRelevant ? 'border-purple-400/40 bg-purple-500/5' : 'border-transparent hover:bg-muted/40'
+              )}
+              title={`{{${name}}}\n${usageTitle}\n\n${reserved.description}`}
+            >
+              <span className="shrink-0 max-w-[50%] font-mono text-xs text-purple-400/80 truncate">
+                {`{{${name}}}`}
+              </span>
+              <span className="flex-1 min-w-0 flex items-center gap-1.5 text-[10px] text-muted-foreground italic truncate">
+                <Lock className="h-2.5 w-2.5 shrink-0" />
+                {reserved.label}
+              </span>
+            </div>
+          );
+        }
 
         return (
           <div
@@ -146,7 +183,9 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
           onSubmit={(e) => {
             e.preventDefault();
             const safeName = newName.trim().replace(/\s+/g, '_').replace(/\W/g, '');
-            if (safeName) onParamsChange((p) => ({ ...p, [safeName]: '' }));
+            // Reserved names are engine-supplied — declaring one as a params
+            // entry would shadow the injected value with an empty string.
+            if (safeName && !isReservedParam(safeName)) onParamsChange((p) => ({ ...p, [safeName]: '' }));
             setNewName('');
             setAdding(false);
           }}

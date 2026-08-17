@@ -113,6 +113,23 @@ export interface BrowserSession {
   idleExpiresAt: string;
 }
 
+/**
+ * What a script is FOR (migration 283). All three run through the identical
+ * engine — this exists so each picker offers only what fits its slot.
+ *
+ * Do NOT confuse `kind` with `login_id`. `login_id` is the SESSION BINDING
+ * (which login's authenticated session a script runs inside) and is routinely
+ * set on `regular` scripts that operate behind a login.
+ */
+export type ScriptKind = 'regular' | 'login' | 'login_verify';
+
+/** Short labels for the kind chip / column. */
+export const SCRIPT_KIND_LABELS: Record<ScriptKind, string> = {
+  regular:      'Script',
+  login:        'Login',
+  login_verify: 'Login check',
+};
+
 export interface BrowserScript {
   id: string;
   organization_id: string;
@@ -133,6 +150,12 @@ export interface BrowserScript {
    *   • Adding this script as an agent action auto-adds a paired login step.
    */
   login_id: string | null;
+  /**
+   * What this script is for. 'login' and 'login_verify' belong to a login
+   * profile: they're edited from that login's page and hidden from the
+   * general Scripts list and the agent action picker.
+   */
+  kind: ScriptKind;
   created_at: string;
   updated_at: string;
   /** Tags applied to this script. Present on list/get/create/update responses. */
@@ -187,13 +210,28 @@ export async function cancelRecording(
 
 // ─── Scripts ──────────────────────────────────────────────────
 
+/**
+ * List browser scripts.
+ *
+ * `kinds` filters by what a script is FOR. Omit it and every kind comes
+ * back, so no caller loses rows by forgetting to pass it. Each picker opts
+ * in to the kinds that make sense in its slot:
+ *   - Scripts list, agent action picker  → ['regular']
+ *   - A login's auto-login slot          → ['login']
+ *   - A login's verify slot              → ['login_verify']
+ */
 export async function listScripts(
   orgId: string,
-  opts?: { tagIds?: string[]; tagMatch?: 'any' | 'all' },
+  opts?: { tagIds?: string[]; tagMatch?: 'any' | 'all'; kinds?: ScriptKind[] },
 ): Promise<{ scripts: BrowserScript[] }> {
   const res = await agentClient.get<{ scripts: BrowserScript[] }>(
     `/api/admin/${orgId}/scripts`,
-    { params: tagFilterParams(opts?.tagIds ?? [], opts?.tagMatch) }
+    {
+      params: {
+        ...tagFilterParams(opts?.tagIds ?? [], opts?.tagMatch),
+        ...(opts?.kinds?.length ? { kinds: opts.kinds.join(',') } : {}),
+      },
+    }
   );
   return res.data;
 }
@@ -208,6 +246,12 @@ export async function createScript(
     test_values?: Record<string, string>;
     /** Optional login profile to link at creation time (record-mode "Build with login"). */
     login_id?: string | null;
+    /**
+     * Omit for 'regular'. Recording launched from a login profile's
+     * auto-login or verify slot passes the matching kind, so the new script
+     * appears in the picker that asked for it.
+     */
+    kind?: ScriptKind;
     tag_ids?: string[];
   }
 ): Promise<BrowserScript> {
@@ -229,6 +273,8 @@ export async function updateScript(
     test_values: Record<string, string>;
     /** Pass a uuid to set, null to clear the link. Omit to leave unchanged. */
     login_id: string | null;
+    /** Reclassify the script. Omit to leave unchanged. */
+    kind: ScriptKind;
     /** Replace the script's tag set. Omit to leave unchanged. */
     tag_ids: string[];
   }>
@@ -269,13 +315,82 @@ export interface RefineReport {
   steps: Array<{ index: number; name: string; reliability: 'reliable'|'review'|'fragile'; risks: string[]; requires_approval: boolean; change?: string }>;
 }
 export interface RefineResult { steps: RecordedStep[]; parameters: Record<string,string>; report: RefineReport; }
+/** One narration event from the streaming refine pass. */
+export type RefineStreamEvent =
+  | { type: 'step'; index: number; name: string | null; action: string | null; dropped?: boolean }
+  | { type: 'done'; result: RefineResult }
+  | { type: 'error'; error: string };
+
+/**
+ * Refine a script, narrating each step as the model emits it.
+ *
+ * Uses fetch + a stream reader rather than EventSource because the step list
+ * has to go up in the request body. The connection lives exactly as long as
+ * the pass: it opens here and closes on `done` / `error`, so there is no
+ * idle stream and nothing to poll. Aborting `signal` drops the socket, which
+ * the server sees as a close and stops writing.
+ *
+ * Falls back to nothing clever on failure — the caller keeps the raw
+ * recording, same as the non-streaming path.
+ */
+export async function refineScriptStream(
+  orgId: string,
+  body: {
+    steps: RecordedStep[];
+    target_indices?: number[];
+    instruction?: string;
+    context?: { start_url?: string; parameters?: Record<string, string> };
+  },
+  onEvent: (ev: RefineStreamEvent) => void,
+  signal?: AbortSignal,
+): Promise<RefineResult> {
+  const res = await fetch(`/api/agent/api/admin/${orgId}/scripts/refine/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(body),
+    signal,
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`Refine stream failed (${res.status})`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  let final: RefineResult | null = null;
+  let failure: string | null = null;
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    // SSE frames are separated by a blank line. Keep the trailing partial.
+    const frames = buf.split('\n\n');
+    buf = frames.pop() ?? '';
+    for (const frame of frames) {
+      const line = frame.split('\n').find((l) => l.startsWith('data:'));
+      if (!line) continue;
+      let ev: RefineStreamEvent;
+      try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
+      onEvent(ev);
+      if (ev.type === 'done') final = ev.result;
+      if (ev.type === 'error') failure = ev.error;
+    }
+  }
+
+  if (failure) throw new Error(failure);
+  if (!final) throw new Error('Refine stream ended without a result');
+  return final;
+}
+
 export async function refineScript(orgId: string, body: {
   steps: RecordedStep[];
   target_indices?: number[];
   instruction?: string;
   context?: { start_url?: string; parameters?: Record<string,string> };
-}): Promise<RefineResult> {
-  const res = await agentClient.post<RefineResult>(`/api/admin/${orgId}/scripts/refine`, body);
+}, signal?: AbortSignal): Promise<RefineResult> {
+  const res = await agentClient.post<RefineResult>(`/api/admin/${orgId}/scripts/refine`, body, { signal });
   return res.data;
 }
 
@@ -453,10 +568,22 @@ export async function runRemainingStepsAgentMode(
   params?: Record<string, string>,
   signal?: AbortSignal,
   approvedGates?: number[],
+  /** See executeStepRunStep — resolves {{_totp}} server-side. */
+  scriptId?: string | null,
+  /**
+   * Live hints from the EDITOR, which knows things the saved script may not:
+   * an unsaved 2FA step, a just-linked login, or a draft with no row yet.
+   * Without these the server fell back to the stored copy and silently
+   * skipped injecting a code.
+   */
+  reserved?: { loginId?: string | null; needsTotp?: boolean },
 ): Promise<StepRunStepResult> {
   const body: Record<string, unknown> = {};
   if (params) body.params = params;
   if (approvedGates && approvedGates.length > 0) body.approved_gates = approvedGates;
+  if (scriptId) body.script_id = scriptId;
+  if (reserved?.loginId) body.login_id = reserved.loginId;
+  if (reserved?.needsTotp !== undefined) body.needs_totp = reserved.needsTotp;
   const res = await agentClient.post(
     `/api/admin/${orgId}/step-runs/${runId}/run-remaining`,
     Object.keys(body).length > 0 ? body : undefined,
@@ -507,6 +634,10 @@ export async function improveWalk(
     instruction?: string;
     reset?: boolean;
     targetedOnly?: boolean;
+    /** See executeStepRunStep — resolves {{_totp}} server-side. */
+    scriptId?: string | null;
+    /** Live editor hints; see executeStepRunStep's `reserved`. */
+    reserved?: { loginId?: string | null; needsTotp?: boolean };
   },
   signal?: AbortSignal,
 ): Promise<ImproveWalkResult> {
@@ -519,6 +650,9 @@ export async function improveWalk(
   if (opts.instruction && opts.instruction.trim()) body.instruction = opts.instruction.trim();
   if (opts.reset) body.reset = true;
   if (opts.targetedOnly) body.targetedOnly = true;
+  if (opts.scriptId) body.script_id = opts.scriptId;
+  if (opts.reserved?.loginId) body.login_id = opts.reserved.loginId;
+  if (opts.reserved?.needsTotp !== undefined) body.needs_totp = opts.reserved.needsTotp;
   const res = await agentClient.post(
     `/api/admin/${orgId}/step-runs/${runId}/improve-walk`,
     body,
@@ -533,10 +667,27 @@ export async function executeStepRunStep(
   params?: Record<string, string>,
   signal?: AbortSignal,
   approvedGates?: number[],
+  /**
+   * Lets the server resolve reserved variables ({{_totp}}) from the script's
+   * linked login. Without it a 2FA step fills BLANK in the editor while the
+   * same script works under an agent — a test harness that disagrees with
+   * production is worse than none.
+   */
+  scriptId?: string | null,
+  /**
+   * Live hints from the EDITOR, which knows things the saved script may not:
+   * an unsaved 2FA step, a just-linked login, or a draft with no row yet.
+   * Without these the server fell back to the stored copy and silently
+   * skipped injecting a code.
+   */
+  reserved?: { loginId?: string | null; needsTotp?: boolean },
 ): Promise<StepRunStepResult> {
   const body: Record<string, unknown> = {};
   if (params) body.params = params;
   if (approvedGates && approvedGates.length > 0) body.approved_gates = approvedGates;
+  if (scriptId) body.script_id = scriptId;
+  if (reserved?.loginId) body.login_id = reserved.loginId;
+  if (reserved?.needsTotp !== undefined) body.needs_totp = reserved.needsTotp;
   const res = await agentClient.post(
     `/api/admin/${orgId}/step-runs/${runId}/execute`,
     Object.keys(body).length > 0 ? body : undefined,

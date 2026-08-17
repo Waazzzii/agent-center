@@ -34,7 +34,10 @@ export default function CreateLoginPage() {
   useEffect(() => {
     if (!selectedOrgId) return;
     getAgentAccessGroups(selectedOrgId).then(setAllGroups).catch(() => {});
-    listScripts(selectedOrgId).then((d) => setScripts(d.scripts ?? [])).catch(() => {});
+    // Only login-check scripts belong in the verify slot (migration 283).
+    listScripts(selectedOrgId, { kinds: ['login_verify'] })
+      .then((d) => setScripts(d.scripts ?? []))
+      .catch(() => {});
   }, [selectedOrgId]);
 
   const handleSave = async () => {

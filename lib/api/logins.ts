@@ -48,6 +48,15 @@ export interface Login {
    *  update. Boolean check `!!credentials_secret_id` = "credentials are
    *  on file" (for UI display). */
   credentials_secret_id: string | null;
+  /** UUID of the encrypted TOTP (authenticator-app) seed in
+   *  organization_secrets. Like credentials, the seed itself is NEVER
+   *  returned by the API — `!!totp_secret_id` = "2FA is enrolled". When
+   *  enrolled, a browser script can reference the reserved `{{_totp}}`
+   *  variable and the executor supplies a fresh code at run time instead
+   *  of pausing for a human. */
+  totp_secret_id: string | null;
+  /** When the current TOTP seed was enrolled (or last re-enrolled). */
+  totp_enrolled_at: string | null;
   /** Optional Slack channel override for HITL notifications when this
    *  login HITL-pauses. Falls through to program / org-default if null. */
   notification_slack_channel_id: string | null;
@@ -131,19 +140,106 @@ export async function deleteLogin(orgId: string, id: string): Promise<void> {
 }
 
 /**
- * Store (or replace) the login's auto-login credentials. The full
- * key-value object is encrypted as a single secret on the backend; the
- * API never echoes the values back. To "update" a credential, re-PUT the
- * full object — the system has no way to merge against unknown plaintext.
+ * MERGE values into the login's auto-login credentials.
+ *
+ * Send only the keys you're changing — everything else is preserved
+ * server-side. A key whose value is '' is treated as UNCHANGED, not
+ * cleared: the UI can never display stored values, so every box renders
+ * blank and blank-means-clear would wipe untouched credentials on save.
+ * Use deleteLoginCredentialKey to remove one.
+ *
+ * Pass replace:true to overwrite the whole blob instead.
  */
-export async function setLoginCredentials(orgId: string, id: string, credentials: Record<string, string>): Promise<Login> {
-  const res = await agentClient.put<Login>(`/api/admin/${orgId}/logins/${id}/credentials`, { credentials });
+export async function setLoginCredentials(
+  orgId: string,
+  id: string,
+  credentials: Record<string, string>,
+  opts?: { replace?: boolean },
+): Promise<Login> {
+  const res = await agentClient.put<Login>(
+    `/api/admin/${orgId}/logins/${id}/credentials`,
+    { credentials, ...(opts?.replace ? { replace: true } : {}) },
+  );
+  return res.data;
+}
+
+/**
+ * The NAMES of the stored credentials — never the values.
+ *
+ * Drives the per-key "Set / Not set" indicator. Safe to expose: the names
+ * are already visible as {{variables}} in the login script.
+ */
+export async function getLoginCredentialKeys(orgId: string, id: string): Promise<string[]> {
+  const res = await agentClient.get<{ keys: string[] }>(
+    `/api/admin/${orgId}/logins/${id}/credentials/keys`,
+  );
+  return res.data.keys ?? [];
+}
+
+/** Remove ONE stored credential, leaving the rest intact. */
+export async function deleteLoginCredentialKey(orgId: string, id: string, key: string): Promise<Login> {
+  const res = await agentClient.delete<Login>(
+    `/api/admin/${orgId}/logins/${id}/credentials/${encodeURIComponent(key)}`,
+  );
   return res.data;
 }
 
 /** Drop the stored credentials. Auto-login attempts fall through to HITL. */
 export async function clearLoginCredentials(orgId: string, id: string): Promise<Login> {
   const res = await agentClient.delete<Login>(`/api/admin/${orgId}/logins/${id}/credentials`);
+  return res.data;
+}
+
+/** Partial live code returned by previewLoginTotp — confirms enrollment. */
+export interface TotpPreview {
+  /**
+   * The LAST 3 DIGITS of the current code — never the whole thing.
+   *
+   * Enough to confirm the stored secret matches your authenticator app,
+   * not enough to authenticate with. The code is only ever meant to be used
+   * by the login script via `{{_totp}}`, never typed by a human, so the full
+   * value is truncated on the server and never crosses the wire.
+   */
+  code_suffix: string;
+  seconds_remaining: number;
+  period: number;
+  /** Total length of the real code, so the UI can mask the right amount. */
+  digits: number;
+  issuer: string | null;
+  account: string | null;
+  algorithm: string | null;
+}
+
+/**
+ * Enroll (or re-enroll) the login's authenticator (TOTP) seed.
+ *
+ * `input` is whatever the operator pasted — a full `otpauth://` URI or the
+ * raw base32 setup key shown next to the site's QR code. The backend parses
+ * both and rejects a malformed key with a 400 whose message names the
+ * problem, so surface `error` directly to the operator.
+ *
+ * Like credentials, the seed is write-only: the API never echoes it back.
+ */
+export async function setLoginTotp(orgId: string, id: string, input: string): Promise<Login> {
+  const res = await agentClient.put<Login>(`/api/admin/${orgId}/logins/${id}/totp`, { input });
+  return res.data;
+}
+
+/** Un-enroll 2FA. A 2FA-protected site falls back to manual HITL login. */
+export async function clearLoginTotp(orgId: string, id: string): Promise<Login> {
+  const res = await agentClient.delete<Login>(`/api/admin/${orgId}/logins/${id}/totp`);
+  return res.data;
+}
+
+/**
+ * Fetch the last 3 digits of the current code, so the operator can confirm
+ * the stored secret matches their authenticator app.
+ *
+ * Truncated server-side on purpose: the seed never reaches the browser, and
+ * neither does a usable code. Throws (409) when nothing is enrolled.
+ */
+export async function previewLoginTotp(orgId: string, id: string): Promise<TotpPreview> {
+  const res = await agentClient.post<TotpPreview>(`/api/admin/${orgId}/logins/${id}/totp/preview`);
   return res.data;
 }
 
