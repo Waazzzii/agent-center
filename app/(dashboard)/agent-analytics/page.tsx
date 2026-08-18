@@ -19,7 +19,7 @@ import {
   type ActionTypeStats,
   type FailureHotspot,
 } from '@/lib/api/agents';
-import { getAgentCapacity, type AgentCapacity } from '@/lib/api/ai-agent';
+import { getAgentCapacity, type AgentCapacity, type CapacityWorker } from '@/lib/api/ai-agent';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -30,7 +30,7 @@ import { getBillingCycle, type BillingCycle } from '@/lib/api/billing-cycles';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { toast } from 'sonner';
 import {
-  Activity, Clock, AlertTriangle, Zap, Server, Monitor,
+  Activity, Clock, AlertTriangle, Zap, Server, Monitor, Cpu,
   RefreshCw, Loader2, ChevronRight,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -230,8 +230,10 @@ function CapacityCards({ capacity }: { capacity: AgentCapacity }) {
   const textColor = (pct: number | null) =>
     pct === null ? 'text-emerald-600 dark:text-emerald-400' : pct >= 90 ? 'text-red-500' : pct >= 70 ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400';
 
+  const workers = capacity.workers ?? [];
+
   return (
-    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+    <div className={cn('grid grid-cols-1 sm:grid-cols-2 gap-3', workers.length > 0 && 'lg:grid-cols-3')}>
       {/* Agent capacity */}
       <Card>
         <CardContent className="py-3 px-4">
@@ -287,7 +289,70 @@ function CapacityCards({ capacity }: { capacity: AgentCapacity }) {
           )}
         </CardContent>
       </Card>
+
+      {/* Reserved infrastructure — the org's dedicated worker pods with live
+          memory/CPU from their heartbeats. Only rendered when the backend
+          reports workers (reserved-capacity model). */}
+      {workers.length > 0 && <InfrastructureCard workers={workers} />}
     </div>
+  );
+}
+
+function InfrastructureCard({ workers }: { workers: CapacityWorker[] }) {
+  const online = workers.filter((w) => w.status !== 'draining').length;
+  const anyGated = workers.some((w) => w.gated.length > 0);
+
+  const utilColor = (pct: number | null) =>
+    pct === null ? 'bg-muted-foreground/40' : pct >= 0.85 ? 'bg-red-500' : pct >= 0.7 ? 'bg-amber-400' : 'bg-emerald-500';
+
+  return (
+    <Card className="sm:col-span-2 lg:col-span-1">
+      <CardContent className="py-3 px-4">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Cpu className="h-4 w-4 text-violet-500" />
+            <span className="text-xs font-medium text-muted-foreground">Infrastructure</span>
+          </div>
+          {anyGated && (
+            <Badge variant="outline" className="text-[10px] border-amber-400 text-amber-500">At capacity</Badge>
+          )}
+        </div>
+        <div className="text-lg font-bold tabular-nums">
+          {online} {online === 1 ? 'pod' : 'pods'} online
+          {online < workers.length && (
+            <span className="text-amber-500 text-sm ml-1">· {workers.length - online} draining</span>
+          )}
+        </div>
+        <div className="mt-1.5 space-y-1.5">
+          {workers.map((w) => (
+            <div key={w.worker_id} className="text-[10px]">
+              <div className="flex items-center justify-between text-muted-foreground mb-0.5">
+                <span className="truncate font-medium" title={w.worker_id}>
+                  {w.worker_id.replace(/^agent-worker-/, '')}
+                </span>
+                <span className="tabular-nums shrink-0 ml-2">
+                  {w.status === 'draining' ? 'draining' : w.gated.length > 0 ? `busy (${w.gated.join('+')})` : 'ready'}
+                  {w.memory_pct != null && ` · mem ${(w.memory_pct * 100).toFixed(0)}%`}
+                  {w.cpu_pct != null && ` · cpu ${(w.cpu_pct * 100).toFixed(0)}%`}
+                </span>
+              </div>
+              {(w.memory_pct != null || w.cpu_pct != null) && (
+                <div className="flex gap-1">
+                  <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                    <div className={cn('h-full rounded-full transition-all', utilColor(w.memory_pct))}
+                      style={{ width: `${Math.min(100, (w.memory_pct ?? 0) * 100)}%` }} />
+                  </div>
+                  <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                    <div className={cn('h-full rounded-full transition-all', utilColor(w.cpu_pct))}
+                      style={{ width: `${Math.min(100, (w.cpu_pct ?? 0) * 100)}%` }} />
+                  </div>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

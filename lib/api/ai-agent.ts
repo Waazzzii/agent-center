@@ -34,6 +34,16 @@ export async function removeAnthropicKey(orgId: string): Promise<void> {
   await apiClient.delete(`/admin/organizations/${orgId}/ai-agent/anthropic-key`);
 }
 
+export interface CapacityWorker {
+  worker_id: string;
+  status: string;            // 'ready' | 'draining'
+  reserved: boolean;         // pinned to this org (vs shared/dev worker)
+  memory_pct: number | null; // 0..1 utilization from worker heartbeat telemetry
+  cpu_pct: number | null;    // 0..1 utilization (EMA) from worker heartbeat telemetry
+  gated: string[];           // admission-gated resources; non-empty = pod refusing new work
+  last_seen: number;         // epoch ms
+}
+
 export interface AgentCapacity {
   max_concurrent_agents: number | null;
   max_concurrent_browsers: number | null;
@@ -41,6 +51,8 @@ export interface AgentCapacity {
   active_browser_slots: number;
   active_agent_browser_slots: number;
   queued_agents: number;
+  /** Reserved worker pods serving this org (may be absent on older backends). */
+  workers?: CapacityWorker[];
 }
 
 export async function getAgentCapacity(orgId: string): Promise<AgentCapacity> {

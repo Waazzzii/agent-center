@@ -19,8 +19,13 @@ async function generateCodeChallenge(verifier: string): Promise<string> {
     .replace(/=+$/, "");
 }
 
-function setCookie(name: string, value: string, maxAgeSec = 600) {
-  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSec}; SameSite=Lax`;
+// Default 20 min: must EXCEED the backend's magic-code window (15 min). A
+// shorter verifier lifetime means a code the backend still accepts mints an
+// auth code this app can no longer exchange, and the user gets "session
+// expired" after doing everything right (then it works on the retry).
+function setCookie(name: string, value: string, maxAgeSec = 1200) {
+  const secure = window.location.protocol === "https:" ? "; Secure" : "";
+  document.cookie = `${name}=${encodeURIComponent(value)}; path=/; max-age=${maxAgeSec}; SameSite=Lax${secure}`;
 }
 
 function LoginRedirectInner() {
@@ -36,9 +41,10 @@ function LoginRedirectInner() {
         const codeVerifier = generateRandom(64);
         const codeChallenge = await generateCodeChallenge(codeVerifier);
 
-        setCookie("pkce_verifier", codeVerifier);
-        setCookie("oauth_state", state);
-        setCookie("oauth_redirect", redirectTo);
+        // State-keyed cookies: multiple in-flight logins (other tabs, other
+        // products on localhost) can't clobber each other's verifier.
+        setCookie(`pkce_verifier_${state}`, codeVerifier);
+        setCookie(`oauth_redirect_${state}`, redirectTo);
 
         const redirectUri = `${window.location.origin}/auth/callback`;
         const authUrl = buildAuthorizationUrl({ redirectUri, state, codeChallenge });
