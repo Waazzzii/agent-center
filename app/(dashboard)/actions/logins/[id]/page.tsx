@@ -7,7 +7,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   getLogin, updateLogin, deleteLogin, verifyLogin, startLogout,
-  setLoginCredentials, clearLoginCredentials, testAutoLogin,
+  setLoginCredentials, clearLoginCredentials, testAutoLogin, clearLoginSession,
   getLoginCredentialKeys, deleteLoginCredentialKey,
   setLoginTotp, clearLoginTotp, previewLoginTotp,
   listLoginRuns,
@@ -47,7 +47,7 @@ import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  Loader2, LogIn, LogOut, Save, Trash2,
+  Loader2, LogIn, LogOut, Save, Trash2, Eraser,
   CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
   Sparkles, Plus, X as XIcon, Eye, EyeOff, KeyRound, Pencil, Info,
   Settings2, History, Camera, Image as ImageIcon,
@@ -276,7 +276,7 @@ export default function EditLoginPage() {
   // Log Out share the row, so the wrong icon would animate). All buttons
   // remain disabled while any action is in flight to prevent the operator
   // from kicking off two browser-slot sessions at once.
-  type StartingAction = 'verify' | 'login' | 'logout' | null;
+  type StartingAction = 'verify' | 'login' | 'logout' | 'clear_session' | null;
   const [startingAction, setStartingAction] = useState<StartingAction>(null);
   const { start: startManualLogin } = useStartManualLogin();
   const isStarting = startingAction !== null;
@@ -1174,6 +1174,44 @@ export default function EditLoginPage() {
   // let the polling effect track it to terminal; the button shows a
   // spinner + "Logging out..." while active and the toast in that
   // effect surfaces any failure.
+  /**
+   * Wipe the saved browser state for this login — cookies + localStorage in
+   * the profile Chrome actually runs against, plus the stored storage_state.
+   *
+   * NOT the same as Log Out. Logging out uses the site's own sign-out UI,
+   * and a "trust this device / remember me for 30 days" cookie is designed
+   * to SURVIVE that — so a logout leaves 2FA suppressed on the next sign-in.
+   * This clears the jar outright, so the site treats the next visit as a
+   * brand-new device and challenges for 2FA again.
+   *
+   * Destructive and rarely needed, hence a confirm: the next run has to do a
+   * full sign-in, which for a 2FA site means either an enrolled secret or a
+   * human.
+   */
+  const handleClearSession = async () => {
+    if (!selectedOrgId || !id) return;
+    const ok = await confirm({
+      title: 'Clear saved browser session?',
+      description:
+        'Deletes the cookies and local storage this login has saved, including any '
+        + '"remember this device" cookie that suppresses 2FA. The next run must sign in '
+        + 'from scratch. Use this when you need the site to challenge for 2FA again.',
+      confirmText: 'Clear session',
+      variant: 'destructive',
+    });
+    if (!ok) return;
+    setStartingAction('clear_session');
+    try {
+      await clearLoginSession(selectedOrgId, id);
+      toast.success('Saved session cleared — the next sign-in starts clean');
+      await load();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to clear the session');
+    } finally {
+      setStartingAction(null);
+    }
+  };
+
   const handleLogout = async () => {
     if (!selectedOrgId) return;
 
@@ -1382,6 +1420,22 @@ export default function EditLoginPage() {
                     <span className="ml-1">
                       {activeSession && activeSession.kind === 'login_logout' ? 'Logging out...' : 'Log Out'}
                     </span>
+                  </Button>
+                  {/* Clear session — the only way to drop a "remember this
+                      device" cookie, which a site-side logout deliberately
+                      keeps. Sits next to Log Out because that's where people
+                      look for it, styled quieter since it's rarely right. */}
+                  <Button
+                    variant="ghost" size="sm"
+                    onClick={handleClearSession}
+                    disabled={isStarting || !!activeSession}
+                    className="text-xs text-muted-foreground hover:text-destructive"
+                    title="Delete saved cookies for this login, including any 2FA 'remember this device' cookie"
+                  >
+                    {startingAction === 'clear_session'
+                      ? <Loader2 className="h-3 w-3 animate-spin" />
+                      : <Eraser className="h-3 w-3" />}
+                    <span className="ml-1">Clear session</span>
                   </Button>
                 </>
               )}
