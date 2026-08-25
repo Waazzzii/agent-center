@@ -34,7 +34,7 @@ export default function RecordPage() {
 
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Video className="h-5 w-5 text-brand" /> Browser Scripts</h1>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Video className="h-5 w-5 text-brand" /> Browser Skills</h1>
         <p className="text-sm text-muted-foreground mt-0.5">Record browser interactions and save them as reusable scripts</p>
       </div>
 

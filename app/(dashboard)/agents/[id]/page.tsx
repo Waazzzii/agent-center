@@ -26,6 +26,7 @@ import { listLogins, createLogin, updateLogin, type Login } from '@/lib/api/logi
 import { useTags } from '@/lib/hooks/use-tags';
 import { TagPicker } from '@/components/tags/tag-picker';
 import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
+import { SearchableSelect } from '@/components/ui/searchable-select';
 import { BrowserScriptPreview } from '@/components/actions/BrowserScriptPreview';
 import { SubAgentPreview } from '@/components/actions/SubAgentPreview';
 import { ApprovalPreview } from '@/components/actions/ApprovalPreview';
@@ -1520,27 +1521,22 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 {aiStepMode === 'existing' && (
                   <div className="space-y-1">
                     <Label>AI Step</Label>
-                    <Select
+                    <SearchableSelect
                       value={actionForm.aiStepId}
-                      onValueChange={(v) => {
+                      options={aiSteps.map((s) => ({ value: s.id, label: s.name, hint: s.description ?? undefined }))}
+                      placeholder="Select an AI skill to edit…"
+                      emptyLabel="No AI skills yet"
+                      searchPlaceholder="Search AI skills by name or description…"
+                      onChange={(v) => {
                         const s = aiSteps.find((x) => x.id === v);
                         setActionForm(f => ({ ...f, aiStepId: v }));
                         if (s) setNewAiStepForm({ name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [], skill_ids: s.skill_ids ?? [] });
                       }}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Select an AI step to edit…" /></SelectTrigger>
-                      <SelectContent>
-                        {aiSteps.length === 0 ? (
-                          <SelectItem value="_none" disabled>No AI steps yet</SelectItem>
-                        ) : (
-                          aiSteps.map((s) => <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>)
-                        )}
-                      </SelectContent>
-                    </Select>
+                    />
                     <EntityPreviewNotice
                       entityLabel="AI step"
                       editHref={actionForm.aiStepId ? `/actions/ai-steps/${actionForm.aiStepId}` : '/actions/ai-steps'}
-                      editLabel="AI Steps"
+                      editLabel="AI Skills"
                     />
                   </div>
                 )}
@@ -1599,23 +1595,18 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 {loginMode === 'existing' && (
                   <div className="space-y-1">
                     <Label>Login Profile</Label>
-                    <Select
+                    <SearchableSelect
                       value={actionForm.loginId}
-                      onValueChange={(v) => {
+                      onChange={(v) => {
                         const l = logins.find((x) => x.id === v);
                         setActionForm(f => ({ ...f, loginId: v }));
                         if (l) setNewLoginForm({ name: l.name, url: l.url, verify_script_id: l.verify_script_id ?? null });
                       }}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Select a login profile to edit…" /></SelectTrigger>
-                      <SelectContent>
-                        {logins.length === 0 ? (
-                          <SelectItem value="_none" disabled>No logins yet</SelectItem>
-                        ) : (
-                          logins.map((l) => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)
-                        )}
-                      </SelectContent>
-                    </Select>
+                      options={logins.map((l) => ({ value: l.id, label: l.name, hint: l.url ?? undefined }))}
+                      placeholder="Select a login profile to edit…"
+                      emptyLabel="No logins yet"
+                      searchPlaceholder="Search logins by name or URL…"
+                    />
                     <EntityPreviewNotice
                       entityLabel="login profile"
                       editHref={actionForm.loginId ? `/actions/logins/${actionForm.loginId}` : '/actions/logins'}
@@ -1792,36 +1783,30 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <EntityPreviewNotice
                   entityLabel="browser script"
                   editHref="/actions/browser-scripts"
-                  editLabel="Browser Scripts"
+                  editLabel="Browser Skills"
                 />
                 <div className="space-y-1">
                   <Label>Script <span className="text-destructive">*</span></Label>
-                  <Select value={actionForm.scriptId} onValueChange={(v) => setActionForm(f => ({ ...f, scriptId: v }))}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select a browser script…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(() => {
-                        // Only real browser scripts belong in an agent action.
-                        // Login + login-check scripts are run BY the login
-                        // machinery, not scheduled as workflow steps.
-                        //
-                        // The full list is still loaded (it resolves display
-                        // names for existing actions), so an action already
-                        // pointing at a login script keeps its entry here —
-                        // otherwise it would render blank and look deleted.
-                        const selectable = browserScripts.filter(
-                          (s) => s.kind === 'regular' || s.id === actionForm.scriptId,
-                        );
-                        if (selectable.length === 0) {
-                          return <SelectItem value="_none" disabled>No scripts available</SelectItem>;
-                        }
-                        return selectable.map((s) => (
-                          <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-                        ));
-                      })()}
-                    </SelectContent>
-                  </Select>
+                  {/* Only real browser skills belong in a routine step. Login and
+                      login-check scripts are run BY the login machinery, not
+                      scheduled as steps. The full list is still loaded (it resolves
+                      display names for existing actions), so an action already
+                      pointing at a login script keeps its entry — otherwise it
+                      would render blank and look deleted. */}
+                  <SearchableSelect
+                    value={actionForm.scriptId}
+                    onChange={(v) => setActionForm(f => ({ ...f, scriptId: v }))}
+                    options={browserScripts
+                      .filter((s) => s.kind === 'regular' || s.id === actionForm.scriptId)
+                      .map((s) => ({
+                        value: s.id,
+                        label: s.name,
+                        hint: s.description ?? undefined,
+                      }))}
+                    placeholder="Select a browser skill…"
+                    emptyLabel="No browser skills available"
+                    searchPlaceholder="Search browser skills by name or description…"
+                  />
                   {/* Browser scripts are recorded/edited in their own full-screen
                       recorder, so link across to Browser Scripts rather than
                       editing inline here. */}
@@ -1831,7 +1816,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     </Link>
                     {actionForm.scriptId && (
                       <Link href="/actions/browser-scripts" className="text-xs text-muted-foreground hover:underline">
-                        Edit in Browser Scripts →
+                        Edit in Browser Skills →
                       </Link>
                     )}
                   </div>

@@ -102,7 +102,7 @@ export default function AiStepsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Sparkles className="h-5 w-5 text-brand" /> AI Steps
+            <Sparkles className="h-5 w-5 text-brand" /> AI Skills
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">Reusable AI prompts that agent workflows can reference.</p>
         </div>

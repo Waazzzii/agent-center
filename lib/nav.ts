@@ -13,37 +13,38 @@ export interface NavItem {
 }
 
 /**
- * Main org nav. Agents is the workspace: it groups the agent list, run
- * history, and the reusable building blocks an agent is assembled from. Skills
- * nest under AI Steps and Logins under Browser Scripts — they only feed those,
- * so they're a third level, not separate destinations.
+ * Main org nav. Agents is the workspace: the routines themselves, their run
+ * history, and the SKILLS a routine's steps are assembled from.
+ *
+ * "Skills" is a flat group of step types — AI, Browser, Logins, Approvals —
+ * rather than the previous nesting (Logins under Browser Scripts, the old
+ * skill library under AI Steps). Those nestings implied a dependency that
+ * isn't real: a login is not a property of browser scripts, it's another kind
+ * of thing a step can be. One level, four siblings, reads as a palette.
+ *
+ * LABELS ONLY. Routes, permissions, tables and behaviour are unchanged —
+ * "Routines" still lives at /agents, "AI" at /actions/ai-steps. Icons are
+ * keyed by href in ViewModeSidebar, so renames here don't disturb them.
+ *
+ * The old skill library (/skills — the entities you attached to AI steps) is
+ * deliberately absent. With AI steps now being the reusable unit themselves,
+ * a second layer of attachable "skills" was a distinction without a
+ * difference. The page still exists at its URL; it's just no longer somewhere
+ * the nav will take you.
  */
 export const orgMainNavItems: NavItem[] = [
   {
     label: 'Agents',
-    href: '', // grouper — "All agents" below is the actual list page
+    href: '', // grouper — "Routines" below is the actual list page
     permissionKeys: ['agent_center_user'],
     children: [
-      { label: 'Workflows',   href: '/agents',        permissionKeys: ['agent_center_user'] },
-      { label: 'Executions',  href: '/agent-history', permissionKeys: ['agent_center_user'] },
-      { label: 'Building blocks', href: '', heading: true },
-      {
-        label: 'AI Steps',
-        href: '/actions/ai-steps',
-        permissionKeys: ['agent_center_user'],
-        children: [
-          { label: 'Skills', href: '/skills', permissionKeys: ['agent_center_user'] },
-        ],
-      },
-      {
-        label: 'Browser Scripts',
-        href: '/actions/browser-scripts',
-        permissionKeys: ['agent_center_user'],
-        children: [
-          { label: 'Logins', href: '/actions/logins', permissionKeys: ['agent_center_user'] },
-        ],
-      },
-      { label: 'Approvals', href: '/actions/approvals', permissionKeys: ['agent_center_user'] },
+      { label: 'Routines',   href: '/agents',        permissionKeys: ['agent_center_user'] },
+      { label: 'Executions', href: '/agent-history', permissionKeys: ['agent_center_user'] },
+      { label: 'Skills', href: '', heading: true },
+      { label: 'AI',        href: '/actions/ai-steps',        permissionKeys: ['agent_center_user'] },
+      { label: 'Browser',   href: '/actions/browser-scripts', permissionKeys: ['agent_center_user'] },
+      { label: 'Logins',    href: '/actions/logins',          permissionKeys: ['agent_center_user'] },
+      { label: 'Approvals', href: '/actions/approvals',       permissionKeys: ['agent_center_user'] },
     ],
   },
   { label: 'Action Required', href: '/interactions',    permissionKeys: ['agent_center_user'] },

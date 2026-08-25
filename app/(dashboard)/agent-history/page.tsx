@@ -251,6 +251,21 @@ function RunsTable({
                   <StatusGlyph status={displayStatus} />
                   {run.depth > 0 && <GitBranch className="h-3 w-3 text-brand shrink-0" />}
                   <span className={cn('text-sm font-medium truncate', run.depth > 0 && 'text-brand')}>{run.agent_name}</span>
+                  {/* Straight to the routine that produced this run. Clicking the row
+                      opens the EXECUTION, so this needs to be a separate target with
+                      stopPropagation — the two destinations are both wanted and easy
+                      to confuse. Reading a failed run and wanting to see the steps
+                      that produced it is the common next move. */}
+                  {run.agent_id && (
+                    <Link
+                      href={`/agents/${run.agent_id}`}
+                      onClick={(ev) => ev.stopPropagation()}
+                      title="Open this routine"
+                      className="shrink-0 text-muted-foreground/60 hover:text-brand transition-colors"
+                    >
+                      <ArrowUpRight className="h-3.5 w-3.5" />
+                    </Link>
+                  )}
                   {childCount > 0 && (
                     <span className="text-[9px] text-brand shrink-0">{childCount} sub</span>
                   )}
@@ -312,6 +327,21 @@ function RunsTable({
                 <div className="flex items-center gap-2">
                   <StatusGlyph status={displayStatus} />
                   <span className="font-medium text-sm truncate">{run.agent_name}</span>
+                  {/* Straight to the routine that produced this run. Clicking the row
+                      opens the EXECUTION, so this needs to be a separate target with
+                      stopPropagation — the two destinations are both wanted and easy
+                      to confuse. Reading a failed run and wanting to see the steps
+                      that produced it is the common next move. */}
+                  {run.agent_id && (
+                    <Link
+                      href={`/agents/${run.agent_id}`}
+                      onClick={(ev) => ev.stopPropagation()}
+                      title="Open this routine"
+                      className="shrink-0 text-muted-foreground/60 hover:text-brand transition-colors"
+                    >
+                      <ArrowUpRight className="h-3.5 w-3.5" />
+                    </Link>
+                  )}
                   <StatusBadge status={displayStatus} />
                 </div>
                 <div className="text-xs text-muted-foreground">{formatDate(run.started_at)} · {durationMs != null ? formatDuration(durationMs) : '—'}</div>

@@ -58,7 +58,21 @@ interface Props {
  * Rendering is identical across contexts so the read-only view matches the
  * edit view field-for-field.
  */
-export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = false, availableVars, orgId, onSkillsChanged, showSkills = true }: Props) {
+/**
+ * showSkills defaults to FALSE: the old skill library is retired.
+ *
+ * Skills were attachable prompt fragments you assigned to an AI step. Now that
+ * AI steps are themselves the reusable, shareable unit that routines are built
+ * from, a second layer of attachable things inside them was a distinction
+ * without a difference — and one more concept for an operator to learn before
+ * they could build anything.
+ *
+ * Deliberately hidden rather than deleted. Existing skill_ids stay on their
+ * rows and keep being honoured at run time, so nothing that works today stops
+ * working; there is just no longer a way to add more. Pass showSkills to opt a
+ * surface back in if that turns out to be wrong.
+ */
+export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = false, availableVars, orgId, onSkillsChanged, showSkills = false }: Props) {
   const addOutput = () => setForm((f) => ({
     ...f,
     // Required by default — opt-out by unchecking the box. Matches the

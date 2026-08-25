@@ -384,6 +384,32 @@ export async function refineScriptStream(
   return final;
 }
 
+/**
+ * Deterministic cleanup — no model call, returns in milliseconds.
+ *
+ * This is what runs after a recording. It hardens each selector by taking the
+ * most stable candidate the recorder already ranked, attaches waits, names
+ * steps, gates submits for approval, prunes dead parameters, and drops the few
+ * step shapes that provably do nothing (a click on the form background, a
+ * click that only focused the field the next step fills).
+ *
+ * refineScript / refineScriptStream below are the AI pass, now an explicit
+ * action rather than a toll on every recording. Reach for it when the capture
+ * needs judgement this cannot supply: deciding which of a human's stray clicks
+ * were accidental, or whether an ambiguously worded button is destructive.
+ */
+export async function finalizeScript(orgId: string, body: {
+  steps: RecordedStep[];
+  parameters?: Record<string, string>;
+  denoise?: boolean;
+  /** Current script name. When it's a timestamp, the result carries suggestedName. */
+  name?: string;
+}, signal?: AbortSignal): Promise<RefineResult & { suggestedName?: string | null }> {
+  const res = await agentClient.post<RefineResult & { suggestedName?: string | null }>(
+    `/api/admin/${orgId}/scripts/finalize`, body, { signal });
+  return res.data;
+}
+
 export async function refineScript(orgId: string, body: {
   steps: RecordedStep[];
   target_indices?: number[];

@@ -49,7 +49,7 @@ import {
   runLinkedLoginInStepRun,
   getScriptAgentUsage,
   propagateScriptLogin,
-  refineScriptStream,
+  finalizeScript,
   improveWalk,
   tidyScript,
   SCRIPT_KIND_LABELS,
@@ -1010,9 +1010,15 @@ export function RunScriptModal({
    * identical path — an undo that persisted differently from a save would be
    * a nasty way to lose work.
    */
-  const persistSteps = async (steps: RecordedStep[], parameters: Record<string, string>) => {
+  /**
+   * @param nameOverride Use when the name was just computed in the same tick.
+   *   setScriptName is async, so this closure would otherwise still see the
+   *   old value and save a script under the timestamp name finalize just
+   *   replaced.
+   */
+  const persistSteps = async (steps: RecordedStep[], parameters: Record<string, string>, nameOverride?: string) => {
     if (!orgId) return;
-    const name = scriptName.trim() || 'Untitled Script';
+    const name = (nameOverride ?? scriptName).trim() || 'Untitled Script';
     if (mode === 'record') {
       if (tempScriptId) {
         await updateScript(orgId, tempScriptId, { name, description: scriptDescription || undefined, steps, parameters, test_values: {}, login_id: linkedLoginId });
@@ -1064,49 +1070,42 @@ export function RunScriptModal({
     if (confirmStep) {
       pushActivity('ai', `Success check: ${confirmStep.waitFor?.description || confirmStep.selector}`);
     }
-    // refineScript is ONE request with no streaming, so there is no true
-    // per-step progress to report mid-flight — say what's happening and how
-    // long it takes rather than inventing fake stages.
-    pushActivity('ai', 'Analyzing with AI — removing redundant steps, hardening selectors, finding variables…');
-    // The model reads the whole script before emitting its first token, so
-    // there is a genuine quiet stretch before step 1 appears. Count it out
-    // loud: silence with a spinner reads as "hung", silence with a clock
-    // reads as "working".
-    const tickStart = Date.now();
-    const tick = window.setInterval(() => {
-      const secs = Math.round((Date.now() - tickStart) / 1000);
-      setPostProcessing(`Reading the script… ${secs}s`);
-    }, 1000);
-    const stopTick = () => window.clearInterval(tick);
+    // Deterministic cleanup, not an AI pass. Selectors are hardened by taking
+    // the most stable candidate the recorder already ranked, waits and
+    // variables come from the capture itself, and submits are detected from
+    // the element. That is everything the model used to be asked for except
+    // judgement, and it returns in milliseconds — so there is no progress to
+    // narrate and no clock to count out.
+    //
+    // The AI pass is still one click away (Improve) for the cases that need
+    // judgement: stray clicks a human made, or an ambiguously worded button.
+    pushActivity('ai', 'Cleaning up — hardening selectors, attaching waits, finding variables…');
+    const stopTick = () => {};
     try {
       // The recorder has no configured start URL — the operator navigates
       // inside the live browser — so take it from the capture itself.
       const startUrl = rawSteps.find((s) => s.action === 'navigate' && s.url)?.url;
       const controller = new AbortController();
       postProcessAbortRef.current = controller;
-      // Streamed so the operator watches the script being rebuilt rather
-      // than a spinner. The connection lives exactly as long as the pass.
-      const result = await refineScriptStream(
+      void startUrl; // the finalize pass reads everything it needs from the steps
+      const result = await finalizeScript(
         orgId,
-        { steps: rawSteps, context: { start_url: startUrl || undefined } },
-        (ev) => {
-          if (ev.type === 'step') {
-            stopTick();   // first event means the model is writing now
-            // The model only reports steps it CHANGED, so these arrive
-            // sparse — index is the step's real position, not a counter.
-            if (ev.dropped) {
-              pushActivity('ai', `✕ ${ev.index + 1}. removed (redundant)`);
-            } else {
-              const label = ev.name || ev.action || `step ${ev.index + 1}`;
-              pushActivity('ai', `→ ${ev.index + 1}. ${label}`);
-            }
-            setPostProcessing(`Rewriting step ${ev.index + 1}…`);
-          } else if (ev.type === 'error') {
-            pushActivity('error', ev.error);
-          }
-        },
+        { steps: rawSteps, parameters: params, name: scriptName },
         controller.signal,
       );
+      stopTick();
+
+      // A recording is named after the moment it was made ("May 15, 2:12 PM").
+      // That is a fine default and a useless permanent name — in a list of a
+      // dozen it identifies nothing, and it gives the MCP connector nothing to
+      // match on when a model is picking a script by name. finalize proposes
+      // one derived from what the script actually does, and ONLY when the
+      // current name is obviously machine-made; anything typed by a human
+      // comes back null and is left alone.
+      if (result.suggestedName) {
+        setScriptName(result.suggestedName);
+        pushActivity('ai', `Named it “${result.suggestedName}”`);
+      }
       const refined = result.steps ?? rawSteps;
       // Appended AFTER refinement — see the param docs.
       const cleaned = confirmStep ? [...refined, confirmStep] : refined;
@@ -1144,7 +1143,7 @@ export function RunScriptModal({
       // just adds a way to lose it by closing the tab. Undo covers regret;
       // an unsaved script covers nothing.
       try {
-        await persistSteps(cleaned, result.parameters ?? {});
+        await persistSteps(cleaned, result.parameters ?? {}, result.suggestedName ?? undefined);
         setCanUndoRefine(true);
         pushActivity('done', `✓ Saved — ${cleaned.length} step${cleaned.length === 1 ? '' : 's'}. Undo is available until you close the editor.`);
         toast.success(`Cleaned up and saved — ${cleaned.length} step${cleaned.length === 1 ? '' : 's'}`);
@@ -2412,9 +2411,34 @@ export function RunScriptModal({
   // ── postMessage listener — one-time setup, uses refs for fresh state ──
   useEffect(() => {
     const handler = (e: MessageEvent) => {
-      if (e.data?.type !== 'vnc-extract-copy' || !e.data?.text) return;
-      if (!scriptSessionRef.current) return;
-      smartCopyRef.current(e.data.text.trim());
+      if (e.data?.type === 'vnc-extract-copy' && e.data?.text) {
+        if (!scriptSessionRef.current) return;
+        smartCopyRef.current(e.data.text.trim());
+        return;
+      }
+
+      // Clipboard relay for host → VM paste.
+      //
+      // The viewer runs in a cross-origin iframe, where browsers refuse
+      // clipboard-read — Safari never delegates it, and Chrome cannot even
+      // prompt inside a third-party frame. THIS page is top-level and
+      // first-party, so the identical read is promptable and grantable here.
+      // The iframe asks, we read, we answer. Without this the operator
+      // could type into the remote browser but never paste into it, which
+      // is what "copying from my machine to the VM stopped working on the
+      // Mac" actually was.
+      if (e.data?.type === 'vnc-request-paste') {
+        const reply = (text: string) => {
+          const target = vncIframeRef.current?.contentWindow;
+          target?.postMessage({ type: 'vnc-paste-text', text }, '*');
+        };
+        navigator.clipboard.readText()
+          .then((t) => reply(t ?? ''))
+          // Answer even on failure: the viewer is waiting on a timeout and
+          // an immediate empty reply lets it fall through to its own
+          // fallback without the operator staring at nothing.
+          .catch(() => reply(''));
+      }
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);

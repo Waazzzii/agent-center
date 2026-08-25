@@ -1236,6 +1236,19 @@ export default function ExecutionDetailPage() {
               {current.item_index != null && ` · Item #${current.item_index}`}
               {isExecution && ` · ${id.slice(-8).toUpperCase()}`}
             </p>
+            {/* The routine behind this run. Looking at what happened and then
+                wanting to see the steps that caused it is the common next move;
+                without this the operator goes back to the list and searches by
+                name. Only on an execution node — an action node inherits its
+                parent routine and would just repeat the link. */}
+            {isExecution && current.agent_id && (
+              <Link
+                href={`/agents/${current.agent_id}`}
+                className="mt-1 inline-flex items-center gap-1 text-xs text-brand hover:underline"
+              >
+                Open routine <ChevronRight className="h-3 w-3" />
+              </Link>
+            )}
           </div>
         </div>
         <SBadge status={current.status} />

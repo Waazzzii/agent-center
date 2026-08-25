@@ -600,6 +600,8 @@ export interface FullTreeNode {
   duration_ms?: number | null;
   // Execution-specific
   agent_name?: string;
+  /** The routine that produced this run — drives the "Open routine" link. */
+  agent_id?: string;
   item_index?: number | null;
   depth?: number;
   error_message?: string | null;
