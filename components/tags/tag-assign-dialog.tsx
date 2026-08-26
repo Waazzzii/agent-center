@@ -15,7 +15,7 @@ import { useEffect, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { useTags } from '@/lib/hooks/use-tags';
@@ -57,11 +57,24 @@ export function TagAssignDialog({ open, onOpenChange, orgId, entityLabel, initia
 
   return (
     <Dialog open={open} onOpenChange={(o) => { if (!saving) onOpenChange(o); }}>
-      <DialogContent className="max-w-md">
+      {/* overflow-visible is load-bearing, not cosmetic.
+          DialogContent ships with overflow-y-auto, which makes it a scroll
+          container — and a scroll container CLIPS the picker's absolutely
+          positioned suggestion list. The result was a dialog whose whole point
+          (choosing from a list) was cut off at the box edge, with the list
+          technically scrollable inside a container nobody could see.
+
+          Wider and taller for the same reason: the list needs somewhere to open
+          INTO. min-h reserves that space so the suggestions sit inside the
+          dialog rather than hanging off the bottom of it. */}
+      <DialogContent className="sm:max-w-xl overflow-visible">
         <DialogHeader>
           <DialogTitle>Tags{entityLabel ? ` · ${entityLabel}` : ''}</DialogTitle>
+          <DialogDescription>
+            Type to search, or type a new name and press Enter to create one.
+          </DialogDescription>
         </DialogHeader>
-        <div className="py-1">
+        <div className="py-1 min-h-[18rem]">
           <TagPicker
             tags={tags}
             selected={selected}

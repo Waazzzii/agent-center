@@ -14,6 +14,25 @@ export interface Login {
    *  any step error or timeout = needs_login. ON DELETE RESTRICT: the script
    *  cannot be deleted while any login still references it here. */
   verify_script_id: string | null;
+  /**
+   * Where the 2FA code comes from.
+   *   none  — no second factor
+   *   totp  — generated from the enrolled authenticator secret
+   *   slack — read from a Slack channel by matching mfa_code_regex against
+   *           messages that arrive after the login attempt starts
+   *
+   * The script never knows the difference: it fills {{_mfa}} either way.
+   */
+  mfa_source: 'none' | 'totp' | 'slack';
+  /** Channel to read codes from. Required when mfa_source is slack. */
+  mfa_slack_channel_id: string | null;
+  /** Extracts the code. Capture group 1 if present, else the whole match. */
+  mfa_code_regex: string | null;
+  /**
+   * How long to wait for a Slack code before failing the login. Unlike TOTP a
+   * Slack code does not exist until the site sends it, so waiting is inherent.
+   */
+  mfa_timeout_seconds: number;
   browser_session_id: string | null;
   /** Any time we ran a verify (regardless of outcome). */
   last_checked_at: string | null;
@@ -51,7 +70,7 @@ export interface Login {
   /** UUID of the encrypted TOTP (authenticator-app) seed in
    *  organization_secrets. Like credentials, the seed itself is NEVER
    *  returned by the API — `!!totp_secret_id` = "2FA is enrolled". When
-   *  enrolled, a browser script can reference the reserved `{{_totp}}`
+   *  enrolled, a browser script can reference the reserved `{{_mfa}}`
    *  variable and the executor supplies a fresh code at run time instead
    *  of pausing for a human. */
   totp_secret_id: string | null;
@@ -87,6 +106,29 @@ export interface LoginPatch {
   /** undefined = leave alone, null = clear, string = set. Empty string is
    *  treated as null at the API call site. */
   notification_slack_channel_id?: string | null;
+  mfa_source?: 'none' | 'totp' | 'slack';
+  /** undefined = leave alone, null = clear, string = set. */
+  mfa_slack_channel_id?: string | null;
+  mfa_code_regex?: string | null;
+  mfa_timeout_seconds?: number;
+}
+
+/** One message the pattern was tried against. Codes come back masked. */
+export interface MfaTestMessage {
+  ts: string;
+  excerpt: string;
+  matched: boolean;
+  /** e.g. "48••••" — proves extraction worked without echoing a live code. */
+  code_preview: string | null;
+  code_length: number | null;
+}
+
+export interface MfaTestResult {
+  ok: boolean;
+  error?: string;
+  scanned?: number;
+  matched?: number;
+  messages?: MfaTestMessage[];
 }
 
 export interface VerifyResult {
@@ -130,13 +172,90 @@ export async function createLogin(orgId: string, data: LoginInput): Promise<Logi
   return res.data;
 }
 
+/**
+ * Try a code pattern against the channel's recent messages.
+ *
+ * Omit either argument to re-check what is already stored. Resolves even when
+ * the pattern matched nothing — `ok` is about whether the CHECK ran, not about
+ * whether it found a code, because "ran fine, matched nothing" is the most
+ * useful answer this can give.
+ */
+export async function testLoginMfaPattern(
+  orgId: string,
+  id: string,
+  opts?: { channelId?: string | null; pattern?: string | null },
+): Promise<MfaTestResult> {
+  try {
+    const res = await agentClient.post<MfaTestResult>(
+      `/api/admin/${orgId}/logins/${id}/mfa/test`,
+      { channel_id: opts?.channelId ?? undefined, pattern: opts?.pattern ?? undefined },
+    );
+    return res.data;
+  } catch (err: unknown) {
+    const e = err as { response?: { data?: MfaTestResult } };
+    return e.response?.data ?? { ok: false, error: 'Could not reach the channel' };
+  }
+}
+
 export async function updateLogin(orgId: string, id: string, data: LoginPatch): Promise<Login> {
   const res = await agentClient.patch<Login>(`/api/admin/${orgId}/logins/${id}`, data);
   return res.data;
 }
 
-export async function deleteLogin(orgId: string, id: string): Promise<void> {
-  await agentClient.delete(`/api/admin/${orgId}/logins/${id}`);
+/** One agent action that depends on a login. */
+export interface LoginUsageAction {
+  action_id: string;
+  agent_id: string;
+  agent_name: string;
+  action_type: string;
+  order_index: number;
+}
+
+/**
+ * What breaks if a login is removed.
+ *
+ * `blocking` is agent actions only. Scripts naming the login as their editor
+ * default are reported too but do not block: that FK still nulls harmlessly,
+ * whereas an agent action losing its login would send a run out
+ * unauthenticated.
+ */
+export interface LoginUsage {
+  actions: LoginUsageAction[];
+  agent_count: number;
+  agents: { id: string; name: string }[];
+  scripts: { id: string; name: string }[];
+  blocking: boolean;
+}
+
+export async function getLoginUsage(orgId: string, id: string): Promise<LoginUsage> {
+  const res = await agentClient.get(`/api/admin/${orgId}/logins/${id}/usage`);
+  return res.data;
+}
+
+/** Move every agent action off this login and onto another. */
+export async function reassignLogin(
+  orgId: string,
+  id: string,
+  toLoginId: string,
+): Promise<{ moved: number; agent_ids: string[] }> {
+  const res = await agentClient.post(`/api/admin/${orgId}/logins/${id}/reassign`, {
+    to_login_id: toLoginId,
+  });
+  return res.data;
+}
+
+/**
+ * Delete a login.
+ *
+ * Rejects with a 409 carrying { error, usage } while agent actions still point
+ * at it — callers should render that usage and offer reassign rather than
+ * jumping to force. force:true clears those bindings, which leaves the actions
+ * running unauthenticated until they are repaired.
+ */
+export async function deleteLogin(orgId: string, id: string, opts?: { force?: boolean }): Promise<void> {
+  await agentClient.delete(
+    `/api/admin/${orgId}/logins/${id}${opts?.force ? '?force=true' : ''}`,
+  );
 }
 
 /**
@@ -197,7 +316,7 @@ export interface TotpPreview {
    *
    * Enough to confirm the stored secret matches your authenticator app,
    * not enough to authenticate with. The code is only ever meant to be used
-   * by the login script via `{{_totp}}`, never typed by a human, so the full
+   * by the login script via `{{_mfa}}`, never typed by a human, so the full
    * value is truncated on the server and never crosses the wire.
    */
   code_suffix: string;
@@ -322,4 +441,23 @@ export async function listLoginRuns(
     params: { limit, offset },
   });
   return res.data;
+}
+
+/**
+ * Slack channels the connector can see, for the 2FA channel picker.
+ *
+ * Resolves to [] rather than throwing when Slack is not connected — the picker
+ * falls back to a raw channel-ID field, which is worse but not a dead end.
+ */
+export async function listSlackChannels(
+  orgId: string,
+): Promise<{ id: string; name: string; is_private: boolean; is_member: boolean | null }[]> {
+  try {
+    const res = await agentClient.get<{ channels: { id: string; name: string; is_private: boolean; is_member: boolean | null }[] }>(
+      `/api/admin/${orgId}/slack/channels`,
+    );
+    return res.data.channels ?? [];
+  } catch {
+    return [];
+  }
 }

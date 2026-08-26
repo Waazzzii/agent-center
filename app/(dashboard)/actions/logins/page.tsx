@@ -6,7 +6,6 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   listLogins,
-  deleteLogin,
   startLogout,
   type Login,
 } from '@/lib/api/logins';
@@ -22,6 +21,7 @@ import {
 } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
+import { DeleteLoginDialog } from '@/components/logins/DeleteLoginDialog';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import {
   listActiveVerifySessions,
@@ -60,6 +60,7 @@ export default function LoginsPage() {
   const { selectedOrgId } = useAdminViewStore();
   const allowed = useRequirePermission('agent_center_user');
   const { confirm } = useConfirmDialog();
+  const [deleteTarget, setDeleteTarget] = useState<Login | null>(null);
   const router = useRouter();
 
   const [items, setItems] = useState<Login[]>([]);
@@ -163,24 +164,13 @@ export default function LoginsPage() {
     onChange: () => { load(true); },
   });
 
-  const handleDelete = async (item: Login) => {
-    if (!selectedOrgId) return;
-    const ok = await confirm({
-      title: 'Delete login?',
-      description: `"${item.name}" will be removed. Any agent actions referencing it will break.`,
-      confirmText: 'Delete',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    try {
-      await deleteLogin(selectedOrgId, item.id);
-      toast.success('Deleted');
-      await load();
-    } catch (err: unknown) {
-      const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e.response?.data?.error || 'Failed to delete');
-    }
-  };
+  // Opens the usage-aware dialog rather than a yes/no box.
+  //
+  // "Any agent actions referencing it will break" was the old warning, and it
+  // was wrong in the worst direction: they did not break, they silently ran
+  // unauthenticated. The dialog shows which agents depend on this login and
+  // offers to move them before anything is destroyed.
+  const handleDelete = (item: Login) => setDeleteTarget(item);
 
   // ── Log Out / Log In actions ───────────────────────────────
   // Log In still opens the noVNC dialog (operator interacts with the
@@ -357,6 +347,14 @@ export default function LoginsPage() {
         </Card>
       )}
 
+      <DeleteLoginDialog
+        open={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        orgId={selectedOrgId}
+        login={deleteTarget}
+        allLogins={items}
+        onDeleted={() => { void load(); }}
+      />
       {/* Live browser view */}
       {activeForDialog && (
         <BrowserHITLDialog

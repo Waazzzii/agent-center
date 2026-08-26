@@ -1,9 +1,10 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import type { RecordedStep } from '@/lib/api/scripts';
 import { SelectorPanel, JsonPanel } from './panels';
@@ -42,6 +43,24 @@ export function StepEditModal({
   const [jsonError, setJsonError] = useState('');
   const [tab, setTab] = useState<TabId>('name');
   const [saving, setSaving] = useState(false);
+
+  /**
+   * Variables this step references, which are what "skip when empty" gates on.
+   *
+   * Reserved names are excluded: {{_mfa}} is supplied by the engine, so its
+   * absence is a defect to fix rather than missing input to skip over — and
+   * gating a 2FA step on it would quietly stop that step from ever running.
+   */
+  const gatingParams = useMemo(() => {
+    if (!draft) return [];
+    let text: string;
+    try { text = JSON.stringify(draft); } catch { return []; }
+    const found = new Set<string>();
+    for (const m of text.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g)) {
+      if (!m[1].startsWith('_')) found.add(m[1]);
+    }
+    return [...found];
+  }, [draft]);
 
   // Seed local state when the modal opens, or when a different step starts
   // being edited. Crucially we depend on `stepIndex` (a number — stable) and
@@ -200,6 +219,73 @@ export function StepEditModal({
                   {' '}
                   <code className="font-mono">{autoLabelHint(draft)}</code>
                 </p>
+              </div>
+
+              {/* Conditional behaviour.
+                  Lives on the step, next to its name, because both answer
+                  "when does this step run" — and the step is the only place
+                  that knows which input it fills. */}
+              <div className="border-t pt-3 space-y-3">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <p className="text-[11px] font-medium">Skip when its input is empty</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {gatingParams.length > 0
+                        ? <>Runs only when {gatingParams.map((k, i) => (
+                            <span key={k}>
+                              {i > 0 && ', '}
+                              <code className="font-mono">{`{{${k}}}`}</code>
+                            </span>
+                          ))} {gatingParams.length === 1 ? 'has' : 'all have'} a value.</>
+                        : <>This step references no variables, so there is nothing to gate on.
+                            Use the JSON tab to name one explicitly — useful when this step is
+                            part of a chain for a field it does not itself fill.</>}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={draft.skip_if_empty === true || Array.isArray(draft.skip_if_empty)}
+                    disabled={gatingParams.length === 0 && !Array.isArray(draft.skip_if_empty)}
+                    onCheckedChange={(v) => setDraft((d) => (d ? { ...d, skip_if_empty: v ? true : false } : d))}
+                    aria-label="Skip this step when its input is empty"
+                  />
+                </div>
+
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <p className="text-[11px] font-medium">Skip when the element is missing</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {draft.selector
+                        ? <>Probes <code className="font-mono">{String(draft.selector).slice(0, 44)}{String(draft.selector).length > 44 ? '…' : ''}</code> first
+                            and skips the step if it is not on the page. For an optional part of the
+                            flow — a 2FA challenge that only appears on a new device, a banner that
+                            shows once.</>
+                        : <>This step has no selector to probe. Name one explicitly via the JSON tab.</>}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={draft.skip_if_missing === true || typeof draft.skip_if_missing === 'string'}
+                    disabled={!draft.selector && typeof draft.skip_if_missing !== 'string'}
+                    onCheckedChange={(v) => setDraft((d) => (d ? { ...d, skip_if_missing: v ? true : false } : d))}
+                    aria-label="Skip this step when the element is missing"
+                  />
+                </div>
+
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <p className="text-[11px] font-medium">Continue if this step fails</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {draft.requires_approval
+                        ? 'Not available on a step that submits — continuing past a failed submit would report success for work that never happened.'
+                        : 'Logs the error and moves on instead of failing the run. For a step that may genuinely fail. If the step is optional because the ELEMENT may not be there, use "Skip when the element is missing" instead — it avoids running the step at all.'}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={draft.allow_failure === true}
+                    disabled={draft.requires_approval === true}
+                    onCheckedChange={(v) => setDraft((d) => (d ? { ...d, allow_failure: v } : d))}
+                    aria-label="Continue if this step fails"
+                  />
+                </div>
               </div>
             </div>
           )}

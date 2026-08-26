@@ -20,7 +20,6 @@ import { listAiSteps, createAiStep, updateAiStep, type AiStep } from '@/lib/api/
 import { listApprovalSteps, createApprovalStep, updateApprovalStep, type ApprovalStep } from '@/lib/api/approval-steps';
 import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
 import { LoginFormBody, type LoginFormData } from '@/components/actions/LoginFormBody';
-import { SkillChips } from '@/components/actions/SkillChips';
 import { LoginChip } from '@/components/actions/LoginChip';
 import { listLogins, createLogin, updateLogin, type Login } from '@/lib/api/logins';
 import { useTags } from '@/lib/hooks/use-tags';
@@ -561,6 +560,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         payload = {
           action_type: 'browser_script',
           script_id: actionForm.scriptId,
+          // The identity this action runs as. Explicit null rather than omitted
+          // so clearing it actually clears it on update.
+          login_id: actionForm.loginId || null,
           max_retries: actionForm.maxRetries,
         };
       } else if (actionForm.action_type === 'sub_agent') {
@@ -595,7 +597,11 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         // the login first don't get a duplicate.
         if (actionForm.action_type === 'browser_script' && actionForm.scriptId) {
           const selectedScript = browserScripts.find((s) => s.id === actionForm.scriptId);
-          const requiredLoginId = selectedScript?.login_id ?? null;
+          // The ACTION's login wins over the script default — on a shared script
+          // the default is empty or belongs to another market, and pairing the
+          // wrong login step is how an agent verifies one identity then scrapes
+          // as another.
+          const requiredLoginId = actionForm.loginId || selectedScript?.login_id || null;
           if (requiredLoginId) {
             const lastAction = actions[actions.length - 1];
             const alreadyHasMatchingLogin =
@@ -1258,30 +1264,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         </CardContent>
                       </Card>
 
-                      {/* Right attachment (max ~1/3): skills for AI steps, the login
-                          for browser-script steps. Linked by a link icon. */}
-                      {action.action_type === 'agent' && (() => {
-                        const aiStep = aiSteps.find((s) => s.id === action.ai_step_id);
-                        if (!aiStep) return null;
-                        const count = (aiStep.skill_ids ?? []).length;
-                        return (
-                          <>
-                            {count > 0 && <LinkIcon className="h-3.5 w-3.5 shrink-0 self-center text-muted-foreground/60" />}
-                            <SkillChips
-                              variant="attached"
-                              orgId={selectedOrgId}
-                              skills={skills}
-                              selectedIds={aiStep.skill_ids ?? []}
-                              onChange={(ids) => {
-                                // Optimistic: update the linked AI step in local state, persist in the background.
-                                setAiSteps((prev) => prev.map((s) => (s.id === aiStep.id ? { ...s, skill_ids: ids } : s)));
-                                if (selectedOrgId) void updateAiStep(selectedOrgId, aiStep.id, { skill_ids: ids }).catch(() => { toast.error('Failed to update skills'); void refreshData(); });
-                              }}
-                              onSkillsChanged={() => { if (selectedOrgId) void getSkills(selectedOrgId).then((r) => setSkills(r.items ?? [])).catch(() => {}); }}
-                            />
-                          </>
-                        );
-                      })()}
+                      {/* Right attachment (max ~1/3): the login for browser-script
+                          steps, linked by a link icon. */}
                       {action.action_type === 'browser_script' && (() => {
                         // Read-only reflection of the login configured on the script
                         // itself (via the paired login step). It's added/removed by
@@ -1552,8 +1536,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     availableVars={availableVars}
                     orgId={selectedOrgId}
                     onSkillsChanged={() => { if (selectedOrgId) getSkills(selectedOrgId).then((r) => setSkills(r.items ?? [])).catch(() => {}); }}
-                    // Skills are managed on the step card in the workflow, so hide
-                    // the Skills section here to avoid a redundant second control.
+                    // Skills are not selectable from a routine — not here and not on
+                    // the step card. Existing skill_ids on an AI step are left alone;
+                    // they are managed where skills themselves live.
                     showSkills={false}
                   />
                 ) : (
@@ -1828,6 +1813,72 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   ) : null;
                 })()}
 
+                {/* Which identity this action runs as.
+
+                    Shown per ACTION, not per script, because that is what lets one
+                    script serve many logins: eight markets on one AirBnB scrape are
+                    eight actions pointing at the same script with eight different
+                    logins. Cloning the script per credential set is the thing this
+                    exists to avoid.
+
+                    The script's own login_id is only the editor default and is
+                    offered as a pre-fill, never silently used: on a shared script it
+                    is empty or arbitrary. */}
+                {(() => {
+                  const selected = browserScripts.find((s) => s.id === actionForm.scriptId);
+                  if (!selected) return null;
+                  const required = selected.requires_login;
+                  const usableLogins = logins.filter((l) => l.id === actionForm.loginId || true);
+                  return (
+                    <div className="space-y-1">
+                      <Label>
+                        Run as login{required && <span className="text-destructive"> *</span>}
+                      </Label>
+                      <SearchableSelect
+                        value={actionForm.loginId}
+                        onChange={(v) => setActionForm(f => ({ ...f, loginId: v }))}
+                        options={logins.map((l) => ({
+                          value: l.id,
+                          label: l.name,
+                          hint: l.url ?? undefined,
+                        }))}
+                        placeholder={required ? 'Select the login this action runs as…' : 'No login (unauthenticated)'}
+                        emptyLabel="No logins configured"
+                        searchPlaceholder="Search logins by name or URL…"
+                      />
+                      {required ? (
+                        <p className="text-xs text-muted-foreground">
+                          This script requires a login. Each action picks its own, so the
+                          same script can run as a different identity in every agent.
+                        </p>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">
+                          Optional. Set this when the script needs to be signed in.
+                        </p>
+                      )}
+                      {required && !actionForm.loginId && selected.login_id && (
+                        <button
+                          type="button"
+                          className="text-xs text-brand hover:underline"
+                          onClick={() => setActionForm(f => ({ ...f, loginId: selected.login_id as string }))}
+                        >
+                          Use the script's default ({logins.find((l) => l.id === selected.login_id)?.name ?? 'linked login'})
+                        </button>
+                      )}
+                      {required && !actionForm.loginId && (
+                        <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
+                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                          <span>
+                            Without a login this action would run in a blank browser —
+                            it would not fail, it would return empty results and report
+                            success.
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* Retry config */}
                 <div className="space-y-1">
                   <Label>Retries on Failure</Label>
@@ -1969,6 +2020,11 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 (actionForm.action_type === 'approval' && !newApprovalStepForm.name.trim()) ||
                 (actionForm.action_type === 'login' && (!newLoginForm.name.trim() || !newLoginForm.url.trim() || !newLoginForm.verify_script_id)) ||
                 (actionForm.action_type === 'browser_script' && !actionForm.scriptId) ||
+                // A requires_login script with no login would be rejected by the
+                // API anyway; refusing here means the operator sees why.
+                (actionForm.action_type === 'browser_script' &&
+                  !!browserScripts.find((s) => s.id === actionForm.scriptId)?.requires_login &&
+                  !actionForm.loginId) ||
                 (actionForm.action_type === 'sub_agent' && !actionForm.targetAgentId)
               }
             >

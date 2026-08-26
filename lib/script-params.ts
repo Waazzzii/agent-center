@@ -24,13 +24,15 @@ export interface ReservedParam {
 }
 
 export const RESERVED_PARAMS: Record<string, ReservedParam> = {
-  _totp: {
-    name: '_totp',
-    label: 'auto — from this login\'s 2FA enrollment',
+  _mfa: {
+    name: '_mfa',
+    label: "auto — from this login's 2FA method",
     description:
-      'The current 6-digit authenticator code for the login profile driving this run. '
-      + 'A fresh code is generated immediately before this step executes, so it cannot go stale. '
-      + 'Enroll the 2FA secret on the login profile; there is nothing to type here.',
+      "The current one-time 2FA code for the login profile driving this run. Where it "
+      + "comes from is the login's choice — an enrolled authenticator secret, or a code "
+      + "read from a Slack channel — and the script is identical either way. Resolved "
+      + "immediately before this step runs, so it cannot go stale. Set the method on the "
+      + "login profile; there is nothing to type here.",
   },
 };
 

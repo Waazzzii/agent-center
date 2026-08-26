@@ -85,7 +85,7 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
             ].filter(Boolean).join(' · ')
           : 'Manual value — not referenced by any step';
 
-        // Engine-supplied variables ({{_totp}}) render as a locked row: no
+        // Engine-supplied variables ({{_mfa}}) render as a locked row: no
         // rename, no delete, and crucially no value input. An editable box
         // here would invite an operator to paste a static 2FA code that
         // expires 30 seconds later, and a rename would silently sever the

@@ -231,7 +231,7 @@ export function RunScriptModal({
   const linkedLogin = availableLogins.find((l) => l.id === linkedLoginId) ?? null;
 
   /**
-   * Live hints so the server can resolve {{_totp}} for a TEST run.
+   * Live hints so the server can resolve {{_mfa}} for a TEST run.
    *
    * Sent from here rather than derived server-side from the saved script,
    * because the editor knows things the stored copy does not: a 2FA step
@@ -248,7 +248,7 @@ export function RunScriptModal({
     loginId: linkedLoginId ?? ownerLoginId,
     needsTotp: (stepRunState?.steps ?? []).some((st) =>
       [st.value, st.selector, st.url, st.text].some(
-        (f) => typeof f === 'string' && f.includes('{{_totp}}'),
+        (f) => typeof f === 'string' && f.includes('{{_mfa}}'),
       ),
     ),
   });
@@ -780,7 +780,7 @@ export function RunScriptModal({
   const buildParameters = (steps: RecordedStep[]): Record<string, string> => {
     const vars = analyzeVariables(steps);
     const result: Record<string, string> = {};
-    // Reserved engine-supplied variables ({{_totp}}) must NOT be persisted
+    // Reserved engine-supplied variables ({{_mfa}}) must NOT be persisted
     // as parameters — a declared entry renders as an empty operator field
     // and shadows the value the executor injects at run time. This mirrors
     // the same exclusion in the backend's refine pass.
@@ -1469,7 +1469,7 @@ export function RunScriptModal({
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
     try {
-      // script id lets the server resolve {{_totp}} from the linked login
+      // script id lets the server resolve {{_mfa}} from the linked login
       // (see withReservedParams) — without it a 2FA step fills blank here
       // while working fine under an agent.
       const res = await executeStepRunStep(orgId, runId, params, controller.signal, [...activeGates], script?.id ?? tempScriptId, buildReservedHints());

@@ -42,14 +42,14 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
+import { TooltipProvider } from '@/components/ui/tooltip';
 import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   Loader2, LogIn, LogOut, Save, Trash2, Eraser,
   CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
-  Sparkles, Plus, X as XIcon, Eye, EyeOff, KeyRound, Pencil, Info,
+  Sparkles, Plus, X as XIcon, Eye, EyeOff, KeyRound, Pencil,
   Settings2, History, Camera, Image as ImageIcon,
 } from 'lucide-react';
 import { decodeQrFromFile, imageFromTransfer, cameraSupported } from '@/lib/qr-decode';
@@ -64,6 +64,10 @@ import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import { RunScriptModal } from '@/components/record/RunScriptModal';
 import { SlackChannelInput } from '@/components/notifications/SlackChannelInput';
 import { cn } from '@/lib/utils';
+import {
+  Field, FieldNest, InfoBubble, ScriptSlot, CONTROL_W,
+} from '@/components/actions/login-fields';
+import { MfaSourceSection } from '@/components/actions/MfaSourceSection';
 
 const TERMINAL = new Set(['completed', 'failed', 'aborted']);
 
@@ -79,73 +83,23 @@ function StatusPill({ status }: { status: Login['status'] }) {
 
 /** Cap on the control itself. The row spans the card; the input doesn't
  *  need to. */
-const CONTROL_W = 'max-w-lg';
 
 /**
  * A small ⓘ next to a label. Explanatory copy lives in here rather than as
  * a line of prose under every control — the explanation is needed once,
  * while the vertical space it costs is paid on every render.
  */
-function InfoBubble({ children }: { children: React.ReactNode }) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <button
-          type="button"
-          // Not a form control: keep it out of the tab order and let the
-          // label it annotates carry the accessible description.
-          tabIndex={-1}
-          className="text-muted-foreground/60 hover:text-foreground transition-colors shrink-0"
-          aria-label="More information"
-        >
-          <Info className="h-3 w-3" />
-        </button>
-      </TooltipTrigger>
-      <TooltipContent side="right" className="max-w-xs leading-snug">
-        {children}
-      </TooltipContent>
-    </Tooltip>
-  );
-}
 
 /**
  * One labelled control: label above, control below, explanation behind an
  * ⓘ on the label row.
  */
-function Field({
-  label, info, required = false, action, children, className,
-}: {
-  label: string;
-  /** Explanation shown in the ⓘ tooltip. Omit when the label says it all. */
-  info?: React.ReactNode;
-  required?: boolean;
-  /** Rendered at the right end of the label row, e.g. a destructive link. */
-  action?: React.ReactNode;
-  children: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn('space-y-1.5', className)}>
-      <div className={cn('flex items-center gap-1.5', CONTROL_W)}>
-        <Label className="text-xs">
-          {label}{required && <span className="text-destructive"> *</span>}
-        </Label>
-        {info && <InfoBubble>{info}</InfoBubble>}
-        {action && <div className="ml-auto shrink-0">{action}</div>}
-      </div>
-      {children}
-    </div>
-  );
-}
 
 /**
  * Indented block for things that BELONG to the field aboveit (the script's
  * credentials under the script that declares them), so the relationship is
  * visible rather than stated in prose.
  */
-function FieldNest({ children }: { children: React.ReactNode }) {
-  return <div className="pl-3">{children}</div>;
-}
 
 /**
  * One script slot (login or verify) — picker, edit, and record.
@@ -158,93 +112,6 @@ function FieldNest({ children }: { children: React.ReactNode }) {
  * Login scripts are hidden from the general Scripts list (they belong to
  * their login), so this row is also the only way to open one for editing.
  */
-function ScriptSlot({
-  label, info, scripts, value, onChange, onRecord, onEdit, onDelete,
-  recordLabel, emptyHint, allowNone = false, noneLabel = '— None —', required = false,
-}: {
-  label: string;
-  info?: React.ReactNode;
-  scripts: BrowserScript[];
-  value: string | null;
-  onChange: (id: string | null) => void;
-  onRecord: () => void;
-  onEdit: (script: BrowserScript) => void;
-  /** Delete the selected script outright. Omit to hide the action. */
-  onDelete?: (script: BrowserScript) => void;
-  recordLabel: string;
-  emptyHint?: string;
-  allowNone?: boolean;
-  noneLabel?: string;
-  required?: boolean;
-}) {
-  const selected = scripts.find((s) => s.id === value) ?? null;
-
-  return (
-    <Field label={label} info={info} required={required}>
-      {scripts.length === 0 ? (
-        <div className="flex items-center gap-2.5">
-          <Button type="button" variant="outline" size="sm" onClick={onRecord} className="shrink-0">
-            <Plus className="h-3.5 w-3.5 mr-1" />
-            {recordLabel}
-          </Button>
-          {emptyHint && (
-            <span className="text-[10px] text-muted-foreground leading-snug">{emptyHint}</span>
-          )}
-        </div>
-      ) : (
-        <div className={cn('flex items-center gap-2', CONTROL_W)}>
-          <Select
-            value={value ?? '__none__'}
-            onValueChange={(v) => onChange(v === '__none__' ? null : v)}
-          >
-            <SelectTrigger className="flex-1 min-w-0">
-              <SelectValue placeholder="Select a script…" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__" disabled={!allowNone}>
-                {allowNone ? noneLabel : 'Select a script…'}
-              </SelectItem>
-              {scripts.map((s) => (
-                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {selected && (
-            <Button
-              type="button" variant="outline" size="icon"
-              className="h-9 w-9 shrink-0"
-              onClick={() => onEdit(selected)}
-              title={`Open "${selected.name}" in the editor`}
-            >
-              <Pencil className="h-4 w-4" />
-            </Button>
-          )}
-          <Button
-            type="button" variant="outline" size="icon"
-            className="h-9 w-9 shrink-0"
-            onClick={onRecord}
-            title={recordLabel}
-          >
-            <Plus className="h-4 w-4" />
-          </Button>
-          {/* Deleting lives here because this page is the script's only
-              home — they're hidden from the Scripts list, so there was
-              nowhere else to remove one from. */}
-          {selected && onDelete && (
-            <Button
-              type="button" variant="ghost" size="icon"
-              className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
-              onClick={() => onDelete(selected)}
-              title={`Delete "${selected.name}"`}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
-        </div>
-      )}
-    </Field>
-  );
-}
 
 function formatRelative(iso: string | null): string {
   if (!iso) return 'never';
@@ -313,7 +180,7 @@ export default function EditLoginPage() {
   // REPLACING — this holds the script on its way out plus the chosen stand-in.
   const [verifyToDelete, setVerifyToDelete] = useState<BrowserScript | null>(null);
   const [verifyReplacementId, setVerifyReplacementId] = useState<string | null>(null);
-  const [tab, setTab] = useState<'setup' | 'runs' | 'access'>('setup');
+  const [tab, setTab] = useState<'setup' | '2fa' | 'runs' | 'access'>('setup');
   const [editingName, setEditingName] = useState(false);
 
   // ── TOTP (authenticator 2FA) state ───────────────────────────────
@@ -735,7 +602,7 @@ export default function EditLoginPage() {
 
   /**
    * The credential KEYS this login needs — the declared inputs of its
-   * linked login script, minus engine-supplied reserved names ({{_totp}}
+   * linked login script, minus engine-supplied reserved names ({{_mfa}}
    * comes from the 2FA enrollment, not from credentials).
    *
    * Derived rather than hand-typed so a key can't be misspelled into a
@@ -782,6 +649,29 @@ export default function EditLoginPage() {
     if (!scriptStartUrl) return;
     setForm((f) => (switchedScript || !f.url.trim() ? { ...f, url: scriptStartUrl } : f));
   }, [scriptStartUrl, scriptId]);
+  /**
+   * Does the login script fill a 2FA field?
+   *
+   * Same contract as requiredCredKeys just below: the SCRIPT declares what it
+   * needs, and the form follows. The difference is where to look — reserved
+   * variables are deliberately excluded from `parameters`, so {{_mfa}} only ever
+   * appears inside the steps.
+   *
+   * Text-level match for the same reason the backend does it that way: the token
+   * can sit in any string field of any step, and a structural walk would fail
+   * silently the moment a step type gained a field. The pre-303 spelling counts
+   * too, so an un-migrated script is not mistaken for one needing no 2FA.
+   */
+  const mfaRequiredByScript = useMemo(() => {
+    if (!linkedLoginScript?.steps) return false;
+    try {
+      const text = JSON.stringify(linkedLoginScript.steps);
+      return text.includes('{{_mfa}}') || text.includes('{{_totp}}');
+    } catch {
+      return false;
+    }
+  }, [linkedLoginScript]);
+
   const requiredCredKeys = useMemo(() => {
     const declared = Object.keys(linkedLoginScript?.parameters ?? {});
     return declared.filter((k) => !isReservedParam(k));
@@ -1035,7 +925,7 @@ export default function EditLoginPage() {
     if (!selectedOrgId || !id) return;
     const ok = await confirm({
       title: 'Remove 2FA enrollment?',
-      description: 'Scripts using {{_totp}} will fill blank and 2FA-protected logins will fall back to manual login until you re-enroll.',
+      description: 'Scripts using {{_mfa}} will fill blank and 2FA-protected logins will fall back to manual login until you re-enroll.',
       confirmText: 'Remove',
       variant: 'destructive',
     });
@@ -1470,6 +1360,13 @@ export default function EditLoginPage() {
           <TabsTrigger value="access" className="min-w-[128px] gap-1.5">
             <Users className="h-3.5 w-3.5" /> Handoff
           </TabsTrigger>
+          {/* 2FA is its own tab because it is a mode, not a field: the form
+              you need depends entirely on which source is chosen, and mixing
+              that into Setup meant three save buttons competing on one
+              screen. */}
+          <TabsTrigger value="2fa" className="min-w-[128px] gap-1.5">
+            <ShieldCheck className="h-3.5 w-3.5" /> Two-factor
+          </TabsTrigger>
         </TabsList>
 
         <TabsContent value="setup" className="space-y-3 mt-0">
@@ -1734,10 +1631,61 @@ Agents sign in unattended when the script and its values are set.
           </FieldNest>
           )}
 
-          {/* Two-factor (TOTP) enrollment */}
+        </CardContent>
+      </Card>
+
+      {/* Verify Login */}
+      <Card>
+        <CardContent className="py-3 px-5 space-y-3">
+          <Label className="flex items-center gap-1.5">
+            <CheckCircle2 className="h-3.5 w-3.5 text-brand" />
+            Verify Login
+          </Label>
+          <ScriptSlot
+            label="Verify script"
+            required
+            info={<>Runs before every action to confirm the session is still signed in. Completing = signed in; any step failure or timeout = not signed in.<br /><br />Every login must have one, so this script can&apos;t be deleted while it&apos;s selected. To remove it, pick or record a replacement first, then delete the old one from <strong>Scripts</strong> with &ldquo;Show login scripts&rdquo; enabled.</>}
+            scripts={verifyScripts}
+            value={form.verify_script_id}
+            onChange={(v) => setForm((f) => ({ ...f, verify_script_id: v }))}
+            onRecord={() => setRecordVerifyModalOpen(true)}
+            onEdit={(s) => setEditScript(s)}
+            // "Delete" opens a replace-then-delete flow rather than a plain
+            // confirm: verify_script_id is NOT NULL with an ON DELETE
+            // RESTRICT FK, so the login must be pointed at a replacement
+            // before the old script can go.
+            onDelete={(s) => { setVerifyReplacementId(null); setVerifyToDelete(s); }}
+            recordLabel="Record verify script"
+            emptyHint="Open a page only a signed-in user can see."
+          />
+        </CardContent>
+      </Card>
+
+        </TabsContent>
+
+        <TabsContent value="2fa" className="space-y-3 mt-0">
+
+      <Card>
+        <CardContent className="p-5 space-y-4">
+          {/* Which source supplies {{_mfa}}. Above the enrolment UI because it
+              decides whether that UI is relevant at all — an authenticator
+              secret is meaningless on a login that reads its codes from Slack. */}
+          <MfaSourceSection
+            orgId={selectedOrgId}
+            login={login}
+            requiredByScript={mfaRequiredByScript}
+            scriptName={linkedLoginScript?.name ?? null}
+            onSaved={() => { void load(true); }}
+          />
+
+          {/* Authenticator enrolment — only for the totp source. A login with no
+              second factor, or one reading codes from Slack, has nothing to
+              enrol, and showing the seed capture anyway invited storing a
+              secret that would never be used. */}
+          {(login.mfa_source ?? (login.totp_secret_id ? 'totp' : 'none')) === 'totp' && (
           <div className="border-t pt-3">
           <Field
-            label="Two-factor"
+            label="Authenticator secret"
             action={login.totp_secret_id ? (
               <button
                 type="button"
@@ -1748,7 +1696,7 @@ Agents sign in unattended when the script and its values are set.
                 Remove
               </button>
             ) : undefined}
-            info={<>Paste the setup key from the site&apos;s 2FA screen (use its &ldquo;can&apos;t scan the QR code?&rdquo; option), scan the QR, or import from your authenticator app&apos;s export QR. The login script then references <code className="font-mono">{'{{_totp}}'}</code>.</>}
+            info={<>Paste the setup key from the site&apos;s 2FA screen (use its &ldquo;can&apos;t scan the QR code?&rdquo; option), scan the QR, or import from your authenticator app&apos;s export QR. The login script then references <code className="font-mono">{'{{_mfa}}'}</code>.</>}
           >
             {/* ENROLLED and NOT-ENROLLED are mutually exclusive states, not a
                 form with extra bits shown. Once a secret is on file the only
@@ -1865,13 +1813,13 @@ Agents sign in unattended when the script and its values are set.
                     this line is what you actually type into a script. */}
                 <div className="flex items-center gap-2">
                   <code className="font-mono text-xs text-purple-500 dark:text-purple-400">
-                    {'{{_totp}}'}
+                    {'{{_mfa}}'}
                   </code>
                   <button
                     type="button"
                     onClick={() => {
-                      navigator.clipboard?.writeText('{{_totp}}')
-                        .then(() => toast.success('Copied {{_totp}}'))
+                      navigator.clipboard?.writeText('{{_mfa}}')
+                        .then(() => toast.success('Copied {{_mfa}}'))
                         .catch(() => toast.error('Could not copy'));
                     }}
                     className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
@@ -1931,34 +1879,7 @@ Agents sign in unattended when the script and its values are set.
             )}
           </Field>
           </div>
-
-        </CardContent>
-      </Card>
-
-      {/* Verify Login */}
-      <Card>
-        <CardContent className="py-3 px-5 space-y-3">
-          <Label className="flex items-center gap-1.5">
-            <CheckCircle2 className="h-3.5 w-3.5 text-brand" />
-            Verify Login
-          </Label>
-          <ScriptSlot
-            label="Verify script"
-            required
-            info={<>Runs before every action to confirm the session is still signed in. Completing = signed in; any step failure or timeout = not signed in.<br /><br />Every login must have one, so this script can&apos;t be deleted while it&apos;s selected. To remove it, pick or record a replacement first, then delete the old one from <strong>Scripts</strong> with &ldquo;Show login scripts&rdquo; enabled.</>}
-            scripts={verifyScripts}
-            value={form.verify_script_id}
-            onChange={(v) => setForm((f) => ({ ...f, verify_script_id: v }))}
-            onRecord={() => setRecordVerifyModalOpen(true)}
-            onEdit={(s) => setEditScript(s)}
-            // "Delete" opens a replace-then-delete flow rather than a plain
-            // confirm: verify_script_id is NOT NULL with an ON DELETE
-            // RESTRICT FK, so the login must be pointed at a replacement
-            // before the old script can go.
-            onDelete={(s) => { setVerifyReplacementId(null); setVerifyToDelete(s); }}
-            recordLabel="Record verify script"
-            emptyHint="Open a page only a signed-in user can see."
-          />
+          )}
         </CardContent>
       </Card>
 
@@ -2353,7 +2274,7 @@ Agents sign in unattended when the script and its values are set.
         open={!!editScript}
         onClose={() => setEditScript(null)}
         mode="test"
-        // This editor was opened from THIS login, so {{_totp}} can resolve
+        // This editor was opened from THIS login, so {{_mfa}} can resolve
         // even before the link has been saved on the page.
         ownerLoginId={id}
         onSaved={async () => {

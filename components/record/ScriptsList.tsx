@@ -6,11 +6,15 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
+import { Info, Plus } from 'lucide-react';
+import { listLogins, type Login } from '@/lib/api/logins';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Trash2, Pencil, Copy, Search, Tag as TagIcon, KeyRound } from 'lucide-react';
+import { Trash2, Pencil, Copy, Search, KeyRound } from 'lucide-react';
 import { listScripts, deleteScript, createScript, updateScript, getScriptLoginUsage, type BrowserScript } from '@/lib/api/scripts';
 import { RunScriptModal } from './RunScriptModal';
 import { useTags } from '@/lib/hooks/use-tags';
@@ -18,7 +22,37 @@ import { TagFilter } from '@/components/tags/tag-filter';
 import { TagList } from '@/components/tags/tag-badge';
 import { TagAssignDialog } from '@/components/tags/tag-assign-dialog';
 import { RowActionsMenu } from '@/components/ui/row-actions-menu';
-import { LinkLoginDialog } from './LinkLoginDialog';
+
+/**
+ * A help affordance in a column header.
+ *
+ * Two of these columns configure behaviour that cannot be inferred from a
+ * two-word label — and the explanation belongs once, in the header, rather than
+ * repeated on every row or left to be discovered by flipping the control and
+ * seeing what breaks.
+ */
+function HeaderHelp({ children }: { children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          // Not a control: keep it out of the tab order, and stop the click
+          // reaching the header's sort handler.
+          tabIndex={-1}
+          onClick={(e) => e.stopPropagation()}
+          className="text-muted-foreground/60 hover:text-foreground transition-colors shrink-0"
+          aria-label="What this column does"
+        >
+          <Info className="h-3 w-3" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent side="bottom" className="max-w-xs leading-snug font-normal">
+        {children}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 interface ScriptsListProps {
   orgId: string | null;
@@ -28,6 +62,9 @@ interface ScriptsListProps {
 
 export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
+  const [loginTogglePending, setLoginTogglePending] = useState<string | null>(null);
+  const [logins, setLogins] = useState<Login[]>([]);
+  const [loginPending, setLoginPending] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // Only gates the first-load spinner — filter/search reloads update in place.
   const [initialLoad, setInitialLoad] = useState(true);
@@ -58,7 +95,6 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   // open it from the list is painful.
   const [showLoginScripts, setShowLoginScripts] = useState(false);
   const [tagDialogScript, setTagDialogScript] = useState<BrowserScript | null>(null);
-  const [linkLoginScript, setLinkLoginScript] = useState<BrowserScript | null>(null);
 
   // Sorted + filtered view. Search is a substring match against name OR
   // description so operators who remember the description but not the exact
@@ -77,6 +113,73 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
       return sortDir === 'asc' ? cmp : -cmp;
     });
   }, [scripts, search, sortKey, sortDir]);
+
+
+  /**
+   * Set a script's login binding from one control.
+   *
+   * Three meaningful states, which previously needed a toggle AND a buried menu
+   * item that each wrote half of them:
+   *
+   *   none      → requires_login false, login_id null
+   *   'any'     → requires_login true,  login_id null   (shared across identities:
+   *               every agent action must name its own login)
+   *   <loginId> → requires_login true,  login_id set    (that login is also the
+   *               editor's default for record/test)
+   *
+   * Collapsing them is not just tidier: a toggle for "needs a login" sitting
+   * next to a hidden "change linked login" made it possible to set one without
+   * the other, and requires_login=false with a login_id is a state that means
+   * nothing.
+   *
+   * Note this does NOT touch existing agent actions — those carry their own
+   * login_id, which is the runtime authority. Changing the editor default here
+   * cannot repoint a running agent.
+   */
+  async function handleSetLogin(script: BrowserScript, value: string) {
+    if (!orgId) return;
+    const next =
+      value === '__none__' ? { requires_login: false, login_id: null }
+      : value === '__any__' ? { requires_login: true, login_id: null }
+      : { requires_login: true, login_id: value };
+
+    setLoginPending(script.id);
+    setScripts((prev) => prev.map((x) => (x.id === script.id ? { ...x, ...next } : x)));
+    try {
+      await updateScript(orgId, script.id, next);
+      toast.success(
+        value === '__none__' ? `"${script.name}" no longer needs a login`
+        : value === '__any__' ? `"${script.name}" requires a login, chosen per agent`
+        : `"${script.name}" defaults to ${logins.find((l) => l.id === value)?.name ?? 'that login'}`,
+      );
+    } catch (err: any) {
+      await load();
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to update script');
+    } finally {
+      setLoginPending(null);
+    }
+  }
+
+  async function handleToggleRequiresLogin(script: BrowserScript, next: boolean) {
+    if (!orgId) return;
+    setLoginTogglePending(script.id);
+    // Optimistic: the switch has to move under the finger, and the reload
+    // below is the source of truth either way.
+    setScripts((prev) => prev.map((x) => (x.id === script.id ? { ...x, requires_login: next } : x)));
+    try {
+      await updateScript(orgId, script.id, { requires_login: next });
+      toast.success(
+        next
+          ? `"${script.name}" now requires a login — agent actions using it must choose one`
+          : `"${script.name}" no longer requires a login`,
+      );
+    } catch (err: any) {
+      setScripts((prev) => prev.map((x) => (x.id === script.id ? { ...x, requires_login: !next } : x)));
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to update script');
+    } finally {
+      setLoginTogglePending(null);
+    }
+  }
 
   const handleSort = (key: string) => {
     if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -102,6 +205,14 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
       setInitialLoad(false);
     }
   };
+
+  // Logins are needed to label and populate the per-script login selector.
+  // Fetched once here rather than by each row, which would be one request per
+  // script for a list that is identical for all of them.
+  useEffect(() => {
+    if (!orgId) return;
+    listLogins(orgId).then(setLogins).catch(() => setLogins([]));
+  }, [orgId]);
 
   useEffect(() => {
     load();
@@ -233,6 +344,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                 <TagFilter tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />
               </div>
             </div>
+            <TooltipProvider delayDuration={200}>
             <ResponsiveTable
               data={visibleScripts}
               getRowKey={(s) => s.id}
@@ -246,11 +358,15 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                   key: 'name',
                   label: 'Name',
                   sortable: true,
+                  // Explicit width so it stops absorbing the table's surplus —
+                  // see the Tags column, which now takes that role.
+                  thClassName: 'w-72',
+                  tdClassName: 'w-72',
                   render: (s) => (
                     <div>
                       <span className="font-medium">{s.name}</span>
                       {s.description && (
-                        <p className="text-xs text-muted-foreground mt-0.5 max-w-[420px] truncate">{s.description}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5 truncate">{s.description}</p>
                       )}
                     </div>
                   ),
@@ -286,11 +402,100 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                   render: (s) => <span className="text-muted-foreground whitespace-nowrap">{new Date(s.created_at).toLocaleDateString()}</span>,
                 },
                 {
+                  key: 'requires_login',
+                  label: (
+                    <span className="inline-flex items-center gap-1">
+                      Login
+                      <HeaderHelp>
+                        Which login profile this script signs in as.
+                        {' '}<strong>None</strong> runs unauthenticated.
+                        {' '}<strong>Any (per agent)</strong> means it needs a login but has no
+                        default — every agent action using it must choose one, which is what lets
+                        a single script serve several identities.
+                        {' '}Picking a specific login also makes it the default the script editor
+                        signs into for record and test.
+                      </HeaderHelp>
+                    </span>
+                  ),
+                  thClassName: 'w-44',
+                  tdClassName: 'w-44',
+                  render: (s) => (
+                    s.kind !== 'regular' ? (
+                      // A login or verify script performs the authentication; it
+                      // cannot itself run inside one.
+                      <span className="text-xs text-muted-foreground">—</span>
+                    ) : (
+                      <div onClick={(e) => e.stopPropagation()}>
+                        <Select
+                          value={s.login_id ?? (s.requires_login ? '__any__' : '__none__')}
+                          disabled={loginPending === s.id}
+                          onValueChange={(v) => handleSetLogin(s, v)}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__">None</SelectItem>
+                            <SelectItem value="__any__">Any (per agent)</SelectItem>
+                            {logins.map((l) => (
+                              <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    )
+                  ),
+                },
+                {
                   key: 'tags',
-                  label: 'Tags',
-                  thClassName: 'w-40',
-                  tdClassName: 'w-40',
-                  render: (s) => <TagList tags={s.tags} />,
+                  label: (
+                    <span className="inline-flex items-center gap-1">
+                      Tags
+                      <HeaderHelp>
+                        Free-form labels for grouping and filtering. Click a row&apos;s tag area
+                        to edit them.
+                      </HeaderHelp>
+                    </span>
+                  ),
+                  // Deliberately width-LESS: in a table-fixed layout exactly one
+                  // column absorbs the leftover space, and chips benefit from it
+                  // far more than a name does.
+                  render: (s) => (
+                    <div
+                      // Editable in place rather than buried in the ⋮ menu. Tagging
+                      // is the kind of thing done to several rows in a row, and a
+                      // two-click detour per row is what stops it happening at all.
+                      role="button"
+                      tabIndex={0}
+                      onClick={(e) => { e.stopPropagation(); setTagDialogScript(s); }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setTagDialogScript(s);
+                        }
+                      }}
+                      className="group/tags -mx-1 flex min-h-7 cursor-pointer flex-wrap items-center gap-1 rounded px-1 py-0.5 hover:bg-muted/60 transition-colors"
+                      title="Edit tags"
+                    >
+                      {s.tags?.length ? (
+                        <>
+                          <TagList tags={s.tags} />
+                          {/* Only on hover: a persistent + next to existing chips
+                              reads as another tag. */}
+                          <Plus className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/tags:opacity-100" />
+                        </>
+                      ) : (
+                        // Empty cells need a target and an invitation, or the
+                        // whole affordance is invisible on exactly the rows that
+                        // need it.
+                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground/60 group-hover/tags:text-muted-foreground">
+                          <Plus className="h-3 w-3" />
+                          <span className="opacity-0 transition-opacity group-hover/tags:opacity-100">Add tag</span>
+                        </span>
+                      )}
+                    </div>
+                  ),
                 },
                 {
                   key: 'actions',
@@ -302,18 +507,12 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                       <RowActionsMenu
                         actions={[
                           { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => setRunModalScript(s) },
-                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogScript(s) },
                           // Linking lives here, not in the recorder toolbar:
                           // it rewrites the paired login step in every agent
                           // using this script, so it belongs with the script's
                           // configuration rather than a live browser session.
                           // Meaningless for login/login-check scripts, which
                           // ARE the login.
-                          ...(s.kind === 'regular' ? [{
-                            label: s.login_id ? 'Change linked login' : 'Link login',
-                            icon: <KeyRound className="h-4 w-4" />,
-                            onSelect: () => setLinkLoginScript(s),
-                          }] : []),
                           { label: duplicatingId === s.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === s.id, onSelect: () => handleDuplicate(s) },
                           { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => setScriptToDelete(s) },
                         ]}
@@ -325,18 +524,12 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                       <RowActionsMenu
                         actions={[
                           { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => setRunModalScript(s) },
-                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogScript(s) },
                           // Linking lives here, not in the recorder toolbar:
                           // it rewrites the paired login step in every agent
                           // using this script, so it belongs with the script's
                           // configuration rather than a live browser session.
                           // Meaningless for login/login-check scripts, which
                           // ARE the login.
-                          ...(s.kind === 'regular' ? [{
-                            label: s.login_id ? 'Change linked login' : 'Link login',
-                            icon: <KeyRound className="h-4 w-4" />,
-                            onSelect: () => setLinkLoginScript(s),
-                          }] : []),
                           { label: duplicatingId === s.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === s.id, onSelect: () => handleDuplicate(s) },
                           { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => setScriptToDelete(s) },
                         ]}
@@ -346,6 +539,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                 },
               ]}
             />
+            </TooltipProvider>
           </CardContent>
         </Card>
       )}
@@ -358,13 +552,6 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
         onSaved={() => load()}
       />
 
-      <LinkLoginDialog
-        open={!!linkLoginScript}
-        onClose={() => setLinkLoginScript(null)}
-        orgId={orgId}
-        script={linkLoginScript}
-        onLinked={() => load()}
-      />
 
       <TagAssignDialog
         open={!!tagDialogScript}

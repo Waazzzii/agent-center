@@ -14,7 +14,15 @@ import { ArrowUp, ArrowDown, ArrowUpDown } from 'lucide-react';
 
 interface Column<T> {
   key: string;
-  label: string;
+  /**
+   * Header content. A ReactNode rather than a string so a column whose meaning
+   * is not obvious from two words can carry a help affordance in the header,
+   * instead of repeating an explanation on every row.
+   *
+   * mobileLabel stays a string — the card layout renders it as a plain key next
+   * to its value, where interactive content would have nowhere sensible to go.
+   */
+  label: React.ReactNode;
   render: (item: T) => React.ReactNode;
   desktopRender?: (item: T) => React.ReactNode;
   hideOnMobile?: boolean;

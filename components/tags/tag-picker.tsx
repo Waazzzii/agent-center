@@ -103,7 +103,7 @@ export function TagPicker({ tags, selected, onChange, onCreate, disabled, placeh
       </div>
 
       {open && (suggestions.length > 0 || canCreate) && (
-        <div className="absolute z-50 mt-1 max-h-56 w-full overflow-auto rounded-md border bg-popover py-1 shadow-md">
+        <div className="absolute z-50 mt-1 max-h-72 w-full overflow-y-auto rounded-md border bg-popover py-1 shadow-md">
           {suggestions.map((t) => (
             <button
               key={t.id}

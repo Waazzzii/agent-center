@@ -97,6 +97,49 @@ export interface RecordedStep {
    */
   requires_approval?: boolean;
   /**
+   * Run this step only when its input has a value.
+   *
+   *   true       — derive the gating params from the {{params}} this step
+   *                references
+   *   ['vendor'] — these params, even if this step references none of them
+   *
+   * The named form is for dependent chains: opening a dropdown, waiting for
+   * options and clicking one are three steps, only the last of which references
+   * {{vendor}}. Skipping just that one leaves the dropdown open and breaks the
+   * next field, so all three carry the same param.
+   *
+   * Absent or false means the step always runs. There is no script-level
+   * default — a step states its own behaviour, and the editor has a bulk action
+   * for setting it across every input-bearing step at once.
+   */
+  skip_if_empty?: boolean | string[];
+  /**
+   * Run this step only when the element is actually on the page.
+   *
+   *   true       — probe this step's own selector
+   *   "<sel>"    — probe that selector instead
+   *
+   * A different question from skip_if_empty. That asks "do I have data for
+   * this?"; this asks "is this part of the flow even here?" — the 2FA challenge
+   * that shows on a new device but not a trusted one, a cookie banner that
+   * appears once.
+   *
+   * Prefer it over allow_failure for an optional branch: allow_failure RUNS the
+   * step and tolerates the error, so a {{_mfa}} fill would still wait out the
+   * whole MFA timeout for a code nobody sent before failing.
+   */
+  skip_if_missing?: boolean | string;
+  /**
+   * Log and continue instead of failing the run.
+   *
+   * Deliberately separate from skip_if_empty: skip is decided BEFORE the step
+   * from its inputs, this AFTER from the outcome. Using failure as a proxy for
+   * absence would swallow a changed selector. Rejected on a requires_approval
+   * step — continuing past a failed submit would report success for work that
+   * never happened.
+   */
+  allow_failure?: boolean;
+  /**
    * Display-only reliability annotation from the AI refine pass. Persisted
    * onto the step so the badge survives a save / reload. Not consumed by the
    * runtime — purely for the editor's at-a-glance review badges.
@@ -150,6 +193,19 @@ export interface BrowserScript {
    *   • Adding this script as an agent action auto-adds a paired login step.
    */
   login_id: string | null;
+  /**
+   * Whether this script can do its job at all without an authenticated
+   * browser — a property of the SCRIPT, unlike login_id which is only the
+   * editor default.
+   *
+   * The two are independent on purpose. A script shared across several
+   * identities (eight markets, one scrape) sets requires_login = true and
+   * leaves login_id NULL, because it has no single correct login. When true,
+   * adding the script as an agent action requires choosing a login there —
+   * and that per-action choice is what lets one script serve many identities
+   * instead of being cloned per credential set.
+   */
+  requires_login: boolean;
   /**
    * What this script is for. 'login' and 'login_verify' belong to a login
    * profile: they're edited from that login's page and hidden from the
@@ -273,6 +329,12 @@ export async function updateScript(
     test_values: Record<string, string>;
     /** Pass a uuid to set, null to clear the link. Omit to leave unchanged. */
     login_id: string | null;
+    /**
+     * Toggle whether the script needs an authenticated browser. Independent of
+     * login_id: clearing the editor default must not also declare that the
+     * script stopped needing auth.
+     */
+    requires_login: boolean;
     /** Reclassify the script. Omit to leave unchanged. */
     kind: ScriptKind;
     /** Replace the script's tag set. Omit to leave unchanged. */
@@ -594,7 +656,7 @@ export async function runRemainingStepsAgentMode(
   params?: Record<string, string>,
   signal?: AbortSignal,
   approvedGates?: number[],
-  /** See executeStepRunStep — resolves {{_totp}} server-side. */
+  /** See executeStepRunStep — resolves {{_mfa}} server-side. */
   scriptId?: string | null,
   /**
    * Live hints from the EDITOR, which knows things the saved script may not:
@@ -660,7 +722,7 @@ export async function improveWalk(
     instruction?: string;
     reset?: boolean;
     targetedOnly?: boolean;
-    /** See executeStepRunStep — resolves {{_totp}} server-side. */
+    /** See executeStepRunStep — resolves {{_mfa}} server-side. */
     scriptId?: string | null;
     /** Live editor hints; see executeStepRunStep's `reserved`. */
     reserved?: { loginId?: string | null; needsTotp?: boolean };
@@ -694,7 +756,7 @@ export async function executeStepRunStep(
   signal?: AbortSignal,
   approvedGates?: number[],
   /**
-   * Lets the server resolve reserved variables ({{_totp}}) from the script's
+   * Lets the server resolve reserved variables ({{_mfa}}) from the script's
    * linked login. Without it a 2FA step fills BLANK in the editor while the
    * same script works under an agent — a test harness that disagrees with
    * production is worse than none.
