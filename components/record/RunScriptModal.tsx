@@ -46,9 +46,8 @@ import {
   cancelStepRunWaitForCapture,
   captureStepRunExtract,
   cancelStepRunExtractCapture,
-  runLinkedLoginInStepRun,
+  runLoginInStepRun,
   getScriptAgentUsage,
-  propagateScriptLogin,
   finalizeScript,
   improveWalk,
   tidyScript,
@@ -61,6 +60,7 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { RowActionsMenu } from '@/components/ui/row-actions-menu';
 import { listLogins, type Login } from '@/lib/api/logins';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { isReservedParam } from '@/lib/script-params';
 import { GuidedRecordDialog } from './GuidedRecordDialog';
 import type { ScriptKind } from '@/lib/api/scripts';
@@ -223,6 +223,16 @@ export function RunScriptModal({
   // `availableLogins` is fetched once when the modal opens — small
   // list, doesn't need pagination.
   const [linkedLoginId, setLinkedLoginId] = useState<string | null>(null);
+
+  // Which identity THIS editing session is looking at.
+  //
+  // Deliberately separate from linkedLoginId (the script's stored default):
+  // a script shared across identities has no single right answer — eight
+  // AirBnB markets share one scrape script — so which one you want to record
+  // against is a property of the session, not of the script. Never persisted:
+  // choosing an identity to look at must not repoint what an agent runs as,
+  // which only the agent action's own login_id decides.
+  const [sessionLoginId, setSessionLoginId] = useState<string | null>(null);
   // What this script is FOR — drives which picker it appears in. Mirrors
   // script.kind, seeded on open and persisted immediately on change.
   const [scriptKind, setScriptKind] = useState<ScriptKind>('regular');
@@ -255,7 +265,8 @@ export function RunScriptModal({
 
   // Auto-login eligibility: the linked login must have BOTH a script and
   // credentials configured before the in-editor "Log in" button works.
-  const canAutoLogin = !!(linkedLogin?.auto_login_script_id && linkedLogin?.credentials_secret_id);
+  const sessionLogin = availableLogins.find((l) => l.id === sessionLoginId) ?? null;
+  const canAutoLogin = !!(sessionLogin?.auto_login_script_id && sessionLogin?.credentials_secret_id);
 
   // ── Test / step-run mode ──────────────────────────────────────
   const [runId, setRunId] = useState<string | null>(null);
@@ -592,6 +603,9 @@ export function RunScriptModal({
         setScriptName(script?.name ?? '');
         setScriptDescription(script?.description ?? '');
         setLinkedLoginId(script?.login_id ?? null);
+        // Seed the session choice from the script's default when it has one,
+        // purely so the common single-identity case needs no clicks.
+        setSessionLoginId(script?.login_id ?? null);
         // Seed from the saved script; for a new recording fall back to the
         // kind the caller asked for (recordKind), so the chip shows what
         // the script will be saved as.
@@ -1293,96 +1307,22 @@ export function RunScriptModal({
     await restartSessionWithLogin(loginId);
   };
 
-  // Linking the script's login propagates the change to every agent
-  // already using this script — the operator gets a confirm dialog
-  // showing the count before we touch other agents. Idempotent at
-  // the backend, so re-running with the same login_id is a no-op.
-
-  /**
-   * Still used by record mode, where a login can be linked as part of
-   * saving a brand-new script. The interactive PICKER moved to the Scripts
-   * list (LinkLoginDialog) — changing a saved script's link rewrites the
-   * paired login step in every agent using it, which is a configuration
-   * decision, not something to do from inside a live browser session.
-   */
-  const handleSetLinkedLogin = async (loginId: string | null) => {
-    if (!orgId || mode === 'record' || !script?.id) {
-      setLinkedLoginId(loginId);
-      // Record mode (or unsaved): the link lives in state until Save, but we
-      // can still offer to restart the live session with the login now.
-      await maybeOfferRestartWithLogin(loginId);
-      return;
-    }
-
-    // Skip the confirm when the value didn't actually change. Picking
-    // the currently-linked login from the dropdown is a no-op.
-    if (loginId === linkedLoginId) return;
-
-    // Count downstream agents so the operator can make an informed call.
-    let agentCount = 0;
-    try {
-      const usage = await getScriptAgentUsage(orgId, script.id);
-      agentCount = usage.count;
-    } catch {
-      // Best-effort count — if it fails we still let the operator
-      // proceed; the propagate call below is idempotent + safe.
-    }
-
-    if (agentCount > 0) {
-      const newLoginName = availableLogins.find((l) => l.id === loginId)?.name;
-      const desc = loginId
-        ? `This script is used by ${agentCount} agent${agentCount === 1 ? '' : 's'}. ` +
-          `Linking "${newLoginName ?? 'this login'}" will replace any existing login step paired with this script in those agents.`
-        : `This script is used by ${agentCount} agent${agentCount === 1 ? '' : 's'}. ` +
-          `Unlinking the login will remove the paired login step from those agents.`;
-      const ok = await confirm({
-        title: loginId ? 'Update login on all agents?' : 'Unlink login on all agents?',
-        description: desc,
-        confirmText: loginId ? 'Update agents' : 'Unlink',
-        cancelText: 'Cancel',
-        variant: 'default',
-      });
-      if (!ok) return;
-    }
-
-    setLinkedLoginId(loginId);
-    try {
-      await updateScript(orgId, script.id, { login_id: loginId });
-      // Fire-and-await the propagate so the operator's next agent
-      // editor visit shows the synced state. Best-effort: a propagate
-      // failure doesn't roll back the script's link change.
-      const propagated = await propagateScriptLogin(orgId, script.id, loginId).catch(() => null);
-      if (propagated && propagated.agents_touched > 0) {
-        const adds = propagated.actions_added;
-        const removes = propagated.actions_removed;
-        const parts = [];
-        if (adds > 0)    parts.push(`+${adds} login step${adds === 1 ? '' : 's'}`);
-        if (removes > 0) parts.push(`-${removes} login step${removes === 1 ? '' : 's'}`);
-        toast.success(
-          `Updated ${propagated.agents_touched} agent${propagated.agents_touched === 1 ? '' : 's'}` +
-          (parts.length ? ` (${parts.join(', ')})` : '')
-        );
-      }
-      // Link persisted — offer to restart the live session so it boots with
-      // the login's profile (only fires when linking, with a session live).
-      await maybeOfferRestartWithLogin(loginId);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error || 'Failed to update linked login');
-    }
-  };
-
-  // Run the linked login's auto-login script inside the editor's
-  // current browser session. The recorded steps & current index are
-  // unchanged — only cookies/localStorage update.
-  const handleLogInWithLinkedLogin = async () => {
-    if (!orgId || !runId || !script?.id || !linkedLoginId) return;
+  // Run the SELECTED login's auto-login script inside the editor's current
+  // browser session. The recorded steps and current index are unchanged —
+  // only cookies/localStorage update.
+  //
+  // Works for any login, not just the script's default, which is the point:
+  // you can authenticate an editing session as whichever identity you need
+  // without touching the script or any agent.
+  const handleSessionLogin = async () => {
+    if (!orgId || !runId || !sessionLoginId) return;
     if (!canAutoLogin) {
-      toast.error('This login needs an auto-login script AND credentials configured first');
+      toast.error('That login needs an auto-login script AND credentials configured first');
       return;
     }
     setLoggingIn(true);
     try {
-      const result = await runLinkedLoginInStepRun(orgId, runId, script.id);
+      const result = await runLoginInStepRun(orgId, runId, { loginId: sessionLoginId });
       toast.success(`Logged in via "${result.login_name}" (${result.steps_run} step${result.steps_run !== 1 ? 's' : ''})`);
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Auto-login failed');
@@ -3152,9 +3092,15 @@ export function RunScriptModal({
                 autoFocus
               />
             ) : (
+              // One line, clipped to the same width as the name input above.
+              // Descriptions are long by design — they are what makes a script
+              // findable later — so printing one unclipped in a header cell
+              // pushed the whole toolbar out of shape on load. The full text is
+              // reachable by clicking in, which is also where it is editable.
               <button
-                className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground px-1 text-left transition-colors"
+                className="text-[10px] text-muted-foreground/50 hover:text-muted-foreground px-1 text-left transition-colors w-52 min-w-0 max-w-52 overflow-hidden whitespace-nowrap text-ellipsis block"
                 onClick={() => setShowDescription(true)}
+                title={scriptDescription || undefined}
               >
                 {scriptDescription || '+ Add description'}
               </button>
@@ -3167,60 +3113,64 @@ export function RunScriptModal({
               login_id); in test mode it's persisted immediately. Linking
               also offers to restart the browser with the login's profile —
               see handleSetLinkedLogin. */}
-          {/* Hidden for login + login-check scripts. `login_id` is the
-              SESSION BINDING — "run this script inside that login's
-              authenticated session" — which is incoherent for the script
-              that PERFORMS the login: it would be asking to already be
-              logged in before logging in. Those scripts belong to their
-              login profile and are reached from its page, so there is
-              nothing to pick here either. */}
+          {/* Session login picker — hidden for login + login-check scripts,
+              which PERFORM the authentication: asking them to run inside an
+              authenticated session is incoherent (it would mean being logged
+              in before logging in).
+
+              Any login, not just the script's default. Assignment lives on the
+              agent action — that is what lets one script run as eight markets —
+              so this control is purely "authenticate the browser I am editing
+              in", and nothing here is written back to the script. */}
           {(mode === 'record' || script?.id) && scriptKind === 'regular' && (
             <div className="flex items-center gap-1.5 shrink-0">
-              {/* Read-only. Linking is a configuration decision with
-                  blast radius — it rewrites the paired login step in every
-                  agent using this script — so it lives on the Scripts list,
-                  not in the recorder toolbar where it read as a per-session
-                  preference. In here the only login action is "Log in". */}
-              {linkedLogin && (
-                <span
-                  className={cn(
-                    'flex items-center gap-1.5 px-2 py-1 rounded-md text-xs border',
-                    'border-brand/30 bg-brand/5 text-brand',
-                  )}
-                  title={`Runs inside the "${linkedLogin.name}" session. Change this from the Scripts list.`}
-                >
-                  <KeyRound className="h-3 w-3" />
-                  <span className="max-w-[140px] truncate">{linkedLogin.name}</span>
-                </span>
-              )}
+              <Select
+                value={sessionLoginId ?? '__none__'}
+                onValueChange={(v) => setSessionLoginId(v === '__none__' ? null : v)}
+                disabled={!!isRecording}
+              >
+                <SelectTrigger className="h-7 w-[190px] text-xs">
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <KeyRound className="h-3 w-3 shrink-0 text-muted-foreground" />
+                    <SelectValue placeholder="No login" />
+                  </span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="__none__">No login</SelectItem>
+                  {availableLogins.map((l) => (
+                    <SelectItem key={l.id} value={l.id}>
+                      {l.name}
+                      {!(l.auto_login_script_id && l.credentials_secret_id) && ' (not set up)'}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
 
-
-              {/* Only render the Log in button when the linked login
-                  actually has auto-login configured (both an
-                  auto_login_script_id AND credentials_secret_id). A
-                  disabled-but-visible button was confusing — operators
-                  thought it should work and clicked it. If the linked
-                  login isn't auto-loginable, the chip alone signals the
-                  association and the operator can either configure
-                  auto-login on the Logins page or just manually
-                  authenticate inside the browser preview. */}
-              {linkedLogin && canAutoLogin && (
-                <button
-                  type="button"
-                  onClick={handleLogInWithLinkedLogin}
-                  disabled={loggingIn || !runId || !!isRecording}
-                  className={cn(
-                    'flex items-center gap-1 px-2 py-1 rounded-md text-xs border border-border hover:bg-muted/40 text-foreground transition-colors',
-                    loggingIn && 'opacity-60 cursor-wait',
-                  )}
-                  title="Run the linked login's auto-login flow in this browser"
-                >
-                  {loggingIn
-                    ? <Loader2 className="h-3 w-3 animate-spin" />
-                    : <LogIn className="h-3 w-3" />}
-                  Log in
-                </button>
-              )}
+              {/* Only enabled once the SELECTED login can actually auto-login
+                  (auto-login script AND stored credentials). A visible-but-dead
+                  button read as broken — operators clicked it and nothing
+                  happened — so the "(not set up)" suffix above says why. */}
+              <button
+                type="button"
+                onClick={handleSessionLogin}
+                disabled={loggingIn || !runId || !!isRecording || !sessionLoginId || !canAutoLogin}
+                className={cn(
+                  'flex items-center gap-1 px-2 py-1 rounded-md text-xs border border-border transition-colors',
+                  'hover:bg-muted/40 text-foreground',
+                  (loggingIn || !sessionLoginId || !canAutoLogin) && 'opacity-50',
+                  loggingIn && 'cursor-wait',
+                )}
+                title={
+                  !sessionLoginId ? 'Pick a login first'
+                  : !canAutoLogin ? 'That login needs an auto-login script and credentials'
+                  : 'Sign this browser in as the selected login'
+                }
+              >
+                {loggingIn
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <LogIn className="h-3 w-3" />}
+                Log in
+              </button>
             </div>
           )}
 

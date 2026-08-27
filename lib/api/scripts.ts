@@ -864,14 +864,14 @@ export async function startStepRunRecording(orgId: string, runId: string): Promi
  * cookies/localStorage so subsequent step tests run authenticated.
  * Backend resolves credentials + auto-login script from script.login_id.
  */
-export async function runLinkedLoginInStepRun(
+export async function runLoginInStepRun(
   orgId: string,
   runId: string,
-  scriptId: string,
+  opts: { loginId?: string | null; scriptId?: string | null },
 ): Promise<{ ok: true; login_name: string; steps_run: number }> {
   const res = await agentClient.post(
     `/api/admin/${orgId}/step-runs/${runId}/run-linked-login`,
-    { script_id: scriptId },
+    { login_id: opts.loginId ?? undefined, script_id: opts.scriptId ?? undefined },
     { timeout: 5 * 60 * 1000 }, // matches the worker's 5-min budget
   );
   return res.data;
@@ -903,28 +903,6 @@ export async function getScriptLoginUsage(
   scriptId: string,
 ): Promise<{ verify: number; auto_login: number }> {
   const res = await agentClient.get(`/api/admin/${orgId}/scripts/${scriptId}/login-usage`);
-  return res.data;
-}
-
-/**
- * Insert / replace / remove the paired login step on every agent that
- * currently uses this script. login_id=null clears the pairing on all
- * agents. Idempotent.
- */
-export async function propagateScriptLogin(
-  orgId: string,
-  scriptId: string,
-  loginId: string | null,
-): Promise<{
-  agents_touched: number;
-  actions_added: number;
-  actions_removed: number;
-  affected_agent_ids: string[];
-}> {
-  const res = await agentClient.post(
-    `/api/admin/${orgId}/scripts/${scriptId}/propagate-login`,
-    { login_id: loginId },
-  );
   return res.data;
 }
 

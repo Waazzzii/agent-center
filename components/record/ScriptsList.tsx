@@ -16,6 +16,7 @@ import {
 } from '@/components/ui/dialog';
 import { Trash2, Pencil, Copy, Search, KeyRound } from 'lucide-react';
 import { listScripts, deleteScript, createScript, updateScript, getScriptLoginUsage, type BrowserScript } from '@/lib/api/scripts';
+import { Switch } from '@/components/ui/switch';
 import { RunScriptModal } from './RunScriptModal';
 import { useTags } from '@/lib/hooks/use-tags';
 import { TagFilter } from '@/components/tags/tag-filter';
@@ -63,8 +64,6 @@ interface ScriptsListProps {
 export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
   const [loginTogglePending, setLoginTogglePending] = useState<string | null>(null);
-  const [logins, setLogins] = useState<Login[]>([]);
-  const [loginPending, setLoginPending] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // Only gates the first-load spinner — filter/search reloads update in place.
   const [initialLoad, setInitialLoad] = useState(true);
@@ -136,30 +135,6 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
    * login_id, which is the runtime authority. Changing the editor default here
    * cannot repoint a running agent.
    */
-  async function handleSetLogin(script: BrowserScript, value: string) {
-    if (!orgId) return;
-    const next =
-      value === '__none__' ? { requires_login: false, login_id: null }
-      : value === '__any__' ? { requires_login: true, login_id: null }
-      : { requires_login: true, login_id: value };
-
-    setLoginPending(script.id);
-    setScripts((prev) => prev.map((x) => (x.id === script.id ? { ...x, ...next } : x)));
-    try {
-      await updateScript(orgId, script.id, next);
-      toast.success(
-        value === '__none__' ? `"${script.name}" no longer needs a login`
-        : value === '__any__' ? `"${script.name}" requires a login, chosen per agent`
-        : `"${script.name}" defaults to ${logins.find((l) => l.id === value)?.name ?? 'that login'}`,
-      );
-    } catch (err: any) {
-      await load();
-      toast.error(err?.response?.data?.error || err?.message || 'Failed to update script');
-    } finally {
-      setLoginPending(null);
-    }
-  }
-
   async function handleToggleRequiresLogin(script: BrowserScript, next: boolean) {
     if (!orgId) return;
     setLoginTogglePending(script.id);
@@ -206,12 +181,10 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
     }
   };
 
-  // Logins are needed to label and populate the per-script login selector.
   // Fetched once here rather than by each row, which would be one request per
   // script for a list that is identical for all of them.
   useEffect(() => {
     if (!orgId) return;
-    listLogins(orgId).then(setLogins).catch(() => setLogins([]));
   }, [orgId]);
 
   useEffect(() => {
@@ -407,13 +380,12 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                     <span className="inline-flex items-center gap-1">
                       Login
                       <HeaderHelp>
-                        Which login profile this script signs in as.
-                        {' '}<strong>None</strong> runs unauthenticated.
-                        {' '}<strong>Any (per agent)</strong> means it needs a login but has no
-                        default — every agent action using it must choose one, which is what lets
-                        a single script serve several identities.
-                        {' '}Picking a specific login also makes it the default the script editor
-                        signs into for record and test.
+                        Whether this script needs an authenticated browser. When on, every
+                        routine step using this script must choose a login before it will
+                        run — which is what lets one script serve several identities (eight
+                        markets, one scrape).
+                        {' '}<em>Which</em> login is chosen in the routine, never here. To sign
+                        the editor in while working on a script, use the login picker inside it.
                       </HeaderHelp>
                     </span>
                   ),
@@ -425,23 +397,16 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                       // cannot itself run inside one.
                       <span className="text-xs text-muted-foreground">—</span>
                     ) : (
-                      <div onClick={(e) => e.stopPropagation()}>
-                        <Select
-                          value={s.login_id ?? (s.requires_login ? '__any__' : '__none__')}
-                          disabled={loginPending === s.id}
-                          onValueChange={(v) => handleSetLogin(s, v)}
-                        >
-                          <SelectTrigger className="h-8 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            <SelectItem value="__none__">None</SelectItem>
-                            <SelectItem value="__any__">Any (per agent)</SelectItem>
-                            {logins.map((l) => (
-                              <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                      <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2">
+                        <Switch
+                          checked={s.requires_login === true}
+                          disabled={loginTogglePending === s.id}
+                          onCheckedChange={(v) => handleToggleRequiresLogin(s, v)}
+                          aria-label={`Login required for ${s.name}`}
+                        />
+                        <span className="text-xs text-muted-foreground">
+                          {s.requires_login ? 'Required' : 'Not required'}
+                        </span>
                       </div>
                     )
                   ),
