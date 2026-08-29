@@ -237,6 +237,14 @@ export function RunScriptModal({
   // script.kind, seeded on open and persisted immediately on change.
   const [scriptKind, setScriptKind] = useState<ScriptKind>('regular');
   const [availableLogins, setAvailableLogins] = useState<Login[]>([]);
+  // Why the picker is empty, when it is empty.
+  //
+  // An org with no logins and a request that FAILED both render as "no logins
+  // available", and they need opposite actions — create one vs fix access.
+  // GET /api/admin/:orgId/logins is gated on agent_center_user, so a
+  // permissions gap shows up here as a silently empty dropdown with no way to
+  // tell it from an empty org.
+  const [loginsError, setLoginsError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
   const linkedLogin = availableLogins.find((l) => l.id === linkedLoginId) ?? null;
 
@@ -253,9 +261,24 @@ export function RunScriptModal({
    * belongs with instead of scattered by declaration order.
    */
   const buildReservedHints = () => ({
-    // ownerLoginId covers the login-script case, where linkedLoginId is
-    // null by design. See the prop's docstring.
-    loginId: linkedLoginId ?? ownerLoginId,
+    // Order matters, most specific first:
+    //
+    //   1. sessionLoginId — the login the operator PICKED for this session.
+    //      It is the identity the browser is actually authenticated as, so it
+    //      is the only right answer for "whose 2FA code should fill this
+    //      field". Previously absent from this list entirely, which is why a
+    //      picked login still produced a blank {{_mfa}}.
+    //   2. ownerLoginId   — the editor was opened FROM a login page, the
+    //      login-script case where there is no picker to read.
+    //   3. linkedLoginId  — the script row's legacy default. Migration 312
+    //      cleared that column, so this is null for every script now; it is
+    //      kept last only so an un-migrated copy of the DB still behaves.
+    //
+    // Without (1) the editor disagreed with production: the same script that
+    // completes 2FA under an agent stopped dead at the code field when tested
+    // here, because the agent resolves the code from the ACTION's login while
+    // the editor was still reading a column nothing writes any more.
+    loginId: sessionLoginId ?? ownerLoginId ?? linkedLoginId,
     needsTotp: (stepRunState?.steps ?? []).some((st) =>
       [st.value, st.selector, st.url, st.text].some(
         (f) => typeof f === 'string' && f.includes('{{_mfa}}'),
@@ -623,16 +646,43 @@ export function RunScriptModal({
         // Always auto-start — variables are editable inline in the Variables Panel
         handleStartStepRun();
       }
-      // Fetch the org's login profiles for the chip picker. Cheap
-      // request, only fires once per modal open.
-      if (orgId) {
-        listLogins(orgId)
-          .then(setAvailableLogins)
-          .catch(() => { /* picker just shows "no logins available" */ });
-      }
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
+
+  // Load the org's logins for the session picker.
+  //
+  // Its OWN effect keyed on [open, orgId] — deliberately not folded into the
+  // open handler above. That one runs on `open` alone and read orgId out of its
+  // closure, so a modal opened before the org context resolved evaluated
+  // `if (orgId)` as false and never retried: the picker stayed empty for the
+  // entire session, and reopening it later silently "fixed" it.
+  //
+  // That intermittency is worth naming, because it does not look like a race
+  // from the outside. It looks like the picker works for one script and not
+  // another, which sends you hunting for a difference between the scripts —
+  // permissions, script kind, the linked login — when the only difference is
+  // how quickly the modal opened after the page loaded.
+  useEffect(() => {
+    if (!open || !orgId) return;
+    let cancelled = false;
+    setLoginsError(null);
+    listLogins(orgId)
+      .then((ls) => { if (!cancelled) { setAvailableLogins(ls); setLoginsError(null); } })
+      .catch((err) => {
+        if (cancelled) return;
+        // Keep the reason. Swallowing it is what made an access problem
+        // indistinguishable from an org with no logins in it.
+        const status = err?.response?.status;
+        setLoginsError(
+          status === 403
+            ? 'No access to logins (needs agent_center_user).'
+            : `Could not load logins: ${err?.response?.data?.error ?? err?.message ?? 'unknown error'}`
+        );
+        setAvailableLogins([]);
+      });
+    return () => { cancelled = true; };
+  }, [open, orgId]);
 
   // ── Poll for live recorded steps during active recording ────────
   useEffect(() => {
@@ -3137,6 +3187,14 @@ export function RunScriptModal({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none__">No login</SelectItem>
+                  {loginsError && (
+                    <div className="px-2 py-1.5 text-xs text-destructive">{loginsError}</div>
+                  )}
+                  {!loginsError && availableLogins.length === 0 && (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                      No logins in this organization yet.
+                    </div>
+                  )}
                   {availableLogins.map((l) => (
                     <SelectItem key={l.id} value={l.id}>
                       {l.name}
