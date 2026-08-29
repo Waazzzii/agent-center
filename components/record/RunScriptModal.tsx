@@ -279,11 +279,27 @@ export function RunScriptModal({
     // here, because the agent resolves the code from the ACTION's login while
     // the editor was still reading a column nothing writes any more.
     loginId: sessionLoginId ?? ownerLoginId ?? linkedLoginId,
+    // TRUE or UNDEFINED — never false.
+    //
+    // This is an ADDITIVE hint: it exists so an {{_mfa}} step that has been
+    // typed but not yet saved still resolves a code. It must never be able to
+    // VETO, and as a plain boolean it did exactly that. The server treats
+    // needs_totp as authoritative when it is defined and only scans the saved
+    // script when it is undefined, so a `false` from here — which is what a
+    // step list that has not loaded yet produces — stopped it looking at a
+    // script whose steps plainly reference {{_mfa}}.
+    //
+    // It failed silently, too: the server only warns when it wanted a code and
+    // could not resolve a login, so declining for want=false said nothing at
+    // all. The 2FA field just filled blank and the script stopped.
+    //
+    // Undefined means "I don't know", which is the truth before the steps
+    // arrive, and it lets the saved script answer instead.
     needsTotp: (stepRunState?.steps ?? []).some((st) =>
       [st.value, st.selector, st.url, st.text].some(
         (f) => typeof f === 'string' && f.includes('{{_mfa}}'),
       ),
-    ),
+    ) || undefined,
   });
 
   // Auto-login eligibility: the linked login must have BOTH a script and
