@@ -443,21 +443,36 @@ export async function listLoginRuns(
   return res.data;
 }
 
+export type SlackChannelOption = {
+  id: string; name: string; is_private: boolean; is_member: boolean | null;
+};
+
 /**
  * Slack channels the connector can see, for the 2FA channel picker.
  *
- * Resolves to [] rather than throwing when Slack is not connected — the picker
- * falls back to a raw channel-ID field, which is worse but not a dead end.
+ * Returns the REASON alongside the list rather than collapsing everything to [].
+ *
+ * It used to return a bare array and swallow every failure into an empty one, so
+ * "the workspace has no channels", "the connector is not enabled", "the token
+ * could not be minted" and "Slack refused the scope" all rendered as the same
+ * empty dropdown. The API reports the cause now; throwing it away here would
+ * just move the silence one layer up.
+ *
+ * Still never throws — the picker keeps its paste-the-id fallback, which is
+ * worse but not a dead end.
  */
 export async function listSlackChannels(
   orgId: string,
-): Promise<{ id: string; name: string; is_private: boolean; is_member: boolean | null }[]> {
+): Promise<{ channels: SlackChannelOption[]; error: string | null }> {
   try {
-    const res = await agentClient.get<{ channels: { id: string; name: string; is_private: boolean; is_member: boolean | null }[] }>(
+    const res = await agentClient.get<{ channels?: SlackChannelOption[]; error?: string }>(
       `/api/admin/${orgId}/slack/channels`,
     );
-    return res.data.channels ?? [];
-  } catch {
-    return [];
+    return { channels: res.data.channels ?? [], error: res.data.error ?? null };
+  } catch (err: any) {
+    return {
+      channels: [],
+      error: err?.response?.data?.error ?? err?.message ?? 'Could not reach the server',
+    };
   }
 }

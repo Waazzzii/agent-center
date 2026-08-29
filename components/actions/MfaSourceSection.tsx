@@ -54,6 +54,7 @@ export function MfaSourceSection({
 
   const [channels, setChannels] = useState<{ id: string; name: string; is_private: boolean; is_member: boolean | null }[]>([]);
   const [channelState, setChannelState] = useState<'idle' | 'loading' | 'loaded'>('idle');
+  const [channelError, setChannelError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<MfaTestResult | null>(null);
@@ -75,11 +76,22 @@ export function MfaSourceSection({
   }, [login.mfa_source, login.mfa_slack_channel_id, login.mfa_code_regex, login.mfa_timeout_seconds]);
 
   const loadChannels = useCallback(async () => {
-    if (!orgId || channelState !== 'idle') return;
+    // Guard on 'loading' only, NOT on 'idle'.
+    //
+    // The old guard was `channelState !== 'idle'`, which made the load
+    // once-per-mount: after one attempt the state was 'loaded' forever, so a
+    // failed or empty fetch was PERMANENT — reopening the dialog could not
+    // retry, and only a full page reload cleared it. Combined with the error
+    // being swallowed, one bad response pinned the dropdown to "No channels
+    // available" indefinitely, long after the underlying problem was fixed.
+    if (!orgId || channelState === 'loading') return;
     setChannelState('loading');
-    const list = await listSlackChannels(orgId).catch(() => []);
+    const { channels: list, error } = await listSlackChannels(orgId);
     setChannels(list);
-    setChannelState('loaded');
+    setChannelError(error);
+    // A failure returns to 'idle' so the next open tries again; only a clean
+    // result is 'loaded'.
+    setChannelState(error ? 'idle' : 'loaded');
   }, [orgId, channelState]);
 
   const dirty =
@@ -455,11 +467,20 @@ export function MfaSourceSection({
               <Loader2 className="h-4 w-4 animate-spin" />
               Reading the channel list from Slack…
             </div>
+          ) : channelError ? (
+            <div className="space-y-2 py-4">
+              <p className="text-sm">Could not read the channel list.</p>
+              <p className="text-xs text-muted-foreground font-mono break-all">{channelError}</p>
+              <p className="text-xs text-muted-foreground">
+                Paste the channel id directly instead — it is stored the same way. Closing and
+                reopening this dialog retries.
+              </p>
+            </div>
           ) : channels.length === 0 ? (
             <div className="space-y-2 py-4">
               <p className="text-sm">No channels available.</p>
               <p className="text-xs text-muted-foreground">
-                The Slack bot has not been added to any channel. Invite it to the channel the
+                Slack returned no channels the bot belongs to. Invite it to the channel the
                 codes arrive in and try again — a private channel also needs the token to
                 carry <code className="font-mono">groups:read</code>. You can paste the id
                 directly instead.
