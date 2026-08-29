@@ -641,27 +641,38 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // ── Login ↔ Script pairing ─────────────────────────────────────
   // A login action is "paired" with the browser_script action right
   // after it when:
-  //   • The script's row has a non-null login_id
+  //   • The script action carries a login_id
   //   • That login_id matches the login action's login_id
   //
   // Paired actions get a chain-link visual treatment and are
   // deleted as a unit. The pairing is purely positional + matching FK
   // — moving the script away from its login (drag-reorder) silently
   // breaks the pair, which is the correct semantic.
+  //
+  // This reads the ACTION's login_id, not the script row's. It used to
+  // require a non-null agent_browser_scripts.login_id, which is the retired
+  // script-level default — so whether two steps LOOKED linked depended on
+  // when the script happened to be authored. Scripts predating the move to
+  // per-action logins still carry the column and rendered as a linked pair;
+  // anything authored after it does not, and rendered as two loose steps
+  // despite being wired identically. Same agent shape, different picture.
+  //
+  // The action's login_id is the binding the runtime actually uses, so the
+  // display now follows the same fact the executor does — and it keeps
+  // working once the legacy column is cleared.
   const actionPairs = useMemo(() => {
     const m = new Map<string, { partnerId: string; role: 'login' | 'script' }>();
     for (let i = 0; i < actions.length - 1; i++) {
       const cur = actions[i];
       const next = actions[i + 1];
       if (cur.action_type !== 'login' || next.action_type !== 'browser_script') continue;
-      const nextScript = browserScripts.find((s) => s.id === next.script_id);
-      if (!nextScript?.login_id) continue;
-      if (cur.login_id !== nextScript.login_id) continue;
+      if (!next.login_id) continue;
+      if (cur.login_id !== next.login_id) continue;
       m.set(cur.id,  { partnerId: next.id, role: 'login'  });
       m.set(next.id, { partnerId: cur.id,  role: 'script' });
     }
     return m;
-  }, [actions, browserScripts]);
+  }, [actions]);
 
   // Sequential display numbers for VISIBLE steps only (paired logins render as a
   // chip on their script, not their own card, so they don't consume a number).
