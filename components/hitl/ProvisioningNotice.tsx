@@ -1,57 +1,62 @@
 'use client';
 
-import { Loader2, Server } from 'lucide-react';
+import { Loader2 } from 'lucide-react';
 
 /**
- * Shared "waiting for a browser VM" notice.
+ * Shared "waiting for the browser session" notice.
  *
  * Used by any surface that allocates a browser slot — RunScriptModal,
- * BrowserHITLDialog, login verify/manual flows — so the user gets the same
- * message regardless of which flow they're in.
+ * BrowserHITLDialog, login verify/manual flows — so the wait looks the same
+ * wherever you meet it.
  *
- * This is intentionally a pure presentational component; the caller decides
- * when to show it (typically while `isProvisioning` from useProvisioningPoll
- * is true).
+ * DELIBERATELY QUIET. This used to be an amber card headed "Spinning up a
+ * browser", explaining that all slots were in use and a new one was being
+ * prepared, typically taking 10–60 seconds. Every part of that described the
+ * old dynamically-scaled pool:
+ *
+ *   • Capacity is FIXED now. There is no scale-up to wait for — a slot is
+ *     either free, in which case this lasts about five seconds, or it is not,
+ *     in which case the request is rejected outright and you see an error
+ *     rather than this.
+ *   • So "all browser slots are currently in use" was simply false: it is the
+ *     ordinary path, shown every time, worded as though something were wrong.
+ *   • Amber, a server icon and a paragraph of explanation is a lot of ceremony
+ *     for five seconds. It taught people that opening the editor is an event.
+ *
+ * A spinner and four words is the right weight for a five-second wait. The
+ * escalation stays, because a fixed pool that has not answered in fifteen
+ * seconds genuinely is stuck — but it stays a sentence, not a banner.
  */
 export function ProvisioningNotice({
   elapsedMs,
   showPersistenceHint = true,
 }: {
-  /** Optional — if provided, we nudge the "taking longer than usual" copy
-   *  after 60s. GKE Pod cold-start is typically 10-30s; anything past 60s is
-   *  genuinely slower than normal. */
+  /** Optional — after ~15s we say so. With fixed capacity a slot arrives in
+   *  about five seconds, so a longer wait is worth naming rather than hiding
+   *  behind an indefinite spinner. */
   elapsedMs?: number;
-  /** Show the "you can close this window" footer. Turn off for interactive
-   *  flows where closing isn't allowed (e.g. manual login). */
+  /** Show the "you can close this window" line. Turn off for interactive flows
+   *  where closing isn't allowed (e.g. manual login). */
   showPersistenceHint?: boolean;
 }) {
-  const long = (elapsedMs ?? 0) > 60_000;
+  const slow = (elapsedMs ?? 0) > 15_000;
 
   return (
     <div className="w-full h-full flex items-center justify-center">
-      <div className="flex flex-col items-center gap-4 text-center max-w-md px-6">
-        <div className="h-14 w-14 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
-          <Server className="h-7 w-7 text-amber-600 dark:text-amber-400" />
-        </div>
-        <div className="space-y-1.5">
-          <p className="text-sm font-semibold">Spinning up a browser</p>
-          <p className="text-xs text-muted-foreground leading-relaxed">
-            All browser slots are currently in use. A new browser is being prepared
-            {long ? " — it's taking a little longer than usual, hang tight" : ' — this typically takes 10–60 seconds'}.
-            The browser will open automatically once it{"'"}s ready.
+      <div className="flex flex-col items-center gap-3 text-muted-foreground">
+        <Loader2 className="h-6 w-6 animate-spin" />
+        <p className="text-sm">
+          {slow ? 'Still connecting to the browser…' : 'Connecting to the browser…'}
+        </p>
+        {slow && (
+          <p className="text-xs text-muted-foreground/70 max-w-xs text-center">
+            Longer than usual — a slot normally arrives in a few seconds.
           </p>
-        </div>
-        {showPersistenceHint && (
-          <div className="flex items-center gap-2 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg px-4 py-2.5">
-            <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-            <span>You can close this window and come back — your session will be waiting for you.</span>
-          </div>
         )}
-        {!showPersistenceHint && (
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Loader2 className="h-3.5 w-3.5 animate-spin shrink-0" />
-            <span>Please wait…</span>
-          </div>
+        {showPersistenceHint && slow && (
+          <p className="text-xs text-muted-foreground/70">
+            You can close this window; the session will be waiting.
+          </p>
         )}
       </div>
     </div>

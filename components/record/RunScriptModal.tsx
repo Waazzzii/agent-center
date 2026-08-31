@@ -17,7 +17,7 @@ import {
   CheckCircle2, ChevronRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
   CircleDot, X, XCircle, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
   Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
-  Scissors, Sparkles, ShieldAlert, Wand2,
+  Scissors, ShieldAlert, Undo2, GitBranch,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -49,12 +49,9 @@ import {
   runLoginInStepRun,
   getScriptAgentUsage,
   finalizeScript,
-  improveWalk,
-  tidyScript,
   SCRIPT_KIND_LABELS,
   type BrowserScript,
   type RecordedStep,
-  type RefineReport,
 } from '@/lib/api/scripts';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
@@ -157,6 +154,9 @@ function autoStepLabel(step: RecordedStep): string {
     case 'wait_for':     return `Wait: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? 'element'}`;
     case 'wait_for_tab': return `Wait for new tab${step.selector ? `: ${step.waitFor?.description ?? step.selector}` : ''}`;
     case 'pause':        return `Pause ${typeof step.duration_ms === 'number' ? `${step.duration_ms}ms` : ''}`.trim();
+    // A group is named after the BRANCH, not its selector. "Two-factor
+    // challenge" tells you what is optional here; an XPath does not.
+    case 'group':      return (step as { label?: string }).label?.trim() || 'Optional branch';
     default:           return step.action;
   }
 }
@@ -166,23 +166,22 @@ function stepLabel(step: RecordedStep): string {
   return custom && custom.length > 0 ? custom : autoStepLabel(step);
 }
 
-/** Small colored dot reflecting an AI refine reliability tier. */
-function ReliabilityBadge({ tier, risks }: { tier: 'reliable' | 'review' | 'fragile'; risks: string[] }) {
-  const cls =
-    tier === 'reliable' ? 'bg-green-500' :
-    tier === 'fragile'  ? 'bg-red-500'   :
-                          'bg-amber-500';
-  const title = risks.length > 0
-    ? `${tier} — ${risks.join('; ')}`
-    : `${tier}`;
-  return (
-    <span
-      className={cn('h-2 w-2 rounded-full shrink-0', cls)}
-      title={title}
-      aria-label={`Reliability: ${title}`}
-    />
-  );
-}
+/* ReliabilityBadge removed.
+ *
+ * It rendered a green/amber/red dot per step carrying a tier the in-editor AI
+ * refine pass had assigned. Two problems, and the second is the reason it went:
+ *
+ *  1. It was display-only. Nothing keyed off the tier — not the runtime, not
+ *     the editor. A red dot and a green dot behaved identically.
+ *  2. It was an OPINION with no expiry. The tier reflected one AI pass at one
+ *     moment; edit the step, or let the site change under it, and the dot kept
+ *     asserting the old verdict with no way to tell it was stale.
+ *
+ * The two indicators that survive both answer questions with consequences:
+ * requires_approval (replay will PAUSE here) and neverVerifiedLive (this step
+ * has more than one candidate selector and running it will pick one). Those are
+ * facts about what will happen, not a grade.
+ */
 
 export function RunScriptModal({
   script,
@@ -400,16 +399,115 @@ export function RunScriptModal({
   // One fixed-height panel below the steps list hosting Variables,
   // Ask AI, and (while a run/AI action is active) Activity. Auto-
   // focuses Activity when work starts; Activity tab is hidden at rest.
-  const [bottomTab, setBottomTab] = useState<'variables' | 'ai' | 'activity'>('variables');
+
+  // Collapsed group headers, by index. Purely a viewing preference — nothing
+  // about it is persisted or sent anywhere.
+  // Index a group is being drawn FROM, while the operator picks its last step.
+  //
+  // A two-click range picker rather than checkboxes: grouping is occasional,
+  // and a persistent selection column would tax every row of every script to
+  // serve it. Null when not grouping.
+  // Run every remaining step, or just the next one.
+  //
+  // Sat in the toolbar as a Manual/Auto MODE, one screen away from the button
+  // that obeyed it, and that button relabelled itself between "Run Step" and
+  // "Run" — so the thing you aimed at moved. Then it was two buttons, which
+  // read badly next to a third run-looking icon in the toolbar.
+  //
+  // One button, with the choice as a checkbox beside it: the decision and the
+  // action are in the same place, and the button never changes size.
+  const [runAuto, setRunAuto] = useState(false);
+
+  // ── Variables pane sizing ──────────────────────────────────────
+  // Starts at a third of the column and is dragged from there. Kept in px
+  // rather than a fraction because the drag is in px — converting back and
+  // forth on every pointer move is how a resize develops drift.
+  const [varsHeight, setVarsHeight] = useState<number>(288);
+  const [varsCollapsed, setVarsCollapsed] = useState(false);
+  const [varsResizing, setVarsResizing] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    // 48px is the top bar. A third of what is left is the default ask.
+    setVarsHeight(Math.round((window.innerHeight - 48) / 3));
+  }, [open]);
+
+  /**
+   * Drag the header to resize.
+   *
+   * setPointerCapture, not window listeners. Capture routes every subsequent
+   * move to this element no matter where the cursor travels — off the header,
+   * over the iframe, outside the window — which is exactly what a drag does.
+   * Window listeners looked equivalent and were not: moves went missing and
+   * the pane crept a few pixels instead of following the cursor.
+   */
+  const varsDragRef = useRef<{ startY: number; startH: number } | null>(null);
+
+  const startVarsResize = (e: React.PointerEvent<HTMLElement>) => {
+    e.preventDefault();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    varsDragRef.current = { startY: e.clientY, startH: varsHeight };
+    setVarsCollapsed(false);
+    setVarsResizing(true);
+  };
+
+  const onVarsResizeMove = (e: React.PointerEvent<HTMLElement>) => {
+    const d = varsDragRef.current;
+    if (!d) return;
+    // Dragging UP grows the pane, so the delta is inverted.
+    const next = d.startH + (d.startY - e.clientY);
+    const max = Math.max(120, window.innerHeight - 240);
+    setVarsHeight(Math.min(max, Math.max(80, next)));
+  };
+
+  const endVarsResize = (e: React.PointerEvent<HTMLElement>) => {
+    if (!varsDragRef.current) return;
+    varsDragRef.current = null;
+    setVarsResizing(false);
+    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    }
+  };
+
+
+  const [groupingFrom, setGroupingFrom] = useState<number | null>(null);
+
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
+  const toggleGroup = (i: number) => setCollapsedGroups((prev) => {
+    const next = new Set(prev);
+    if (next.has(i)) next.delete(i); else next.add(i);
+    return next;
+  });
+
+  // Indices the RUNTIME jumped because a group's guard did not match.
+  //
+  // The cursor alone cannot express this: after a group is skipped currentIndex
+  // sits past the whole span, so every owned row would otherwise render as
+  // "done" — reporting steps as executed that never ran.
+  const [skippedIdx, setSkippedIdx] = useState<Set<number>>(new Set());
+
+  /** Fold a step response's skippedGroup range into `skippedIdx`. */
+  const noteSkippedGroup = (res: { skippedGroup?: { fromIndex: number; count: number; reason?: string | null } | null }) => {
+    const g = res?.skippedGroup;
+    if (!g || !Number.isInteger(g.fromIndex) || !Number.isInteger(g.count) || g.count < 1) return;
+    // ZERO-BASED throughout: skippedIdx is keyed by the same `i` the step list
+    // maps over, and the row prints i + 1. Mixing the two conventions here
+    // would grey the wrong rows — off by exactly one, in the direction that
+    // looks plausible.
+    setSkippedIdx((prev) => {
+      const next = new Set(prev);
+      for (let k = g.fromIndex; k < g.fromIndex + g.count; k++) next.add(k);
+      return next;
+    });
+    pushActivity('step', `↷ Skipped ${g.count} step${g.count === 1 ? '' : 's'}${g.reason ? ` — ${g.reason}` : ''}`);
+  };
+
 
   // ── Ask AI panel ──────────────────────────────────────────────
   // Always rendered (no mode switch). One shared instruction for the
   // unified "Ask AI" panel — read by handleImprove (the live Test &
   // Improve walk). Step rows carry an always-on selection checkbox for a
   // targeted improve.
-  const [aiPrompt, setAiPrompt] = useState('');
-  const [refining, setRefining] = useState(false);
-  const [refineSummary, setRefineSummary] = useState<string | null>(null);
   // ── Guided recording ──────────────────────────────────────────
   // A new recording opens with instructions, then cleans itself up on stop.
   // The full editor below is still there for power users; it just isn't the
@@ -448,15 +546,12 @@ export function RunScriptModal({
    */
   const preRefineRef = useRef<{ steps: RecordedStep[]; parameters: Record<string, string> } | null>(null);
   const [canUndoRefine, setCanUndoRefine] = useState(false);
-  const [refineOverall, setRefineOverall] = useState<RefineReport['overall'] | null>(null);
   // True for the lifetime of a Test & Improve walk (including while paused at an
   // approval gate), so the approve path knows to RESUME the walk rather than a
   // plain run, and editing stays locked until it finishes/stops.
-  const [aiWalking, setAiWalking] = useState(false);
   // Targets frozen at the start of a walk (so resuming after a gate reuses the
   // same selection) + count of improve_reports already logged to Activity (the
   // worker returns the full accumulated list each call; only log the new tail).
-  const improveTargetsRef = useRef<number[]>([]);
   const improveTargetedOnlyRef = useRef(false);
   const loggedReportsRef = useRef(0);
   // Indices selected for a targeted refine. Empty → whole-script refine.
@@ -472,8 +567,12 @@ export function RunScriptModal({
   // long session doesn't grow unbounded.
   type ActivityKind = 'step' | 'done' | 'error' | 'gate' | 'ai';
   type ActivityEntry = { id: string; ts: number; kind: ActivityKind; text: string };
+  // Kept after the Activity TAB was removed: the post-processing overlay
+  // narrates the finalize pass from these entries, and that is the one place
+  // the operator genuinely needs them — the step list is being rewritten
+  // underneath them while it runs.
   const [activity, setActivity] = useState<ActivityEntry[]>([]);
-  const activityScrollRef = useRef<HTMLDivElement>(null);
+
   const pushActivity = useCallback((kind: ActivityKind, text: string) => {
     setActivity((prev) => {
       const next = [
@@ -573,15 +672,10 @@ export function RunScriptModal({
     setCheckingOrphan(false);
     setResumingOrphan(false);
     setEditingStepIndex(null);
-    setAiPrompt('');
-    setRefining(false);
-    setRefineSummary(null);
-    setRefineOverall(null);
     setSelectedStepIndices(new Set());
     setApprovedGates(new Set());
     setPendingGateIndex(null);
     setActivity([]);
-    setBottomTab('variables');
     lastLoggedIndexRef.current = 0;
     lastExtractedRef.current = {};
     runningLoggedRef.current = null;
@@ -1122,7 +1216,6 @@ export function RunScriptModal({
     try {
       setStepRunState((st) => st ? { ...st, steps: snap.steps, totalSteps: snap.steps.length } : st);
       setParams(snap.parameters);
-      setRefineSummary(null);
       await persistSteps(snap.steps, snap.parameters);
       preRefineRef.current = null;
       setCanUndoRefine(false);
@@ -1145,7 +1238,6 @@ export function RunScriptModal({
     // Snapshot BEFORE anything changes so undo is exact.
     preRefineRef.current = { steps: rawSteps, parameters: { ...params } };
     setPostProcessing('Cleaning up the recording…');
-    setBottomTab('activity');
     pushActivity('ai', `Recorded ${rawSteps.length} step${rawSteps.length === 1 ? '' : 's'}.`);
     if (confirmStep) {
       pushActivity('ai', `Success check: ${confirmStep.waitFor?.description || confirmStep.selector}`);
@@ -1193,7 +1285,6 @@ export function RunScriptModal({
 
       setStepRunState((s) => s ? { ...s, steps: cleaned, totalSteps: cleaned.length } : s);
       setParams((p) => ({ ...(result.parameters ?? {}), ...p }));
-      setRefineSummary(result.report?.summary ?? null);
       // Every step is new to the operator after a rewrite; the "new step"
       // highlight would just paint the whole list.
       setNewStepIndices(new Set());
@@ -1402,6 +1493,10 @@ export function RunScriptModal({
     if (!script || !orgId) return;
     setStarting(true);
     setError(null);
+    // Skip marks describe ONE run. Carrying them into the next one would grey
+    // out steps that this run has not even reached yet, and the guard may well
+    // decide the other way this time — that is the entire point of a guard.
+    setSkippedIdx(new Set());
     try {
       const res = await startStepRun(orgId, script.id, params, sessionId, browserClientId);
 
@@ -1456,6 +1551,11 @@ export function RunScriptModal({
 
   const handleExecuteStep = async (gates?: Set<number>) => {
     if (!runId || !orgId || !stepRunState) return;
+    // Record WHICH flow is running, so an approval pause resumes the right one.
+    // This used to be a mode the operator set in the toolbar, which meant
+    // toggling it mid-pause resumed the wrong way; derived from the button
+    // actually pressed, it cannot disagree with reality.
+    setRunMode('step');
     // Fresh top-level click clears prior approvals; re-invoke after an
     // Approve passes the updated set forward (gates !== undefined).
     const activeGates = gates ?? new Set<number>();
@@ -1504,8 +1604,11 @@ export function RunScriptModal({
       setStepRunState((s) => {
         // Merge the executed step back so auto-locked selectors are reflected
         const steps = [...(s?.steps ?? [])];
-        if (res.executedStep && res.currentIndex > 0) {
-          steps[res.currentIndex - 1] = res.executedStep;
+        // Splice at the index the worker SAYS it ran at. currentIndex - 1 holds
+        // only for steps that advance by one; a skipped group jumps 1 + span.
+        const ranAt = typeof res.executedIndex === 'number' ? res.executedIndex : res.currentIndex - 1;
+        if (res.executedStep && ranAt >= 0 && ranAt < steps.length) {
+          steps[ranAt] = res.executedStep;
         }
         return {
           currentIndex: res.currentIndex,
@@ -1525,6 +1628,10 @@ export function RunScriptModal({
       if (res.extracted && Object.keys(res.extracted).length > 0) {
         setParams((p) => ({ ...p, ...res.extracted }));
       }
+      // A group whose guard didn't match reports the range it jumped. Record
+      // it so those rows render as SKIPPED rather than inheriting "done" from
+      // a cursor that moved past them without running anything.
+      noteSkippedGroup(res);
       if (res.done) toast.success('All steps completed!');
     } catch (err: any) {
       // User clicked Stop mid-request — flip the UI back to waiting
@@ -1564,6 +1671,8 @@ export function RunScriptModal({
    */
   const handleRunAgentMode = async (gates?: Set<number>) => {
     if (!runId || !orgId || !stepRunState || stepRunState.done) return;
+    // See handleExecuteStep — records the flow for gate resume.
+    setRunMode('agent');
     // Fresh top-level click clears prior approvals; re-invoke after an
     // Approve passes the updated set forward (gates !== undefined).
     const activeGates = gates ?? new Set<number>();
@@ -1576,7 +1685,6 @@ export function RunScriptModal({
     cancelAutoRunRef.current = false;
     const controller = new AbortController();
     autoRunAbortRef.current = controller;
-    setBottomTab('activity');
     setStepRunState((s) => s ? { ...s, status: 'running' } : s);
     setError(null);
 
@@ -1701,222 +1809,6 @@ export function RunScriptModal({
   //
   // `opts.gates` is passed ONLY when resuming after an approval gate — that
   // call keeps the same targets, keeps the cursor, and adds the approved index.
-  const handleImprove = async (opts?: { gates?: Set<number> }) => {
-    if (!orgId || !runId) return;
-    if (refining && !opts?.gates) return; // re-entrancy guard (gate resume is allowed)
-    const steps = stepRunState?.steps ?? [];
-    if (steps.length === 0) {
-      toast.error('No steps to improve yet');
-      return;
-    }
-
-    const resuming = !!opts?.gates;
-    const activeGates = opts?.gates ?? new Set<number>();
-
-    // Fresh run: if the instruction names specific steps ("just step 7"), run
-    // and improve ONLY those (targetedOnly) — jumping straight to them, leaving
-    // the rest of the script un-run. Otherwise walk the whole script.
-    let targetIndices: number[];
-    let targetedOnly: boolean;
-    if (resuming) {
-      targetIndices = improveTargetsRef.current;
-      targetedOnly = improveTargetedOnlyRef.current;
-    } else {
-      const parsed = parseStepTargets(aiPrompt, steps.length);
-      if (parsed.mentioned && parsed.indices.length === 0) {
-        toast.error(`No matching step — this script has ${steps.length} step${steps.length === 1 ? '' : 's'}.`);
-        return;
-      }
-      targetedOnly = parsed.indices.length > 0;
-      targetIndices = parsed.indices;
-    }
-
-    const firstTarget = targetIndices.length ? targetIndices[0] : 0;
-
-    if (!resuming) {
-      improveTargetsRef.current = targetIndices;
-      improveTargetedOnlyRef.current = targetedOnly;
-      loggedReportsRef.current = 0;
-      setApprovedGates(new Set());
-      setPendingGateIndex(null);
-      startReplayActivity(firstTarget, {});
-      // Echo the operator's typed instruction so the Activity log records what
-      // was asked for this run.
-      if (aiPrompt.trim()) pushActivity('ai', `💬 You asked: “${aiPrompt.trim()}”`);
-      pushActivity(
-        'ai',
-        targetedOnly
-          ? `Testing & improving step${targetIndices.length === 1 ? '' : 's'} ${targetIndices.map((i) => i + 1).join(', ')} only — running just ${targetIndices.length === 1 ? 'it' : 'them'} on the current page…`
-          : 'Testing & improving the whole script — walking through live…',
-      );
-    }
-
-    setRefining(true);
-    setAiWalking(true);
-    setBottomTab('activity');
-    setError(null);
-    cancelAutoRunRef.current = false;
-    const controller = new AbortController();
-    autoRunAbortRef.current = controller;
-    setStepRunState((s) => s ? { ...s, status: 'running', ...(resuming ? {} : { currentIndex: firstTarget }) } : s);
-
-    // Poll /state every 500ms so the step list + screenshot advance live while
-    // the long-running walk request is in flight (same as agent-mode run).
-    const pollId = window.setInterval(async () => {
-      try {
-        const snap = await getStepRun(orgId, runId);
-        setStepRunState((s) => s ? {
-          ...s,
-          currentIndex: snap.currentIndex,
-          totalSteps:   snap.totalSteps,
-          step:         snap.step,
-          screenshot:   snap.lastScreenshot ?? s.screenshot,
-          extracted:    snap.extracted ?? s.extracted,
-          pageUrl:      snap.pageUrl ?? s.pageUrl ?? null,
-        } : s);
-      } catch { /* best-effort — final return is authoritative */ }
-    }, 500);
-
-    try {
-      const res = await improveWalk(
-        orgId,
-        runId,
-        {
-          params,
-          approvedGates: resuming ? [...activeGates] : [],
-          targetIndices,
-          targetedOnly,
-          instruction: aiPrompt.trim() || undefined,
-          reset: !resuming,
-          scriptId: script?.id ?? tempScriptId,
-          reserved: buildReservedHints(),
-        },
-        controller.signal,
-      );
-
-      // Pre-flight failure: a referenced variable had no value. Nothing ran.
-      if (res.ok === false) {
-        window.clearInterval(pollId);
-        setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
-        const msg = res.error || 'Missing variable values';
-        setError(msg);
-        pushActivity('error', `✗ ${msg}`);
-        toast.error(msg);
-        setAiWalking(false);
-        autoRunAbortRef.current = null;
-        return;
-      }
-
-      // Adopt the (possibly rewritten) steps so the editor reflects live fixes.
-      if (Array.isArray(res.steps)) {
-        const improved = res.steps as RecordedStep[];
-        setStepRunState((s) => s ? { ...s, steps: improved } : s);
-        setHasChanges(true);
-      }
-      // Log only the newly-appended improve reports (worker returns the full
-      // accumulated list each call, including across gate resumes).
-      const reports = res.improve_reports ?? [];
-      for (let k = loggedReportsRef.current; k < reports.length; k++) {
-        const r = reports[k];
-        pushActivity('ai', `↻ Step ${r.index + 1}${r.name ? ` “${r.name}”` : ''}: ${r.change}${r.confidence ? ` (${r.confidence})` : ''}`);
-      }
-      loggedReportsRef.current = reports.length;
-
-      // Paused at an approval gate — surface inline Approve / Deny. The walk
-      // stays "active" (aiWalking) so Approve resumes it from here.
-      if (res.awaiting_approval) {
-        window.clearInterval(pollId);
-        setStepRunState((s) => s ? {
-          ...s,
-          currentIndex: res.currentIndex,
-          step: res.step ?? s.step,
-          status: 'waiting',
-          pageUrl: res.pageUrl ?? s.pageUrl ?? null,
-        } : s);
-        setPendingGateIndex(res.currentIndex);
-        autoRunAbortRef.current = null;
-        return;
-      }
-
-      // Terminal: complete, interrupted, or failed mid-step.
-      setStepRunState((s) => s ? {
-        currentIndex: res.currentIndex,
-        totalSteps:   res.totalSteps,
-        step:         res.step,
-        steps:        (res.steps as RecordedStep[]) ?? s.steps,
-        screenshot:   res.screenshot,
-        extracted:    res.extracted,
-        done:         res.done,
-        status:       res.done ? 'waiting' : (res.interrupted ? 'waiting' : 'error'),
-        pageUrl:      res.pageUrl ?? s.pageUrl ?? null,
-      } : s);
-      if (res.extracted && Object.keys(res.extracted).length > 0) {
-        setParams((p) => ({ ...p, ...res.extracted }));
-      }
-      if (res.done) {
-        setSelectedStepIndices(new Set());
-        pushActivity('done', targetedOnly
-          ? `✓ Improved step${targetIndices.length === 1 ? '' : 's'} ${targetIndices.map((i) => i + 1).join(', ')}.`
-          : '✓ Test & Improve complete — steps tested and updated.');
-        // Tidy pass (metadata only, page-independent): name steps, rename
-        // variables, prune unused, and CREATE variables (parameterize literal
-        // values) — honoring the instruction. Never touches the live-hardened
-        // selectors. Scoped to the targeted steps on a targeted run, so a
-        // focused run only names/parameterizes those (no whole-script churn).
-        try {
-          pushActivity('ai', targetedOnly ? 'Tidying the targeted step(s)…' : 'Tidying step names and variables…');
-          const tidy = await tidyScript(orgId, {
-            steps: (res.steps as RecordedStep[]) ?? steps,
-            parameters: params,
-            instruction: aiPrompt.trim() || undefined,
-            ...(targetedOnly ? { scopeIndices: targetIndices } : {}),
-          });
-          setStepRunState((s) => s ? {
-            ...s,
-            steps: tidy.steps,
-            totalSteps: tidy.steps.length,
-            step: tidy.steps[s.currentIndex] ?? s.step,
-          } : s);
-          setParams(tidy.parameters ?? {});
-          if (runId) await syncStepRunSteps(orgId, runId, tidy.steps).catch(() => {});
-          const r = tidy.report;
-          if (r?.parameterized?.length) pushActivity('ai', `Created variable${r.parameterized.length === 1 ? '' : 's'}: ${r.parameterized.map((p) => `{{${p.var_name}}} (step ${p.index + 1})`).join(', ')}`);
-          if (r?.renamed?.length) pushActivity('ai', `Renamed variable${r.renamed.length === 1 ? '' : 's'}: ${r.renamed.map((x) => `${x.from} → ${x.to}`).join(', ')}`);
-          if (r?.pruned?.length) pushActivity('ai', `Removed unused variable${r.pruned.length === 1 ? '' : 's'}: ${r.pruned.join(', ')}`);
-          pushActivity('done', `✓ Tidied — ${r?.named ?? 0} step name${r?.named === 1 ? '' : 's'} set${r?.parameterized?.length ? `, ${r.parameterized.length} variable${r.parameterized.length === 1 ? '' : 's'} created` : ''}.`);
-        } catch (e: any) {
-          pushActivity('error', `Tidy skipped: ${e?.response?.data?.error || e?.message || 'failed'}`);
-        }
-        setAiWalking(false);
-        toast.success(targetedOnly ? 'Steps improved' : 'Test & Improve complete');
-      } else if (res.interrupted) {
-        setAiWalking(false);
-        pushActivity('error', '■ Stopped.');
-        toast.info('Stopped');
-      } else {
-        setAiWalking(false);
-        pushActivity('error', `✗ Stopped at step ${res.currentIndex + 1} — fix it and run again.`);
-      }
-    } catch (err: any) {
-      if (err?.name === 'AbortError' || err?.name === 'CanceledError' || cancelAutoRunRef.current) {
-        setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
-        setAiWalking(false);
-        pushActivity('error', '■ Stopped.');
-        toast.info('Stopped');
-        return;
-      }
-      const screenshot = err?.response?.data?.screenshot ?? null;
-      const msg = err?.response?.data?.error || err?.message || 'Improve failed';
-      setStepRunState((s) => s ? { ...s, status: 'error', screenshot: screenshot ?? s.screenshot } : s);
-      setError(msg);
-      pushActivity('error', `✗ ${msg}`);
-      setAiWalking(false);
-    } finally {
-      window.clearInterval(pollId);
-      autoRunAbortRef.current = null;
-      setRefining(false);
-    }
-  };
 
   // ── Approval gate: Approve / Deny ─────────────────────────────
   // Approve → add the gated index to approvedGates and re-invoke the same
@@ -1928,16 +1820,15 @@ export function RunScriptModal({
     next.add(pendingGateIndex);
     setApprovedGates(next);
     setPendingGateIndex(null);
-    // Resume whichever flow paused us: a live Improve walk, an agent run, or a
-    // single-step run.
-    if (aiWalking) await handleImprove({ gates: next });
-    else if (runMode === 'agent') await handleRunAgentMode(next);
+    // Resume whichever flow paused us: an agent run or a single-step run.
+    // The AI "improve walk" used to be a third possibility here; replay is now
+    // a straight replay, so there is nothing to resume into but the runners.
+    if (runMode === 'agent') await handleRunAgentMode(next);
     else await handleExecuteStep(next);
   };
 
   const handleDenyGate = () => {
     setPendingGateIndex(null);
-    setAiWalking(false);
     handleStopAutoRun();
     setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
     toast.info('Replay stopped at approval gate');
@@ -1948,6 +1839,10 @@ export function RunScriptModal({
     setJumpingTo(targetIndex);
     setError(null);
     setPendingGateIndex(null);
+    // Jumping replays from the target, so every skip decision at or after it is
+    // void — the page is in a different state now and a guard that missed may
+    // match. Marks BEFORE the target still describe what actually happened.
+    setSkippedIdx((prev) => new Set([...prev].filter((k) => k < targetIndex)));
     try {
       const res = await jumpStepRunToIndex(orgId, runId, targetIndex);
       setStepRunState((s) => s ? {
@@ -2699,6 +2594,75 @@ export function RunScriptModal({
    * pair in the list). Pushes the change through syncStepRunSteps so
    * the worker sees the new list immediately.
    */
+  /**
+   * Wrap steps [from..to] in a guarded group.
+   *
+   * The guard defaults to the first member's committed selector, which is the
+   * right default rather than a placeholder: "run this branch if the thing it
+   * starts with is on the page" is exactly what the branch means. It stays
+   * editable afterwards.
+   */
+  const completeGrouping = async (endIndex: number) => {
+    const from = groupingFrom;
+    setGroupingFrom(null);
+    if (from === null || !runId || !orgId) return;
+    const currentSteps = stepRunState?.steps ?? [];
+    const lo = Math.min(from, endIndex);
+    const hi = Math.max(from, endIndex);
+    const members = currentSteps.slice(lo, hi + 1);
+    if (members.length === 0) return;
+
+    // Nesting is not supported: the runtime treats span as a flat run of steps,
+    // so a group inside a group would have two owners disagreeing about who
+    // skips what. Refuse rather than produce something the engine cannot mean.
+    if (members.some((m) => m.action === 'group') || groupModel.ownerOf.has(lo) || groupModel.ownerOf.has(hi)) {
+      toast.error('That range already contains a group — groups cannot nest');
+      return;
+    }
+
+    const guardSel = members.map((m) => m.waitFor?.selector || m.selector).find((x) => x && x !== 'body');
+    if (!guardSel) {
+      toast.error('None of those steps targets an element, so there is nothing to test for');
+      return;
+    }
+
+    const label = `Optional: ${stepLabel(members[0]!)}`;
+    const group: RecordedStep = {
+      action: 'group',
+      name: label,
+      label,
+      guard: { selector: guardSel, timeout: 8000, expect: 'present' },
+      span: members.length,
+    } as RecordedStep;
+
+    const newSteps = [...currentSteps.slice(0, lo), group, ...currentSteps.slice(lo)];
+    setStepRunState((st) => st ? { ...st, steps: newSteps, totalSteps: newSteps.length } : st);
+    setHasChanges(true);
+    try {
+      await syncStepRunSteps(orgId, runId, newSteps);
+      toast.success(`Grouped ${members.length} step${members.length === 1 ? '' : 's'}`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to group steps');
+    }
+  };
+
+  /** Remove a group marker, leaving its members in place and unconditional. */
+  const handleUngroup = async (groupIndex: number) => {
+    if (!runId || !orgId) return;
+    const currentSteps = stepRunState?.steps ?? [];
+    if (currentSteps[groupIndex]?.action !== 'group') return;
+    const newSteps = currentSteps.filter((_, k) => k !== groupIndex);
+    setStepRunState((st) => st ? { ...st, steps: newSteps, totalSteps: newSteps.length } : st);
+    setCollapsedGroups(new Set());
+    setHasChanges(true);
+    try {
+      await syncStepRunSteps(orgId, runId, newSteps);
+      toast.success('Ungrouped — those steps now always run');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to ungroup');
+    }
+  };
+
   const handleDuplicateStep = async (stepIndex: number) => {
     if (!runId || !orgId || isRecording || isExecuting) return;
     const currentSteps = stepRunState?.steps ?? [];
@@ -3032,13 +2996,11 @@ export function RunScriptModal({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingGateIndex]);
 
-  // ── Auto-scroll the Activity feed to the newest entry ──────────
+  // ── Pin the post-processing narration to its newest line ───────
+  // Only the overlay now — the Activity tab that shared this is gone. Without
+  // it, new lines land below the fold and the pass reads as though it has
+  // stalled.
   useEffect(() => {
-    const el = activityScrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-    // The post-processing overlay renders the same entries over the top of
-    // the editor, so it needs its own pin-to-bottom or new lines land below
-    // the fold and it reads as though nothing is happening.
     const overlay = postProcessScrollRef.current;
     if (overlay) overlay.scrollTop = overlay.scrollHeight;
   }, [activity]);
@@ -3056,17 +3018,18 @@ export function RunScriptModal({
   // Post-processing rewrites the step list wholesale, so it counts as busy
   // for every AI/replay control — the overlay hides them, but a stray
   // keyboard shortcut shouldn't fire a second pass underneath it either.
-  const aiBusy = refining || postProcessing != null;
+  // Post-processing only. This used to also mean "an AI refine is in flight";
+  // the deterministic finalize pass after a recording is the one thing left
+  // that rewrites the step list underneath the operator, and it still has to
+  // lock the UI while it does.
+  const aiBusy = postProcessing != null;
   const replayRunning = stepRunState?.status === 'running';
   // The Activity tab is present while work is live AND once there's a log to
   // review — so a quick single step (which we no longer auto-focus) still
   // leaves the tab reachable instead of flashing and vanishing. It's cleared
   // on session reset, so a fresh session shows no Activity tab.
-  const showActivityTab = aiBusy || replayRunning || activity.length > 0;
   // Fall back to Variables when parked on a now-hidden Activity tab so a
   // hidden tab never renders blank content.
-  const effectiveBottomTab =
-    bottomTab === 'activity' && !showActivityTab ? 'variables' : bottomTab;
   const isRecordMode = mode === 'record';
   // No separate params form — variables are always edited inline in the Variables Panel
   const hasSteps = (stepRunState?.totalSteps ?? 0) > 0 || (stepRunState?.steps?.length ?? 0) > 0;
@@ -3086,16 +3049,56 @@ export function RunScriptModal({
   // When recording with no base steps yet (first recording session), show live steps directly
   const showLiveDirectly = isRecording && baseSteps.length === 0;
   const stepsToShow = showLiveDirectly ? liveRecordedSteps : baseSteps;
+
+  // ── Guarded groups ──────────────────────────────────────────────
+  //
+  // A group is a STEP (action: 'group') owning the `span` steps after it, not a
+  // nested structure. The list stays flat — which is what keeps every
+  // index-based path in this component honest — and membership is derived here
+  // rather than stored.
+  //
+  // A plain computation, NOT useMemo: it sits below this component's
+  // `if (!open) return null`, and a hook below an early return changes the hook
+  // ORDER between renders, which React rejects outright. It is one pass over
+  // the step list, so memoising it bought nothing worth that.
+  const groupModel = (() => {
+    const ownerOf = new Map<number, number>();
+    const spanOf  = new Map<number, number>();
+    stepsToShow.forEach((st, i) => {
+      if ((st as RecordedStep).action !== 'group') return;
+      const span = Number.isInteger((st as { span?: number }).span) ? (st as { span?: number }).span as number : 0;
+      if (span < 1) return;
+      // Clamp: a span can outlive the steps it described if they were deleted
+      // from under it. The engine clamps too — better a short group than a
+      // crash, and the schema validator rejects it at author time.
+      const last = Math.min(i + span, stepsToShow.length - 1);
+      spanOf.set(i, last - i);
+      for (let k = i + 1; k <= last; k++) ownerOf.set(k, i);
+    });
+    return { ownerOf, spanOf };
+  })();
+
+
+
   const stepCount = showLiveDirectly
     ? liveRecordedSteps.length
     : (stepRunState?.totalSteps ?? script?.steps?.length ?? 0);
 
 
-  // A step needs selector review if it has multiple candidates (untested) or
-  // has a selector but no candidates (picker-added wait_for, untested).
-  // A step needs selector review if it targets an element and hasn't been
-  // tested yet. The _tested flag is set by the worker after successful execution.
-  const needsSelectorReview = (s: RecordedStep) => {
+  // Has this step ever run successfully against a live page?
+  //
+  // _tested is set by the worker after a successful action, so this clears the
+  // moment a step works — including for a hand- or MCP-authored step, which is
+  // the case that matters most: it was typed, never executed, and its selector
+  // has been checked for SHAPE only.
+  //
+  // The old copy called this "multiple selector candidates — run each step to
+  // auto-select the best selector", which described the recorder era and was
+  // simply untrue of an authored step with exactly one selector and nothing to
+  // choose between. The signal was right and the label was wrong, which is the
+  // worst combination: it reads as noise, so it gets ignored, and the one thing
+  // it reliably catches — a step nobody has ever run — goes unnoticed.
+  const neverVerifiedLive = (s: RecordedStep) => {
     if (s.action === 'navigate' || s.action === 'press_key') return false;
     const sel = s.selector ?? s.waitFor?.selector;
     if (!sel || sel === 'body') return false;
@@ -3264,6 +3267,71 @@ export function RunScriptModal({
             runs. */}
         <div className="flex items-center gap-1.5 shrink-0">
 
+          {/* Run + Auto. In the TOOLBAR, next to the mode icons, because that
+              is where the run-looking ▷ already was — and where the operator
+              kept reaching. Hidden outside Test: there is nothing to run while
+              recording or extracting, and a live Stop belongs to the mode
+              button that started it. */}
+          {runId && !isRecording && !isCapturingWaitFor && !isCapturingExtract && (
+            isExecuting ? (
+              <Button
+                size="sm"
+                className="h-7 w-20 shrink-0 justify-center bg-red-600 text-white hover:bg-red-700"
+                onClick={handleStopAutoRun}
+              >
+                <X className="mr-1.5 h-3 w-3" />
+                Stop
+              </Button>
+            ) : (
+              <div className="flex items-center gap-2 shrink-0">
+                {/* LEFT of the button, and this is the reason.
+                    
+                    It was on the right, on the argument that a checkbox
+                    appearing there could not shift the button. True, but it
+                    missed the case that actually moves: while a run is in
+                    flight the pair is REPLACED by Stop, and with Auto on the
+                    right the toolbar re-anchors — so the control jumps sideways
+                    at the exact moment you might be reaching for Stop.
+                    
+                    On the left, Run and Stop share the same right edge and only
+                    the label beside them comes and goes. Stop also carries
+                    Run's w-20 so the swap changes nothing at all. */}
+                <label
+                  className={cn(
+                    'flex items-center gap-1.5 text-[11px] select-none',
+                    hasSteps ? 'cursor-pointer text-muted-foreground hover:text-foreground' : 'text-muted-foreground/50',
+                  )}
+                  title="Run every remaining step instead of stopping after the next one"
+                >
+                  <input
+                    type="checkbox"
+                    className="h-3 w-3 accent-current"
+                    checked={runAuto}
+                    disabled={!hasSteps}
+                    onChange={(e) => setRunAuto(e.target.checked)}
+                  />
+                  Auto
+                </label>
+                <Button
+                  size="sm"
+                  className="h-7 w-20 shrink-0 justify-center bg-green-600 text-white hover:bg-green-700"
+                  onClick={() => runAuto ? handleRunAgentMode() : handleExecuteStep()}
+                  disabled={isRecording || isCapturingWaitFor || isCapturingExtract || !hasSteps || !!stepRunState?.done}
+                  title={
+                    stepRunState?.done ? 'Run complete — click any step to re-run from there.'
+                    : runAuto ? 'Run every remaining step, with agent-runtime timing'
+                    : 'Run the next step only'
+                  }
+                >
+                  {runAuto
+                    ? <Zap className="mr-1.5 h-3.5 w-3.5" />
+                    : <Play className="mr-1.5 h-3 w-3 fill-current" />}
+                  Run
+                </Button>
+              </div>
+            )
+          )}
+
           {runId && (
             <ModeActionPicker
               toolMode={toolMode}
@@ -3274,8 +3342,6 @@ export function RunScriptModal({
               isCapturingExtract={isCapturingExtract}
               isExecuting={isExecuting}
               disabled={starting}
-              onSelectStep={() => setRunMode('step')}
-              onSelectAgent={() => setRunMode('agent')}
               onStartRecording={handleToggleRecording}
               onStopRecording={isRecordMode ? handleStopRecordSession : handleToggleRecording}
               onSelectRecordWait={handleAddWaitStep}
@@ -3433,45 +3499,37 @@ export function RunScriptModal({
                     <p className="text-xs uppercase tracking-wide font-semibold text-muted-foreground">
                       {`Steps (${stepCount})`}
                     </p>
+                    {/* Revert the post-recording cleanup.
+                        
+                        This is NOT an AI affordance — the finalize pass is a
+                        deterministic denoise — but its only button used to live
+                        in the "Ask AI" panel, so removing that panel would have
+                        taken a real capability with it. It belongs here anyway:
+                        it undoes a rewrite of the step LIST, which is what this
+                        header counts. */}
+                    {canUndoRefine && !aiBusy && (
+                      <button
+                        type="button"
+                        onClick={handleUndoRefine}
+                        className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground underline decoration-dotted underline-offset-2"
+                        title="Restore the raw recorded steps, before the cleanup pass rewrote them"
+                      >
+                        <Undo2 className="h-3 w-3" />
+                        Undo cleanup
+                      </button>
+                    )}
                     {(() => {
-                      const unresolvedCount = stepsToShow.filter(needsSelectorReview).length;
+                      const unresolvedCount = stepsToShow.filter(neverVerifiedLive).length;
                       if (unresolvedCount === 0) return null;
                       return (
-                        <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400" title={`${unresolvedCount} step${unresolvedCount !== 1 ? 's' : ''} with multiple selector candidates. Run each step to auto-select the best selector.`}>
+                        <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400" title={`${unresolvedCount} step${unresolvedCount !== 1 ? 's' : ''} that ${unresolvedCount === 1 ? 'has' : 'have'} never run against a live page. Their selectors are checked for shape only until then.`}>
                           <AlertTriangle className="h-3 w-3" />
-                          {unresolvedCount} unresolved
+                          {unresolvedCount} unverified
                         </span>
                       );
                     })()}
                   </div>
 
-                  {/* Run controls live HERE (not the top toolbar) so the
-                      toolbar's Mode/Action dropdowns never shift when the
-                      run button appears or swaps to Stop. Test mode only —
-                      Record / Extract fire + cancel from the Action picker. */}
-                  {runId && toolMode === 'test' && (
-                    isExecuting ? (
-                      // Bright red Stop — matches the active-mode stop button in
-                      // the toolbar (green start ↔ red stop convention).
-                      <Button size="sm" className="h-7 w-28 shrink-0 justify-center bg-red-600 text-white hover:bg-red-700" onClick={handleStopAutoRun}>
-                        <X className="mr-1.5 h-3 w-3" />
-                        Stop
-                      </Button>
-                    ) : (
-                      <Button
-                        size="sm"
-                        className="h-7 w-28 shrink-0 justify-center bg-green-600 text-white hover:bg-green-700"
-                        onClick={() => runMode === 'agent' ? handleRunAgentMode() : handleExecuteStep()}
-                        disabled={isRecording || isCapturingWaitFor || isCapturingExtract || !hasSteps || !!stepRunState?.done}
-                        title={stepRunState?.done ? 'Run complete — click any step to re-run from there.' : undefined}
-                      >
-                        {runMode === 'agent'
-                          ? <Zap className="mr-1.5 h-3.5 w-3.5" />
-                          : <Play className="mr-1.5 h-3 w-3 fill-current" />}
-                        {runMode === 'agent' ? 'Run' : 'Run Step'}
-                      </Button>
-                    )
-                  )}
                 </div>
               </div>
 
@@ -3515,6 +3573,26 @@ export function RunScriptModal({
 
 
                 {/* Unified step list — same display logic for both record and test modes */}
+                {/* Range picker prompt. Present only while arming a group, so
+                    the list carries no permanent selection chrome for a thing
+                    you do occasionally. */}
+                {groupingFrom !== null && (
+                  <div className="px-3 py-2 flex items-center gap-2 bg-brand/10 border-y border-brand/30">
+                    <GitBranch className="h-3.5 w-3.5 shrink-0 text-brand" />
+                    <p className="text-[11px] flex-1 min-w-0">
+                      Click the <span className="font-medium">last step</span> of the group.
+                      It will run only when the branch is on the page.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-[11px]"
+                      onClick={(e) => { e.stopPropagation(); setGroupingFrom(null); }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
                 {stepsToShow.map((s, i) => {
                   // Current/completed highlighting only applies when NOT actively recording
                   const isCurrent   = !isRecording && stepRunState ? (i === stepRunState.currentIndex && !stepRunState.done) : false;
@@ -3528,7 +3606,11 @@ export function RunScriptModal({
                   //   awaiting → i === pendingGateIndex (or current+awaiting)
                   //   failed → i === currentIndex && status==='error'
                   //   pending → otherwise
-                  const rowStatus: 'done' | 'running' | 'awaiting' | 'failed' | 'pending' =
+                  const rowStatus: 'done' | 'running' | 'awaiting' | 'failed' | 'pending' | 'skipped' =
+                    // Checked FIRST. A skipped step sits behind the cursor, so
+                    // every test below would call it 'done' — claiming a step
+                    // ran when the whole point is that it did not.
+                    skippedIdx.has(i) ? 'skipped' :
                     isRecording || !stepRunState ? 'pending' :
                     pendingGateIndex === i ? 'awaiting' :
                     i < stepRunState.currentIndex ? 'done' :
@@ -3541,6 +3623,15 @@ export function RunScriptModal({
                   // Show recording insertion indicator AFTER the current step
                   const showLiveInsert = isRecording && !showLiveDirectly && stepRunState &&
                     i === stepRunState.currentIndex;
+                  // ── Group membership ──────────────────────────────
+                  const isGroupHeader = (s as RecordedStep).action === 'group';
+                  const ownerIdx      = groupModel.ownerOf.get(i);
+                  const isOwned       = ownerIdx !== undefined;
+                  // A collapsed group hides its members entirely. The header
+                  // still says how many, so nothing disappears silently.
+                  if (isOwned && collapsedGroups.has(ownerIdx as number)) return null;
+                  const wasSkipped = skippedIdx.has(i);
+
                   const isJumping   = jumpingTo === i;
                   const isHovered   = hoveredStep === i && !isExecuting && !isRecording;
                   // Steps impacted by the variable being hovered/edited in the
@@ -3561,6 +3652,15 @@ export function RunScriptModal({
                           rowStatus === 'running' && 'bg-brand/5 border-l-2 border-brand',
                           rowStatus === 'failed' && 'bg-danger/5 border-l-2 border-danger',
                           rowStatus === 'awaiting' && 'border-l-2 border-amber-500',
+                          // A group's members sit under it, with the guard's
+                          // decision drawn as a rail down the side of the block.
+                          isOwned && 'pl-6 border-l border-border/60 ml-1.5',
+                          // Skipped: legible but plainly inert. Struck through
+                          // rather than hidden — "this did not run" is
+                          // information, and hiding it is how a 40-field form
+                          // reports 40 steps having run 9.
+                          rowStatus === 'skipped' && 'opacity-45 line-through',
+                          isGroupHeader && 'font-medium text-foreground/80',
                           // Drop indicator, drawn on the side the step will
                           // actually land. handleDropStep removes the dragged
                           // step first, so for a DOWNWARD drag onto row i the
@@ -3583,6 +3683,10 @@ export function RunScriptModal({
                         onMouseLeave={() => setHoveredStep(null)}
                         onClick={() => {
                           if (inlineRenameIndex === i) return; // mid-rename, ignore
+                          // Picking the other end of a group takes precedence
+                          // over jumping the runner — while the picker is armed
+                          // a click means "end here", not "run from here".
+                          if (groupingFrom !== null) { void completeGrouping(i); return; }
                           // Click jumps to that step. When the run is
                           // complete, clicking effectively rewinds and
                           // re-runs from there (handleJumpToStep clears
@@ -3601,6 +3705,37 @@ export function RunScriptModal({
                           setEditingStepIndex(i);
                         }}
                       >
+                        {/* Group disclosure. Shows the member count while
+                            collapsed so a folded block never hides how much is
+                            inside it, and stops propagation because the row's
+                            own click jumps the runner to that step. */}
+                        {isGroupHeader && (
+                          <button
+                            type="button"
+                            className="shrink-0 h-4 w-4 -ml-0.5 flex items-center justify-center rounded hover:bg-muted"
+                            onClick={(e) => { e.stopPropagation(); toggleGroup(i); }}
+                            title={collapsedGroups.has(i)
+                              ? `Show the ${groupModel.spanOf.get(i) ?? 0} step(s) in this group`
+                              : 'Collapse this group'}
+                            aria-expanded={!collapsedGroups.has(i)}
+                          >
+                            <ChevronRight
+                              className={cn(
+                                'h-3 w-3 transition-transform',
+                                !collapsedGroups.has(i) && 'rotate-90',
+                              )}
+                            />
+                          </button>
+                        )}
+                        {/* Visible count while folded. A tooltip is not enough:
+                            the whole risk of collapsing a block is that work
+                            disappears from the list without saying so. */}
+                        {isGroupHeader && collapsedGroups.has(i) && (
+                          <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
+                            ({groupModel.spanOf.get(i) ?? 0})
+                          </span>
+                        )}
+
                         {/* Drag handle — only in test mode (hidden while recording),
                             revealed on row hover so default rows stay clean. The drag
                             listeners live on the row container, so hiding the handle
@@ -3689,15 +3824,11 @@ export function RunScriptModal({
                             <ShieldAlert className="h-3 w-3 text-amber-500" />
                           </span>
                         )}
-                        {/* Reliability dot from the AI refine pass (display-only). */}
-                        {s._reliability && (
-                          <ReliabilityBadge tier={s._reliability.tier} risks={s._reliability.risks} />
-                        )}
                         {/* Actions: edit / duplicate / delete collapsed into an
                             always-visible ⋮ menu + selector warning (persistent). */}
                         <div className="ml-auto shrink-0 flex items-center gap-1">
-                          {needsSelectorReview(s) && (
-                            <span title="Selector needs review — run this step to auto-select"><AlertTriangle className="h-3 w-3 text-amber-500" /></span>
+                          {neverVerifiedLive(s) && (
+                            <span title="Never run against a live page — its selector has only been checked for shape"><AlertTriangle className="h-3 w-3 text-amber-500" /></span>
                           )}
                           <RowActionsMenu
                             title="Step actions"
@@ -3713,6 +3844,23 @@ export function RunScriptModal({
                                 icon: <Copy className="h-4 w-4" />,
                                 onSelect: () => handleDuplicateStep(i),
                               },
+                              // A group offers the inverse of what it is: an
+                              // existing one can be dissolved, anything else can
+                              // start one. Members are excluded — nesting has no
+                              // meaning to the runtime.
+                              ...(isGroupHeader
+                                ? [{
+                                    label: 'Ungroup',
+                                    icon: <GitBranch className="h-4 w-4" />,
+                                    onSelect: () => { void handleUngroup(i); },
+                                  }]
+                                : isOwned
+                                  ? []
+                                  : [{
+                                      label: 'Group from here…',
+                                      icon: <GitBranch className="h-4 w-4" />,
+                                      onSelect: () => setGroupingFrom(i),
+                                    }]),
                               {
                                 label: 'Delete',
                                 icon: <Trash2 className="h-4 w-4" />,
@@ -3780,188 +3928,118 @@ export function RunScriptModal({
               </div>
 
               {/* Error */}
-              {error && (
-                <div className="border-t px-3 py-2 shrink-0">
-                  <p className="text-xs text-destructive flex items-start gap-1.5">
-                    <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />{error}
-                  </p>
-                </div>
-              )}
+              {/* Headline, then the call log folded away beneath it.
+                  
+                  Playwright errors are two things joined together: a one-line
+                  verdict ("locator.click: Timeout 7500ms exceeded") and a
+                  blow-by-blow of what it actually tried. The verdict alone is
+                  frequently misleading — a click timeout reads as a bad
+                  selector — while the log underneath says plainly that the
+                  element resolved, was visible, enabled and stable, and that
+                  something else "intercepts pointer events". One of those
+                  sends you to rewrite a selector that was never wrong; the
+                  other names the overlay.
+                  
+                  Rendering both as a single wrapped paragraph in a narrow
+                  strip made the second one unreadable, so the log was reachable
+                  only by querying agent_action_log directly. It is the most
+                  diagnostic thing the engine produces; it belongs one click
+                  away, monospaced, and scrollable. */}
+              {error && (() => {
+                const ix = error.indexOf('Call log:');
+                const headline = ix > 0 ? error.slice(0, ix).trim() : error;
+                const callLog  = ix > 0 ? error.slice(ix) : null;
+                return (
+                  <div className="border-t px-3 py-2 shrink-0">
+                    <p className="text-xs text-destructive flex items-start gap-1.5">
+                      <AlertCircle className="h-3.5 w-3.5 mt-0.5 shrink-0" />{headline}
+                    </p>
+                    {callLog && (
+                      <details className="mt-1.5">
+                        <summary className="text-[10px] text-muted-foreground cursor-pointer select-none hover:text-foreground">
+                          What the browser actually tried
+                        </summary>
+                        <pre className="mt-1 max-h-48 overflow-auto rounded bg-muted/50 p-2 text-[10px] leading-relaxed whitespace-pre-wrap break-words">
+                          {callLog}
+                        </pre>
+                      </details>
+                    )}
+                  </div>
+                );
+              })()}
 
-              {/* ── Single tabbed bottom panel ──────────────────────
-                  One compact strip (Variables / Ask AI / Activity) over a
-                  fixed-height scroll area showing the active tab. Activity
-                  only appears in the strip while a run or AI action is in
-                  flight; the effective tab falls back to Variables if the
-                  user was parked on a now-hidden Activity tab. ── */}
-              {/* Bottom panel — visually separated from the steps above with a
-                  distinct surface + a soft top shadow so the divide is clear. */}
-              <div className="shrink-0 flex flex-col border-t border-border bg-muted/30 shadow-[0_-10px_24px_-16px_rgba(0,0,0,0.4)]">
-                <div className="h-72 overflow-y-auto bg-background">
-                  {/* Variables tab */}
-                  {effectiveBottomTab === 'variables' && (() => {
-                    const vars = analyzeVariables(stepsToShow);
-                    return (
-                      <VariablesPanel
-                        variables={vars}
-                        params={params}
-                        onParamsChange={setParams}
-                        onRenameVariable={handleRenameVariable}
-                        onDeleteVariable={handleDeleteVariable}
-                        hoveredStep={hoveredStep}
-                        onHoverVariable={setHighlightVarSteps}
-                      />
-                    );
-                  })()}
-
-                  {/* Ask AI tab — one instruction (aiPrompt) steering a single
-                      Improve action that cleans up the recorded steps offline. */}
-                  {effectiveBottomTab === 'ai' && (
-                    <div className="px-3 py-3 bg-brand/[0.03] space-y-2.5">
-                      <div className="flex items-start gap-2">
-                        <Sparkles className="h-3.5 w-3.5 text-brand mt-1 shrink-0" />
-                        <div className="min-w-0">
-                          <p className="text-xs font-medium">Ask AI · Test &amp; Improve</p>
-                          <p className="text-[10px] text-muted-foreground leading-snug">
-                            <span className="text-foreground">Test &amp; Improve</span> walks the whole script live in this browser — running each step with your Variables so it doubles as a test, pausing for approval before any submit, and rewriting selectors against the real page. If a referenced Variable has no value, it stops before running. When it finishes it tidies up — naming steps, renaming variables, dropping unused ones, and creating variables from values when you ask (e.g. “create a variable for step 4’s value”). <span className="text-foreground">Name a step</span> in the box (e.g. “just step 7”) to run &amp; improve only that step on the current page.
-                          </p>
-                        </div>
-                      </div>
-                      {aiWalking && (
-                        <div className="flex items-center gap-1.5 rounded-md border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-[10px] text-amber-700 dark:text-amber-300">
-                          <Loader2 className="h-3 w-3 animate-spin shrink-0" />
-                          <span>Walking the script live — editing is locked. Use <span className="font-medium">Stop</span> to cancel.</span>
-                        </div>
-                      )}
-                      <Input
-                        value={aiPrompt}
-                        onChange={(e) => setAiPrompt(e.target.value)}
-                        onKeyDown={(e) => { if (e.key === 'Enter' && !refining && !aiWalking && hasSteps) handleImprove(); }}
-                        placeholder='Steer it — e.g. “just step 7”, “the date field moved”, “don’t rename variables”'
-                        className="h-8 text-xs"
-                        disabled={refining || aiWalking}
-                      />
-                      <div className="flex items-center gap-1.5">
-                        {/* Primary: Test & Improve — live walk in the run's browser. */}
-                        <Button
-                          size="sm"
-                          className="h-7 flex-1 justify-center"
-                          onClick={() => handleImprove()}
-                          disabled={refining || aiWalking || !hasSteps}
-                        >
-                          {refining || aiWalking
-                            ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
-                            : <Wand2 className="mr-1.5 h-3.5 w-3.5" />}
-                          Test &amp; Improve
-                        </Button>
-                      </div>
-                      {/* Undo the automatic cleanup. Available only while
-                          this editor session is open — the snapshot lives in
-                          memory, so closing discards it and nothing extra is
-                          ever written to the database. */}
-                      {canUndoRefine && !aiBusy && (
-                        <div className="flex items-center gap-2 rounded-md border border-dashed px-2 py-1.5">
-                          <span className="text-[10px] text-muted-foreground flex-1 leading-snug">
-                            Cleaned up and saved automatically.
-                          </span>
-                          <Button
-                            type="button" variant="ghost" size="sm"
-                            className="h-6 text-[10px] shrink-0"
-                            onClick={handleUndoRefine}
-                            title="Restore the recording exactly as captured"
-                          >
-                            <RotateCcw className="h-3 w-3 mr-1" /> Undo cleanup
-                          </Button>
-                        </div>
-                      )}
-                      {/* Reliability summary from the last improve pass. */}
-                      {refineSummary && !refining && (
-                        <div className="flex items-start gap-1.5 rounded-md border bg-background px-2 py-1.5">
-                          {refineOverall && (
-                            <Badge
-                              variant={refineOverall === 'reliable' ? 'success' : refineOverall === 'fragile' ? 'danger' : 'warning'}
-                              className="shrink-0 text-[9px] px-1.5 py-0 uppercase"
-                            >
-                              {refineOverall}
-                            </Badge>
-                          )}
-                          <p className="text-[10px] text-muted-foreground leading-snug">{refineSummary}</p>
-                        </div>
-                      )}
-                    </div>
+              {/* ── Variables panel ─────────────────────────────────
+                  A RESIZABLE pane, not a tabbed drawer.
+                  
+                  It used to be a fixed-height box under a tab strip offering
+                  Variables / Ask AI / Activity. Ask AI is gone, Activity was
+                  narration nobody read, and one tab is not a tab — it is a
+                  header. What is left is a panel whose only real question is
+                  "how much room do I want for this right now", which a tab
+                  strip cannot answer and a drag handle can.
+                  
+                  Defaults to a third of the column, drag the divider to
+                  resize, collapse to just this header. ── */}
+              <div className={cn('shrink-0 flex flex-col border-t border-border bg-muted/30', varsResizing && 'select-none')}>
+                {/* A thin accent line marking the edge, and the HEADER as the
+                    drag surface.
+                    
+                    The handle was its own 6px strip first, which is both a
+                    miserable target and invisible until you happen to hover it.
+                    The header is already the panel's edge, it is 28px tall, and
+                    a row-resize cursor over a title bar is a thing people
+                    already know. select-none because a drag over text is
+                    otherwise a text selection. */}
+                <div
+                  className={cn(
+                    'h-px shrink-0 transition-colors',
+                    varsResizing ? 'bg-brand' : 'bg-border',
                   )}
-
-                  {/* Activity tab — live log of replay / AI progress. Only
-                      reachable while work is in flight (showActivityTab).
-                      Auto-scrolls via activityScrollRef. */}
-                  {effectiveBottomTab === 'activity' && (
-                    <div className="px-3 py-3 space-y-2">
-                      <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Activity</span>
-                        {activity.length > 0 && (
-                          <button
-                            type="button"
-                            className="text-[10px] text-muted-foreground/70 hover:text-foreground transition-colors"
-                            onClick={() => setActivity([])}
-                            title="Clear activity"
-                          >
-                            Clear
-                          </button>
-                        )}
-                      </div>
-                      <div
-                        ref={activityScrollRef}
-                        className="overflow-y-auto font-mono text-[10px] leading-relaxed space-y-0.5"
-                      >
-                        {activity.map((a) => (
-                          <div
-                            key={a.id}
-                            className={cn(
-                              'whitespace-pre-wrap break-words',
-                              a.kind === 'done'  && 'text-green-600 dark:text-green-400',
-                              a.kind === 'error' && 'text-destructive',
-                              a.kind === 'gate'  && 'text-amber-600 dark:text-amber-400',
-                              a.kind === 'ai'    && 'text-brand',
-                              a.kind === 'step'  && 'text-muted-foreground',
-                            )}
-                          >
-                            {a.text}
-                          </div>
-                        ))}
-                        {activity.length === 0 && (
-                          <p className="text-muted-foreground/50 italic">Running…</p>
-                        )}
-                      </div>
-                    </div>
+                />
+                <div
+                  onPointerDown={startVarsResize}
+                  onPointerMove={onVarsResizeMove}
+                  onPointerUp={endVarsResize}
+                  onPointerCancel={endVarsResize}
+                  className={cn(
+                    'flex items-center justify-between px-3 py-1.5 border-b border-border',
+                    'cursor-row-resize select-none touch-none',
+                    varsResizing && 'bg-brand/10',
                   )}
+                  title="Drag to resize"
+                >
+                  <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Variables
+                  </span>
+                  <button
+                    type="button"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => setVarsCollapsed((c) => !c)}
+                    className="h-5 w-5 flex items-center justify-center rounded text-muted-foreground hover:text-foreground hover:bg-muted"
+                    title={varsCollapsed ? 'Expand' : 'Collapse'}
+                    aria-expanded={!varsCollapsed}
+                  >
+                    <ChevronRight className={cn('h-3.5 w-3.5 transition-transform', varsCollapsed ? '-rotate-90' : 'rotate-90')} />
+                  </button>
                 </div>
-                {/* Tab strip at the BOTTOM of the panel — the active tab
-                    connects upward to the content above it. */}
-                <div className="flex items-center gap-0.5 px-2 py-1 border-t border-border">
-                  {([
-                    { id: 'variables' as const, label: 'Variables' },
-                    { id: 'ai' as const, label: 'Ask AI' },
-                    ...(showActivityTab ? [{ id: 'activity' as const, label: 'Activity' }] : []),
-                  ]).map((t) => (
-                    <button
-                      key={t.id}
-                      type="button"
-                      onClick={() => setBottomTab(t.id)}
-                      className={cn(
-                        'flex items-center gap-1 rounded-b px-2.5 py-1 text-[11px] font-medium transition-colors',
-                        effectiveBottomTab === t.id
-                          ? 'bg-background text-foreground border border-t-0'
-                          : 'text-muted-foreground hover:text-foreground',
-                      )}
-                    >
-                      {t.id === 'ai' && <Sparkles className="h-3 w-3 text-brand" />}
-                      {t.label}
-                      {t.id === 'activity' && (aiBusy || replayRunning) && (
-                        <Loader2 className="h-3 w-3 animate-spin" />
-                      )}
-                    </button>
-                  ))}
-                </div>
+                {!varsCollapsed && (
+                  <div className="overflow-y-auto bg-background" style={{ height: varsHeight }}>
+                    {(() => {
+                      const vars = analyzeVariables(stepsToShow);
+                      return (
+                        <VariablesPanel
+                          variables={vars}
+                          params={params}
+                          onParamsChange={setParams}
+                          onRenameVariable={handleRenameVariable}
+                          onDeleteVariable={handleDeleteVariable}
+                          hoveredStep={hoveredStep}
+                          onHoverVariable={setHighlightVarSteps}
+                        />
+                      );
+                    })()}
+                  </div>
+                )}
               </div>
             </>
           )}
@@ -4094,6 +4172,7 @@ export function RunScriptModal({
         open={editingStepIndex != null}
         onClose={() => setEditingStepIndex(null)}
         variableNames={editModalVarNames}
+        allSteps={stepRunState?.steps ?? []}
         onSave={async (updated) => {
           if (editingStepIndex == null) return;
           const idx = editingStepIndex;
@@ -4284,8 +4363,6 @@ interface ModeActionPickerProps {
   isCapturingExtract: boolean;
   isExecuting: boolean;
   disabled: boolean;
-  onSelectStep: () => void;
-  onSelectAgent: () => void;
   onStartRecording: () => void;
   onStopRecording: () => void;
   onSelectRecordWait: () => void;
@@ -4304,15 +4381,18 @@ type PickerAction = {
   onClick: () => void | Promise<void>;
 };
 
+// Test has no icon: the Run button IS the test control, and a second ▷ beside
+// it read as a broken duplicate of it. 'test' remains the default toolMode —
+// the state you are in when not recording or extracting — but nothing has to
+// switch back to it, because Run no longer depends on it.
 const MODE_META: { key: ToolMode; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
-  { key: 'test',    label: 'Test',    icon: Play },
   { key: 'record',  label: 'Record',  icon: CircleDot },
   { key: 'extract', label: 'Extract', icon: Scissors },
 ];
 
 function ModeActionPicker({
   toolMode, setToolMode, runMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
-  onSelectStep, onSelectAgent, onStartRecording, onStopRecording, onSelectRecordWait, onCancelWait,
+  onStartRecording, onStopRecording, onSelectRecordWait, onCancelWait,
   onSelectAddPause, onSelectExtractElement, onCancelExtract, onSelectExtractUrl, onSelectCopyPage,
 }: ModeActionPickerProps) {
   // Remember the action last chosen per mode so the left chip can show it.
@@ -4334,10 +4414,12 @@ function ModeActionPicker({
   const locked = disabled || !!activeStatus || isExecuting;
 
   const actionsByMode: Record<ToolMode, PickerAction[]> = {
-    test: [
-      { label: 'Manual', desc: 'Step through one action at a time (use the Run button)', icon: Play, onClick: onSelectStep },
-      { label: 'Auto', desc: 'Run the whole script end-to-end with the agent runtime timing', icon: Zap, onClick: onSelectAgent },
-    ],
+    // Test has no sub-actions any more. Manual/Auto lived here purely to tell
+    // one Run button which of two things to do; there are now two buttons in
+    // the steps panel that say what they do, so the choice — and the chance of
+    // being in the wrong mode — is gone. Test is simply the tool you are in
+    // when you are not recording or extracting.
+    test: [],
     record: [
       { label: 'Record Interactions', desc: 'Capture clicks, fills, and navigations on the page', icon: CircleDot, onClick: onStartRecording },
       { label: 'Record Wait', desc: 'Click an element to insert a wait-for step', icon: Clock, onClick: onSelectRecordWait },
@@ -4354,29 +4436,8 @@ function ModeActionPicker({
   const selectedIdxFor = (m: ToolMode) =>
     m === 'test' ? (runMode === 'agent' ? 1 : 0) : m === 'record' ? recordIdx : extractIdx;
 
-  const currentActions = actionsByMode[toolMode];
-  const selectedAction = currentActions[Math.min(selectedIdxFor(toolMode), currentActions.length - 1)] ?? currentActions[0]!;
-
-  // The status text shows live status while active, else "Mode : Action"
-  // (e.g. "Test : Manual") so both the mode and the chosen action are clear.
-  const modeLabel = MODE_META.find((m) => m.key === toolMode)?.label ?? toolMode;
-  const boxLabel = activeStatus ? activeStatus.label : `${modeLabel} : ${selectedAction.label}`;
-
   return (
     <div className="flex items-center gap-2">
-      {/* Status text — display only, never a box/button. Plain inline text
-          indicating the current mode/action, or the live status while one
-          is running. */}
-      <div
-        className="flex h-8 w-44 shrink-0 items-center justify-end px-1 text-right text-xs font-medium text-info cursor-default"
-        title={activeStatus ? activeStatus.label : selectedAction.desc}
-      >
-        <span className="truncate">{boxLabel}</span>
-      </div>
-
-      {/* Short divider tying the status text to the mode buttons. */}
-      <div className="h-5 w-px bg-border shrink-0" />
-
       {/* Right: icon-only mode buttons. Clicking one switches to that mode
           AND opens its action menu (the mode name is the menu heading);
           picking an action updates the info box on the left. */}
@@ -4403,6 +4464,30 @@ function ModeActionPicker({
                 aria-label={activeStatus.stopTitle}
               >
                 <SIcon className="h-3.5 w-3.5 fill-current" />
+              </button>
+            );
+          }
+
+          // A mode with no actions is a plain switch. Test has none any more —
+          // Manual/Auto moved out to the Run control — and leaving it wrapped
+          // in a DropdownMenu meant its ▷ icon opened an EMPTY menu, reading
+          // as a broken run button sitting above the real ones.
+          if (modeActions.length === 0) {
+            return (
+              <button
+                key={m.key}
+                type="button"
+                onClick={() => setToolMode(m.key)}
+                disabled={locked}
+                className={cn(
+                  'flex h-7 w-9 items-center justify-center rounded transition-colors',
+                  activeMode ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground',
+                  locked && 'cursor-not-allowed hover:text-muted-foreground',
+                )}
+                title={m.label}
+                aria-label={m.label}
+              >
+                <Icon className="h-4 w-4 shrink-0" />
               </button>
             );
           }

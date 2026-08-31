@@ -26,7 +26,7 @@ import {
   Layers,
   X,
   Timer,
-  Hourglass,
+  Hourglass, Download, GitBranch
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { RecordedStep } from '@/lib/api/scripts';
@@ -65,6 +65,9 @@ export const ACTION_ICONS: Record<ActionType, React.ReactNode> = {
   wait_for:     <Timer className="h-3.5 w-3.5 text-indigo-400 shrink-0" />,
   wait_for_tab: <Layers className="h-3.5 w-3.5 text-blue-400 shrink-0" />,
   pause:        <Hourglass className="h-3.5 w-3.5 text-indigo-400 shrink-0" />,
+  download:     <Download className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
+  // A group is a fork in the script, not an action performed on the page.
+  group:        <GitBranch className="h-3.5 w-3.5 text-amber-400 shrink-0" />,
 };
 
 export function StepDescription({ step }: { step: RecordedStep }) {
@@ -459,6 +462,8 @@ const ACTION_LABELS: Record<ActionType, string> = {
   wait_for:     'Wait For',
   wait_for_tab: 'Wait For Tab',
   pause:        'Pause',
+  download:     'Download',
+  group:        'Optional branch',
 };
 
 function AddStepForm({ onAdd, onCancel }: { onAdd: (step: RecordedStep) => void; onCancel: () => void }) {

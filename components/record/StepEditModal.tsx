@@ -9,7 +9,7 @@ import { cn } from '@/lib/utils';
 import type { RecordedStep } from '@/lib/api/scripts';
 import { SelectorPanel, JsonPanel } from './panels';
 
-type TabId = 'name' | 'selector' | 'json';
+type TabId = 'name' | 'branch' | 'selector' | 'json';
 
 interface StepEditModalProps {
   /** Step being edited. The modal is uncontrolled w.r.t. step data — it
@@ -21,6 +21,12 @@ interface StepEditModalProps {
   onClose: () => void;
   /** Variable names available for the JSON panel's {{insertion}} picker. */
   variableNames: string[];
+  /**
+   * The whole step list, used only by the Branch tab so it can show WHICH
+   * steps a group owns rather than making the operator count rows. Optional:
+   * every other tab edits the step in isolation.
+   */
+  allSteps?: RecordedStep[];
   /** Called on Save with the modified step. Caller persists via syncStepRunSteps. */
   onSave: (updated: RecordedStep) => Promise<void> | void;
 }
@@ -36,7 +42,7 @@ interface StepEditModalProps {
  * pinned to Variables since selector/JSON live here now.
  */
 export function StepEditModal({
-  step, stepIndex, open, onClose, variableNames, onSave,
+  step, stepIndex, open, onClose, variableNames, allSteps, onSave,
 }: StepEditModalProps) {
   const [draft, setDraft] = useState<RecordedStep | null>(step);
   const [jsonText, setJsonText] = useState('');
@@ -112,7 +118,12 @@ export function StepEditModal({
   };
 
   const handleNameChange = (next: string) => {
-    const updated: RecordedStep = { ...draft, name: next };
+    // A group carries BOTH: `name` is what the editor shows, `label` is what
+    // the run log prints. Letting them drift means the operator renames a
+    // branch and the logs keep calling it the old thing.
+    const updated: RecordedStep = draft.action === 'group'
+      ? { ...draft, name: next, label: next }
+      : { ...draft, name: next };
     setDraft(updated);
     setJsonText(JSON.stringify(updated, null, 2));
   };
@@ -163,9 +174,12 @@ export function StepEditModal({
     }
   };
 
+  // A group has no selector of its own — it has a GUARD and a span — so it
+  // gets Branch where every other step gets Selector.
+  const isGroup = draft.action === 'group';
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: 'name', label: 'Name' },
-    { id: 'selector', label: 'Selector' },
+    isGroup ? { id: 'branch', label: 'Branch' } : { id: 'selector', label: 'Selector' },
     { id: 'json', label: 'JSON' },
   ];
 
@@ -221,6 +235,15 @@ export function StepEditModal({
                 </p>
               </div>
 
+              {/* A GROUP does not take these.
+                  
+                  skip_if_empty, skip_if_missing and allow_failure are per-step
+                  answers to "should this one run" — a group answers that for
+                  its whole branch, once, with its guard. Offering both invites
+                  a step that is skipped by two mechanisms disagreeing about
+                  why, and the toggles reference an input and a selector this
+                  step does not have. */}
+              {!isGroup && (<>
               {/* Conditional behaviour.
                   Lives on the step, next to its name, because both answer
                   "when does this step run" — and the step is the only place
@@ -287,8 +310,102 @@ export function StepEditModal({
                   />
                 </div>
               </div>
+              </>)}
             </div>
           )}
+
+          {tab === 'branch' && (() => {
+            const g = (draft as { guard?: { selector?: string; timeout?: number; expect?: 'present' | 'absent' } }).guard ?? {};
+            const span = (draft as { span?: number }).span ?? 1;
+            const patch = (next: Partial<{ guard: typeof g; span: number }>) => {
+              const updated = { ...draft, ...next } as RecordedStep;
+              setDraft(updated);
+              setJsonText(JSON.stringify(updated, null, 2));
+            };
+            // The steps this group currently owns, named. Counting rows by eye
+            // is exactly how a span ends up one short or one long.
+            const owned = (allSteps ?? []).slice(stepIndex + 1, stepIndex + 1 + span);
+            const overrun = (allSteps?.length ?? 0) > 0 && stepIndex + span >= (allSteps as RecordedStep[]).length;
+            return (
+              <div className="px-6 py-3 space-y-4">
+                <p className="text-[11px] text-muted-foreground leading-relaxed">
+                  The guard is asked <span className="font-medium">once</span>, before any of these steps run.
+                  If it doesn{"'"}t match, the whole branch is skipped together and nothing inside it is
+                  evaluated — including any {"{{_mfa}}"} code, which is what makes this fast.
+                </p>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-medium text-muted-foreground">Run this branch when</label>
+                  <select
+                    className="w-full h-8 rounded-md border bg-background px-2 text-xs"
+                    value={g.expect ?? 'present'}
+                    onChange={(e) => patch({ guard: { ...g, expect: e.target.value as 'present' | 'absent' } })}
+                  >
+                    <option value="present">this element IS on the page</option>
+                    <option value="absent">this element is NOT on the page</option>
+                  </select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-medium text-muted-foreground">Guard selector</label>
+                  <Input
+                    value={g.selector ?? ''}
+                    onChange={(e) => patch({ guard: { ...g, selector: e.target.value } })}
+                    placeholder="//div[@aria-label='Secure your account']"
+                    className="font-mono text-xs"
+                  />
+                  {!g.selector?.trim() && (
+                    <p className="text-[10px] text-destructive">
+                      Required — without it the group cannot decide, and the engine runs the steps rather than guessing.
+                    </p>
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    Give up after (ms)
+                  </label>
+                  <Input
+                    type="number"
+                    value={g.timeout ?? 8000}
+                    onChange={(e) => patch({ guard: { ...g, timeout: Number(e.target.value) || 8000 } })}
+                    className="text-xs"
+                  />
+                  <p className="text-[10px] text-muted-foreground">
+                    Paid in full only when the branch is ABSENT. Long enough for the element to appear,
+                    short enough that a script without the branch isn{"'"}t waiting on nothing.
+                  </p>
+                </div>
+
+                <div className="space-y-1.5">
+                  <label className="text-[11px] font-medium text-muted-foreground">Steps in this branch</label>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={span}
+                    onChange={(e) => patch({ span: Math.max(1, Number(e.target.value) || 1) })}
+                    className="text-xs w-24"
+                  />
+                  {overrun && (
+                    <p className="text-[10px] text-destructive">
+                      That reaches past the end of the script — the engine would stop at the last step.
+                    </p>
+                  )}
+                  <ul className="mt-1.5 space-y-0.5">
+                    {owned.map((st, k) => (
+                      <li key={k} className="text-[11px] text-muted-foreground flex items-baseline gap-1.5">
+                        <span className="tabular-nums text-muted-foreground/60">{stepIndex + 2 + k}</span>
+                        <span className="truncate">{st.name?.trim() || autoLabelHint(st)}</span>
+                      </li>
+                    ))}
+                    {owned.length === 0 && (
+                      <li className="text-[11px] text-muted-foreground/60 italic">Nothing — the branch is empty.</li>
+                    )}
+                  </ul>
+                </div>
+              </div>
+            );
+          })()}
 
           {tab === 'selector' && (
             <SelectorPanel
@@ -328,6 +445,8 @@ export function StepEditModal({
 /** Compact auto label preview for the name-tab hint. */
 function autoLabelHint(step: RecordedStep): string {
   switch (step.action) {
+    // A group's auto label is the branch it guards, matching the step list.
+    case 'group':      return (step as { label?: string }).label?.trim() || 'Optional branch';
     case 'navigate':   return `Navigate → ${step.url ?? ''}`;
     case 'click':      return `Click: ${step.text || step.selector || ''}`;
     case 'fill':       return `Fill: ${step.selector ?? ''} = ${step.value ?? ''}`;

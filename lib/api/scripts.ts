@@ -26,7 +26,16 @@ export interface ElementSnapshot {
 }
 
 export interface RecordedStep {
-  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for' | 'wait_for_tab' | 'pause';
+  // Kept in step with ACTION_TYPES in the backend's step-schema.js. 'download'
+  // was already missing here while the engine implemented it — a step the UI
+  // could not describe in types but happily rendered.
+  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for' | 'wait_for_tab' | 'pause' | 'download' | 'group';
+  /** group only — what the branch IS, shown as the block's header. */
+  label?: string;
+  /** group only — the guard asked ONCE to decide the whole branch. */
+  guard?: { selector: string; timeout?: number; expect?: 'present' | 'absent' };
+  /** group only — how many steps after this one the group owns. */
+  span?: number;
   /** Optional user-supplied label. When set, the step list and edit
    *  modal show this instead of the auto-generated stepLabel. Lets
    *  operators give meaningful names like "Open contract form" instead
@@ -384,69 +393,6 @@ export type RefineStreamEvent =
   | { type: 'error'; error: string };
 
 /**
- * Refine a script, narrating each step as the model emits it.
- *
- * Uses fetch + a stream reader rather than EventSource because the step list
- * has to go up in the request body. The connection lives exactly as long as
- * the pass: it opens here and closes on `done` / `error`, so there is no
- * idle stream and nothing to poll. Aborting `signal` drops the socket, which
- * the server sees as a close and stops writing.
- *
- * Falls back to nothing clever on failure — the caller keeps the raw
- * recording, same as the non-streaming path.
- */
-export async function refineScriptStream(
-  orgId: string,
-  body: {
-    steps: RecordedStep[];
-    target_indices?: number[];
-    instruction?: string;
-    context?: { start_url?: string; parameters?: Record<string, string> };
-  },
-  onEvent: (ev: RefineStreamEvent) => void,
-  signal?: AbortSignal,
-): Promise<RefineResult> {
-  const res = await fetch(`/api/agent/api/admin/${orgId}/scripts/refine/stream`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'include',
-    body: JSON.stringify(body),
-    signal,
-  });
-  if (!res.ok || !res.body) {
-    throw new Error(`Refine stream failed (${res.status})`);
-  }
-
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buf = '';
-  let final: RefineResult | null = null;
-  let failure: string | null = null;
-
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    // SSE frames are separated by a blank line. Keep the trailing partial.
-    const frames = buf.split('\n\n');
-    buf = frames.pop() ?? '';
-    for (const frame of frames) {
-      const line = frame.split('\n').find((l) => l.startsWith('data:'));
-      if (!line) continue;
-      let ev: RefineStreamEvent;
-      try { ev = JSON.parse(line.slice(5).trim()); } catch { continue; }
-      onEvent(ev);
-      if (ev.type === 'done') final = ev.result;
-      if (ev.type === 'error') failure = ev.error;
-    }
-  }
-
-  if (failure) throw new Error(failure);
-  if (!final) throw new Error('Refine stream ended without a result');
-  return final;
-}
-
-/**
  * Deterministic cleanup — no model call, returns in milliseconds.
  *
  * This is what runs after a recording. It hardens each selector by taking the
@@ -472,39 +418,6 @@ export async function finalizeScript(orgId: string, body: {
   return res.data;
 }
 
-export async function refineScript(orgId: string, body: {
-  steps: RecordedStep[];
-  target_indices?: number[];
-  instruction?: string;
-  context?: { start_url?: string; parameters?: Record<string,string> };
-}, signal?: AbortSignal): Promise<RefineResult> {
-  const res = await agentClient.post<RefineResult>(`/api/admin/${orgId}/scripts/refine`, body, { signal });
-  return res.data;
-}
-
-/** Metadata-only cleanup report from tidyScript. */
-export interface TidyReport {
-  summary: string;
-  named: number;
-  renamed: Array<{ from: string; to: string }>;
-  parameterized: Array<{ index: number; var_name: string; value: string }>;
-  pruned: string[];
-}
-export interface TidyResult { steps: RecordedStep[]; parameters: Record<string, string>; report: TidyReport; }
-
-/**
- * Tidy a script's METADATA — name every step, rename variables to clearer
- * snake_case, and prune unused variables. Page-independent; never changes
- * selectors, actions, values, or step order. Used as the auto-cleanup pass
- * after a Test & Improve walk.
- */
-export async function tidyScript(
-  orgId: string,
-  body: { steps: RecordedStep[]; parameters?: Record<string, string>; instruction?: string; scopeIndices?: number[] },
-): Promise<TidyResult> {
-  const res = await agentClient.post<TidyResult>(`/api/admin/${orgId}/scripts/tidy`, body);
-  return res.data;
-}
 
 // ─── AI Step Assist ────────────────────────────────────────────
 
@@ -597,12 +510,27 @@ export interface StepRunStepResult {
   screenshot: string;
   extracted: Record<string, string>;
   executedStep?: RecordedStep;
+  /**
+   * The index executedStep ran at. Do NOT infer it as currentIndex - 1: a
+   * guarded group advances the cursor by 1 + span, and that inference wrote the
+   * group over the last step of its own branch.
+   */
+  executedIndex?: number;
   pageUrl?: string | null;
   interrupted?: boolean;
   /** Set when replay paused at a gated step awaiting Approve / Deny. */
   awaiting_approval?: boolean;
   /** Present alongside awaiting_approval — the gated step's index. */
   status?: 'awaiting_approval';
+  /** The engine skipped this step (skip_if_empty / skip_if_missing / group). */
+  skipped?: boolean;
+  skipReason?: string | null;
+  /**
+   * Set when a GROUP's guard did not match and the runtime jumped its span.
+   * The cursor alone cannot express this — it lands past the whole block, so
+   * without the range those steps would read as executed.
+   */
+  skippedGroup?: { fromIndex: number; count: number; reason?: string | null } | null;
 }
 
 /** Returned (HTTP 202) when a browser VM needs to be provisioned first. */
@@ -701,52 +629,6 @@ export interface ImproveWalkResult extends StepRunStepResult {
   missingParams?: string[];
   improve_reports?: ImproveReport[];
   steps?: RecordedStep[];
-}
-
-/**
- * Live "Test & Improve" walk: replays the script in the run's existing browser,
- * executing each step (so it doubles as a test), pausing on approval gates, and
- * rewriting the targeted steps' selectors against the live page. Mirrors
- * runRemainingStepsAgentMode's transport (15-min budget, abortable). Pass
- * reset=true to start a fresh walk from the top (runs the missing-variable
- * pre-flight); on an approval pause, call again with reset=false and the gate
- * index added to approvedGates to resume.
- */
-export async function improveWalk(
-  orgId: string,
-  runId: string,
-  opts: {
-    params?: Record<string, string>;
-    approvedGates?: number[];
-    targetIndices?: number[];
-    instruction?: string;
-    reset?: boolean;
-    targetedOnly?: boolean;
-    /** See executeStepRunStep — resolves {{_mfa}} server-side. */
-    scriptId?: string | null;
-    /** Live editor hints; see executeStepRunStep's `reserved`. */
-    reserved?: { loginId?: string | null; needsTotp?: boolean };
-  },
-  signal?: AbortSignal,
-): Promise<ImproveWalkResult> {
-  // NOTE: the improve-walk admin route reads camelCase body fields (unlike the
-  // older run-remaining route which used approved_gates).
-  const body: Record<string, unknown> = {};
-  if (opts.params) body.params = opts.params;
-  if (opts.approvedGates && opts.approvedGates.length > 0) body.approvedGates = opts.approvedGates;
-  if (opts.targetIndices && opts.targetIndices.length > 0) body.targetIndices = opts.targetIndices;
-  if (opts.instruction && opts.instruction.trim()) body.instruction = opts.instruction.trim();
-  if (opts.reset) body.reset = true;
-  if (opts.targetedOnly) body.targetedOnly = true;
-  if (opts.scriptId) body.script_id = opts.scriptId;
-  if (opts.reserved?.loginId) body.login_id = opts.reserved.loginId;
-  if (opts.reserved?.needsTotp !== undefined) body.needs_totp = opts.reserved.needsTotp;
-  const res = await agentClient.post(
-    `/api/admin/${orgId}/step-runs/${runId}/improve-walk`,
-    body,
-    { signal, timeout: 15 * 60 * 1000 },
-  );
-  return res.data;
 }
 
 export async function executeStepRunStep(
