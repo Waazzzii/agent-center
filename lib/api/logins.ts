@@ -23,9 +23,23 @@ export interface Login {
    *
    * The script never knows the difference: it fills {{_mfa}} either way.
    */
-  mfa_source: 'none' | 'totp' | 'slack';
+  mfa_source: 'none' | 'totp' | 'slack' | 'gmail';
   /** Channel to read codes from. Required when mfa_source is slack. */
   mfa_slack_channel_id: string | null;
+  /**
+   * Mailbox whose inbox holds the codes. Required when mfa_source is gmail.
+   *
+   * Two fields where Slack needs one, because Gmail authenticates by
+   * impersonating a NAMED mailbox rather than as an org-level bot — there is no
+   * "the org's Gmail" to read. This is the impersonation subject.
+   */
+  mfa_gmail_mailbox: string | null;
+  /**
+   * Gmail search syntax narrowing to the sender that issues codes, e.g.
+   * `from:noreply@vendor.com`. Distinct from mfa_code_regex: the query picks
+   * the MESSAGE server-side, the regex extracts the CODE from its text.
+   */
+  mfa_gmail_query: string | null;
   /** Extracts the code. Capture group 1 if present, else the whole match. */
   mfa_code_regex: string | null;
   /**
@@ -106,16 +120,24 @@ export interface LoginPatch {
   /** undefined = leave alone, null = clear, string = set. Empty string is
    *  treated as null at the API call site. */
   notification_slack_channel_id?: string | null;
-  mfa_source?: 'none' | 'totp' | 'slack';
+  mfa_source?: 'none' | 'totp' | 'slack' | 'gmail';
   /** undefined = leave alone, null = clear, string = set. */
   mfa_slack_channel_id?: string | null;
+  mfa_gmail_mailbox?: string | null;
+  mfa_gmail_query?: string | null;
   mfa_code_regex?: string | null;
   mfa_timeout_seconds?: number;
 }
 
 /** One message the pattern was tried against. Codes come back masked. */
 export interface MfaTestMessage {
-  ts: string;
+  /** Slack's message timestamp. Absent for Gmail, which identifies by id. */
+  ts?: string;
+  /** Gmail's message id. Absent for Slack. */
+  id?: string;
+  /** Gmail only — helps confirm the QUERY picked the right sender. */
+  from?: string;
+  subject?: string;
   excerpt: string;
   matched: boolean;
   /** e.g. "48••••" — proves extraction worked without echoing a live code. */
@@ -194,6 +216,35 @@ export async function testLoginMfaPattern(
   } catch (err: unknown) {
     const e = err as { response?: { data?: MfaTestResult } };
     return e.response?.data ?? { ok: false, error: 'Could not reach the channel' };
+  }
+}
+
+/**
+ * Try a query + pattern against the mailbox's recent messages.
+ *
+ * Same contract as the Slack test — `ok` is about whether the CHECK ran, not
+ * whether it found a code. Reports `scanned` separately from `matched` because
+ * Gmail has two things that can be wrong: a query that selects no messages looks
+ * identical to a pattern that matches none of them.
+ */
+export async function testLoginGmailMfaPattern(
+  orgId: string,
+  id: string,
+  opts?: { mailbox?: string | null; query?: string | null; pattern?: string | null },
+): Promise<MfaTestResult> {
+  try {
+    const res = await agentClient.post<MfaTestResult>(
+      `/api/admin/${orgId}/logins/${id}/mfa/gmail/test`,
+      {
+        mailbox: opts?.mailbox ?? undefined,
+        query: opts?.query ?? undefined,
+        pattern: opts?.pattern ?? undefined,
+      },
+    );
+    return res.data;
+  } catch (err: unknown) {
+    const e = err as { response?: { data?: MfaTestResult } };
+    return e.response?.data ?? { ok: false, error: 'Could not reach the mailbox' };
   }
 }
 

@@ -7,7 +7,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import {
   getAgent, updateAgent, deleteAgent, runAgent, setAgentClient,
   getActions, createAction, updateAction, deleteAction, reorderActions,
-  createTrigger, deleteTrigger,
+  createTrigger, updateTrigger, deleteTrigger,
   generateWebhookKey, getWebhookKey,
   getValidSubAgents,
   type Agent, type AgentDetail, type AgentAction, type AgentTrigger, type AgentWebhookKey,
@@ -53,7 +53,7 @@ import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  Plus, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
+  Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
   Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Monitor,
   LogIn, GitBranch, Settings, CircleDot, AlertTriangle, Globe, Users, Link as LinkIcon,
   Bot, Sparkles,
@@ -248,6 +248,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // Trigger dialog
   const [triggerDialogOpen, setTriggerDialogOpen] = useState(false);
   const [triggerForm, setTriggerForm] = useState({ trigger_type: 'webhook' as string, cron_expr: '0 9 * * *', description: '' });
+  /*
+   * Set while EDITING an existing trigger; null while creating one.
+   *
+   * Only cron triggers are editable. A webhook's URL and API key are derived
+   * from its id, so changing one in place would leave every caller pointing at a
+   * trigger whose behaviour had silently changed — recreating it forces the new
+   * URL to be distributed, which is the honest outcome.
+   */
+  const [editingTriggerId, setEditingTriggerId] = useState<string | null>(null);
   const [savingTrigger, setSavingTrigger] = useState(false);
 
   // Generated webhook key reveal
@@ -718,6 +727,26 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   // ── Triggers ──
 
+  /** Open the trigger dialog pre-filled, to edit an existing cron schedule. */
+  const handleEditTrigger = (trigger: AgentTrigger) => {
+    setEditingTriggerId(trigger.id);
+    setTriggerForm({
+      trigger_type: trigger.trigger_type,
+      cron_expr: String(trigger.trigger_config?.cron_expr ?? '0 9 * * *'),
+      description: String(trigger.trigger_config?.description ?? ''),
+    });
+    setTriggerDialogOpen(true);
+  };
+
+  /** Reset to create-mode whenever the dialog closes, so the next open is clean. */
+  const closeTriggerDialog = (open: boolean) => {
+    setTriggerDialogOpen(open);
+    if (!open) {
+      setEditingTriggerId(null);
+      setTriggerForm({ trigger_type: 'webhook', cron_expr: '0 9 * * *', description: '' });
+    }
+  };
+
   const handleSaveTrigger = async () => {
     if (!selectedOrgId) return;
     try {
@@ -725,9 +754,20 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       const config: Record<string, unknown> = {};
       if (triggerForm.trigger_type === 'cron') config.cron_expr = triggerForm.cron_expr;
       if (triggerForm.description) config.description = triggerForm.description;
+
+      if (editingTriggerId) {
+        // Edit in place. The backend re-registers the schedule on the way
+        // through, so the new expression takes effect without a restart.
+        await updateTrigger(selectedOrgId, agentId, editingTriggerId, { trigger_config: config });
+        toast.success('Schedule updated');
+        closeTriggerDialog(false);
+        await loadAll();
+        return;
+      }
+
       const trigger = await createTrigger(selectedOrgId, agentId, { trigger_type: triggerForm.trigger_type, trigger_config: config });
       toast.success('Trigger created');
-      setTriggerDialogOpen(false);
+      closeTriggerDialog(false);
       await loadAll();
       if (trigger.trigger_type === 'webhook') {
         const keyResult = await generateWebhookKey(selectedOrgId, agentId, trigger.id);
@@ -735,7 +775,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         await loadWebhookKey(trigger.id);
       }
     } catch (err: any) {
-      toast.error(err.response?.data?.message || err.message || 'Failed to create trigger');
+      toast.error(err.response?.data?.message || err.message || (editingTriggerId ? 'Failed to update trigger' : 'Failed to create trigger'));
     } finally {
       setSavingTrigger(false);
     }
@@ -1125,11 +1165,28 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                           );
                         })()}
                       </div>
-                      {trigger.trigger_type !== 'manual' && (
-                        <Button variant="ghost" size="sm" className="h-7 w-7 p-0 shrink-0" onClick={() => handleDeleteTrigger(trigger.id)}>
-                          <Trash2 className="h-3.5 w-3.5 text-destructive" />
-                        </Button>
-                      )}
+                      <div className="flex items-center gap-0.5 shrink-0">
+                        {/* Cron only. A webhook's URL is derived from its id, so
+                            editing one in place would change behaviour behind
+                            every caller still using the old URL. */}
+                        {trigger.trigger_type === 'cron' && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 w-7 p-0"
+                            title="Edit schedule"
+                            aria-label="Edit schedule"
+                            onClick={() => handleEditTrigger(trigger)}
+                          >
+                            <Pencil className="h-3.5 w-3.5" />
+                          </Button>
+                        )}
+                        {trigger.trigger_type !== 'manual' && (
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" title="Remove trigger" aria-label="Remove trigger" onClick={() => handleDeleteTrigger(trigger.id)}>
+                            <Trash2 className="h-3.5 w-3.5 text-destructive" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
                   </CardContent>
                 </Card>
@@ -2046,13 +2103,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       </Sheet>
 
       {/* ── Trigger Dialog ────────────────────────────────────── */}
-      <Dialog open={triggerDialogOpen} onOpenChange={setTriggerDialogOpen}>
+      <Dialog open={triggerDialogOpen} onOpenChange={closeTriggerDialog}>
         <DialogContent className="max-w-md">
-          <DialogHeader><DialogTitle>Add Trigger</DialogTitle></DialogHeader>
+          <DialogHeader><DialogTitle>{editingTriggerId ? 'Edit Schedule' : 'Add Trigger'}</DialogTitle></DialogHeader>
           <div className="space-y-4">
             <div className="space-y-1">
               <Label>Type</Label>
-              <Select value={triggerForm.trigger_type} onValueChange={(v) => setTriggerForm(f => ({ ...f, trigger_type: v }))}>
+              {/* Locked while editing: switching type mid-edit would need the
+                  webhook key lifecycle handled too, and the user asked only for
+                  the schedule to be editable. Remove and re-add to change type. */}
+              <Select value={triggerForm.trigger_type} disabled={!!editingTriggerId} onValueChange={(v) => setTriggerForm(f => ({ ...f, trigger_type: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="webhook">Webhook</SelectItem>
@@ -2085,9 +2145,14 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTriggerDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSaveTrigger} disabled={savingTrigger}>
-              {savingTrigger ? 'Creating…' : 'Create Trigger'}
+            <Button variant="outline" onClick={() => closeTriggerDialog(false)}>Cancel</Button>
+            <Button
+              onClick={handleSaveTrigger}
+              disabled={savingTrigger || (triggerForm.trigger_type === 'cron' && !triggerForm.cron_expr.trim())}
+            >
+              {savingTrigger
+                ? (editingTriggerId ? 'Saving…' : 'Creating…')
+                : (editingTriggerId ? 'Save Schedule' : 'Create Trigger')}
             </Button>
           </DialogFooter>
         </DialogContent>

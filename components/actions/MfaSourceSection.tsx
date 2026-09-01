@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  updateLogin, testLoginMfaPattern, listSlackChannels,
+  updateLogin, testLoginMfaPattern, testLoginGmailMfaPattern, listSlackChannels,
   type Login, type MfaTestResult,
 } from '@/lib/api/logins';
 import { Field, CONTROL_W } from '@/components/actions/login-fields';
@@ -49,6 +49,8 @@ export function MfaSourceSection({
 }) {
   const [source, setSource] = useState<Login['mfa_source']>(login.mfa_source ?? 'none');
   const [channelId, setChannelId] = useState(login.mfa_slack_channel_id ?? '');
+  const [mailbox, setMailbox] = useState(login.mfa_gmail_mailbox ?? '');
+  const [gmailQuery, setGmailQuery] = useState(login.mfa_gmail_query ?? '');
   const [pattern, setPattern] = useState(login.mfa_code_regex ?? '');
   const [timeout, setTimeoutSecs] = useState(String(login.mfa_timeout_seconds ?? 60));
 
@@ -62,7 +64,7 @@ export function MfaSourceSection({
   // The enable dialog's own pending choice, kept apart from `source` so
   // cancelling leaves nothing changed.
   const [enableOpen, setEnableOpen] = useState(false);
-  const [pendingMethod, setPendingMethod] = useState<'totp' | 'slack'>('totp');
+  const [pendingMethod, setPendingMethod] = useState<'totp' | 'slack' | 'gmail'>('totp');
   const [disableOpen, setDisableOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
 
@@ -71,9 +73,14 @@ export function MfaSourceSection({
   useEffect(() => {
     setSource(login.mfa_source ?? 'none');
     setChannelId(login.mfa_slack_channel_id ?? '');
+    setMailbox(login.mfa_gmail_mailbox ?? '');
+    setGmailQuery(login.mfa_gmail_query ?? '');
     setPattern(login.mfa_code_regex ?? '');
     setTimeoutSecs(String(login.mfa_timeout_seconds ?? 60));
-  }, [login.mfa_source, login.mfa_slack_channel_id, login.mfa_code_regex, login.mfa_timeout_seconds]);
+  }, [
+    login.mfa_source, login.mfa_slack_channel_id, login.mfa_gmail_mailbox,
+    login.mfa_gmail_query, login.mfa_code_regex, login.mfa_timeout_seconds,
+  ]);
 
   const loadChannels = useCallback(async () => {
     // Guard on 'loading' only, NOT on 'idle'.
@@ -97,21 +104,42 @@ export function MfaSourceSection({
   const dirty =
     source !== (login.mfa_source ?? 'none')
     || channelId !== (login.mfa_slack_channel_id ?? '')
+    || mailbox !== (login.mfa_gmail_mailbox ?? '')
+    || gmailQuery !== (login.mfa_gmail_query ?? '')
     || pattern !== (login.mfa_code_regex ?? '')
     || timeout !== String(login.mfa_timeout_seconds ?? 60);
 
+  /**
+   * Slack and Gmail are the same SHAPE of source: a message arrives after the
+   * credentials are submitted, a pattern pulls the code out of it, and the login
+   * waits for it. So the pattern field, the timeout, the Test button and the
+   * Save button are shared, and only the "where do we look" fields differ.
+   *
+   * Branching every one of those on the source name instead would have meant
+   * two copies of the pattern guidance to keep in step — and that guidance is
+   * the part operators actually get wrong.
+   */
+  const isMessageSource = source === 'slack' || source === 'gmail';
+
   const slackIncomplete = source === 'slack' && (!channelId.trim() || !pattern.trim());
+  const gmailIncomplete = source === 'gmail'
+    && (!mailbox.trim() || !gmailQuery.trim() || !pattern.trim());
+  const incomplete = slackIncomplete || gmailIncomplete;
 
   const handleSave = async () => {
-    if (!orgId || slackIncomplete) return;
+    if (!orgId || incomplete) return;
     setSaving(true);
     try {
       await updateLogin(orgId, login.id, {
         mfa_source: source,
-        // Switching away from Slack clears the config rather than leaving a
-        // stale channel and pattern behind to confuse the next reader.
+        // Only the ACTIVE source's fields are kept; the other's are cleared
+        // rather than left behind to look configured while being inert. That
+        // also keeps the DB completeness CHECK satisfiable when switching
+        // between the two message sources.
         mfa_slack_channel_id: source === 'slack' ? channelId.trim() : null,
-        mfa_code_regex: source === 'slack' ? pattern.trim() : null,
+        mfa_gmail_mailbox:    source === 'gmail' ? mailbox.trim() : null,
+        mfa_gmail_query:      source === 'gmail' ? gmailQuery.trim() : null,
+        mfa_code_regex:       isMessageSource ? pattern.trim() : null,
         mfa_timeout_seconds: Number(timeout) || 60,
       });
       toast.success('Two-factor method saved');
@@ -131,10 +159,18 @@ export function MfaSourceSection({
     try {
       // Sends the DRAFT values, not the stored ones, so a pattern can be proven
       // before it is committed.
-      setTestResult(await testLoginMfaPattern(orgId, login.id, {
-        channelId: channelId.trim() || null,
-        pattern: pattern.trim() || null,
-      }));
+      setTestResult(
+        source === 'gmail'
+          ? await testLoginGmailMfaPattern(orgId, login.id, {
+              mailbox: mailbox.trim() || null,
+              query: gmailQuery.trim() || null,
+              pattern: pattern.trim() || null,
+            })
+          : await testLoginMfaPattern(orgId, login.id, {
+              channelId: channelId.trim() || null,
+              pattern: pattern.trim() || null,
+            })
+      );
     } finally {
       setTesting(false);
     }
@@ -163,6 +199,8 @@ export function MfaSourceSection({
         await updateLogin(orgId, login.id, {
           mfa_source: 'totp',
           mfa_slack_channel_id: null,
+          mfa_gmail_mailbox: null,
+          mfa_gmail_query: null,
           mfa_code_regex: null,
         });
         onSaved?.();
@@ -190,10 +228,14 @@ export function MfaSourceSection({
       await updateLogin(orgId, login.id, {
         mfa_source: 'none',
         mfa_slack_channel_id: null,
+        mfa_gmail_mailbox: null,
+        mfa_gmail_query: null,
         mfa_code_regex: null,
       });
       setSource('none');
       setChannelId('');
+      setMailbox('');
+      setGmailQuery('');
       setPattern('');
       setDisableOpen(false);
       toast.success('Two-factor disabled');
@@ -277,20 +319,24 @@ export function MfaSourceSection({
         <div className="flex items-center gap-2 text-xs">
           <span className="text-muted-foreground">Method:</span>
           <span className="font-medium">
-            {source === 'totp' ? 'Authenticator app (TOTP)' : 'Code posted to a Slack channel'}
+            {source === 'totp'  ? 'Authenticator app (TOTP)'
+             : source === 'gmail' ? 'Code emailed to a mailbox'
+             : 'Code posted to a Slack channel'}
           </span>
           <button
             type="button"
             className="text-brand hover:underline"
-            onClick={() => { setPendingMethod(source === 'slack' ? 'slack' : 'totp'); setEnableOpen(true); }}
+            onClick={() => { setPendingMethod(source); setEnableOpen(true); }}
           >
             Change
           </button>
         </div>
       )}
 
-      {source === 'slack' && (
+      {isMessageSource && (
         <div className="pl-3 space-y-3">
+        {source === 'slack' && (
+          <>
           {/* Stated once, at the point of decision. A channel of codes is a
               shared secret store with searchable history — worth knowing before
               wiring it up, not after. */}
@@ -337,6 +383,55 @@ export function MfaSourceSection({
             </p>
           </Field>
 
+          </>
+        )}
+
+        {source === 'gmail' && (
+          <>
+          {/* Same warning as Slack, sharpened for the difference that matters:
+              a channel is scoped to itself, a mailbox is not. The query narrows
+              what is FETCHED, it is not a permission boundary — the delegation
+              grants the whole inbox. */}
+          <p className="text-[10px] text-amber-600 dark:text-amber-500 leading-snug">
+            This grants read access to the whole mailbox, not just the matching mail —
+            the search below narrows what is fetched, it does not limit what could be.
+            Point it at a dedicated alias that receives nothing else, never a person&apos;s
+            inbox.
+          </p>
+
+          <Field
+            label="Mailbox"
+            required
+            info="The address whose inbox receives the codes. Gmail signs in AS this mailbox, so it must be a real account in your Google Workspace with domain-wide delegation granted to the service account."
+          >
+            <Input
+              value={mailbox}
+              onChange={(e) => setMailbox(e.target.value)}
+              placeholder="2fa-codes@yourcompany.com"
+              className={cn('font-mono text-xs', CONTROL_W)}
+            />
+          </Field>
+
+          <Field
+            label="Search query"
+            required
+            info={<>Gmail search syntax, the same as the search box in Gmail. This picks the MESSAGE; the pattern below pulls the code out of it.</>}
+          >
+            <Input
+              value={gmailQuery}
+              onChange={(e) => setGmailQuery(e.target.value)}
+              placeholder="from:noreply@vendor.com subject:code"
+              className={cn('font-mono text-xs', CONTROL_W)}
+            />
+            <p className="text-[10px] text-muted-foreground pt-1">
+              Narrow this to the sender that issues codes. Left broad, the newest matching
+              mail wins — which on a busy mailbox may be something else entirely, and the
+              site would only report a bad code.
+            </p>
+          </Field>
+          </>
+        )}
+
           <Field
             label="Code pattern"
             required
@@ -358,7 +453,7 @@ export function MfaSourceSection({
 
           <Field
             label="Wait up to"
-            info="A Slack code does not exist until the site sends it, so the login waits for it to arrive. Give the vendor enough time without stalling a failed login forever."
+            info="The code does not exist until the site sends it, so the login waits for it to arrive. Give the vendor enough time without stalling a failed login forever."
           >
             <div className="flex items-center gap-2">
               <Input
@@ -376,12 +471,16 @@ export function MfaSourceSection({
             <Button
               type="button" variant="outline" size="sm"
               onClick={handleTest}
-              disabled={testing || !channelId.trim() || !pattern.trim()}
+              disabled={
+                testing
+                || !pattern.trim()
+                || (source === 'slack' ? !channelId.trim() : !mailbox.trim() || !gmailQuery.trim())
+              }
             >
               {testing
                 ? <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />
                 : <FlaskConical className="h-3.5 w-3.5 mr-1" />}
-              Test against recent messages
+              {source === 'gmail' ? 'Test against recent mail' : 'Test against recent messages'}
             </Button>
 
             {testResult && (
@@ -404,13 +503,20 @@ export function MfaSourceSection({
                     </p>
                     {testResult.matched === 0 && (
                       <p className="text-[10px] text-muted-foreground">
-                        The channel read fine, so this is the pattern rather than the
-                        connection — or no code has been posted recently.
+                        {source === 'gmail'
+                          ? (testResult.scanned === 0
+                              // Two different failures, and they look identical
+                              // unless the counts are read separately: nothing
+                              // fetched means the QUERY is wrong; fetched but
+                              // unmatched means the PATTERN is.
+                              ? 'The mailbox read fine but the search matched no mail — check the query, not the pattern.'
+                              : 'The search found mail but the pattern matched none of it — check the pattern, not the query.')
+                          : 'The channel read fine, so this is the pattern rather than the connection — or no code has been posted recently.'}
                       </p>
                     )}
                     <ul className="space-y-1 max-h-40 overflow-y-auto">
                       {testResult.messages?.map((m) => (
-                        <li key={m.ts} className="flex items-center gap-2 text-[11px]">
+                        <li key={m.ts ?? m.id} className="flex items-center gap-2 text-[11px]">
                           <span className={cn(
                             'font-mono shrink-0 w-16',
                             m.matched ? 'text-emerald-600 dark:text-emerald-500' : 'text-muted-foreground/50',
@@ -434,16 +540,17 @@ export function MfaSourceSection({
       {/* One save, and only for the Slack fields. The method itself is committed
           by the dialog, and the authenticator secret by its own enrolment
           control — so nothing here duplicates either. */}
-      {source === 'slack' && (dirty || slackIncomplete) && (
+      {isMessageSource && (dirty || incomplete) && (
         <div className="flex items-center gap-2">
-          <Button type="button" size="sm" onClick={handleSave} disabled={saving || slackIncomplete}>
+          <Button type="button" size="sm" onClick={handleSave} disabled={saving || incomplete}>
             {saving && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
-            Save Slack settings
+            {source === 'gmail' ? 'Save Gmail settings' : 'Save Slack settings'}
           </Button>
-          {slackIncomplete && (
+          {incomplete && (
             <span className="text-[10px] text-muted-foreground">
-              Pick a channel and a pattern first — a half-configured source fills the
-              2FA field blank.
+              {source === 'gmail'
+                ? 'Fill the mailbox, query and pattern first — a half-configured source fills the 2FA field blank.'
+                : 'Pick a channel and a pattern first — a half-configured source fills the 2FA field blank.'}
             </span>
           )}
         </div>
@@ -525,20 +632,27 @@ export function MfaSourceSection({
             </DialogDescription>
           </DialogHeader>
 
-          <Select value={pendingMethod} onValueChange={(v) => setPendingMethod(v as 'totp' | 'slack')}>
+          <Select value={pendingMethod} onValueChange={(v) => setPendingMethod(v as 'totp' | 'slack' | 'gmail')}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="totp">Authenticator app (TOTP)</SelectItem>
+              <SelectItem value="gmail">Code emailed to a mailbox</SelectItem>
               <SelectItem value="slack">Code posted to a Slack channel</SelectItem>
             </SelectContent>
           </Select>
 
           {pendingMethod === 'totp' ? (
             <p className="text-xs text-muted-foreground">
-              You will paste or scan the site&apos;s setup key next. Stronger than the Slack
-              route, because the secret stays in the secret store.
+              You will paste or scan the site&apos;s setup key next. Stronger than either
+              message route, because the secret stays in the secret store.
+            </p>
+          ) : pendingMethod === 'gmail' ? (
+            <p className="text-xs text-amber-600 dark:text-amber-500">
+              For sites that will not issue a setup key and email the code instead. Reads a
+              mailbox you name — use a dedicated alias, since this grants access to
+              everything in that inbox.
             </p>
           ) : (
             <p className="text-xs text-amber-600 dark:text-amber-500">
@@ -567,7 +681,8 @@ export function MfaSourceSection({
             <DialogTitle>Turn off two-factor?</DialogTitle>
             <DialogDescription>
               Any login script that fills a 2FA field will start failing, and the stored
-              channel and pattern are cleared. An enrolled authenticator secret is kept.
+              channel, mailbox, query and pattern are cleared. An enrolled authenticator
+              secret is kept.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
