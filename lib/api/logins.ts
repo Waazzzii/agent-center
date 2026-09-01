@@ -494,6 +494,23 @@ export async function listLoginRuns(
   return res.data;
 }
 
+/**
+ * What Slack actually returned, so an EMPTY list can explain itself.
+ *
+ * An empty picker has two causes that look identical: the token could not SEE
+ * private channels (no groups:read — Slack omits them silently rather than
+ * erroring), or the bot is not a member of any channel it did see. Only the
+ * counts separate them.
+ */
+export type SlackChannelMeta = {
+  /** Rows Slack returned, before filtering. */
+  returned: number;
+  /** How many were private. Zero here points at the missing scope. */
+  private: number;
+  /** Survivors — channels the bot can actually read. */
+  kept: number;
+};
+
 export type SlackChannelOption = {
   id: string; name: string; is_private: boolean; is_member: boolean | null;
 };
@@ -514,15 +531,24 @@ export type SlackChannelOption = {
  */
 export async function listSlackChannels(
   orgId: string,
-): Promise<{ channels: SlackChannelOption[]; error: string | null }> {
+): Promise<{ channels: SlackChannelOption[]; error: string | null; meta: SlackChannelMeta | null }> {
   try {
-    const res = await agentClient.get<{ channels?: SlackChannelOption[]; error?: string }>(
+    const res = await agentClient.get<{
+      channels?: SlackChannelOption[];
+      error?: string;
+      meta?: SlackChannelMeta;
+    }>(
       `/api/admin/${orgId}/slack/channels`,
     );
-    return { channels: res.data.channels ?? [], error: res.data.error ?? null };
+    return {
+      channels: res.data.channels ?? [],
+      error: res.data.error ?? null,
+      meta: res.data.meta ?? null,
+    };
   } catch (err: any) {
     return {
       channels: [],
+      meta: null,
       error: err?.response?.data?.error ?? err?.message ?? 'Could not reach the server',
     };
   }

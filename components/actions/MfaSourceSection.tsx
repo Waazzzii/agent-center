@@ -12,7 +12,7 @@ import {
 import { toast } from 'sonner';
 import {
   updateLogin, testLoginMfaPattern, testLoginGmailMfaPattern, listSlackChannels,
-  type Login, type MfaTestResult,
+  type Login, type MfaTestResult, type SlackChannelMeta,
 } from '@/lib/api/logins';
 import { Field, CONTROL_W } from '@/components/actions/login-fields';
 import { cn } from '@/lib/utils';
@@ -57,6 +57,9 @@ export function MfaSourceSection({
   const [channels, setChannels] = useState<{ id: string; name: string; is_private: boolean; is_member: boolean | null }[]>([]);
   const [channelState, setChannelState] = useState<'idle' | 'loading' | 'loaded'>('idle');
   const [channelError, setChannelError] = useState<string | null>(null);
+  // What Slack returned before filtering — the only thing that distinguishes
+  // "no channels exist" from "they exist but none are readable".
+  const [channelMeta, setChannelMeta] = useState<SlackChannelMeta | null>(null);
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState<MfaTestResult | null>(null);
@@ -93,9 +96,10 @@ export function MfaSourceSection({
     // available" indefinitely, long after the underlying problem was fixed.
     if (!orgId || channelState === 'loading') return;
     setChannelState('loading');
-    const { channels: list, error } = await listSlackChannels(orgId);
+    const { channels: list, error, meta } = await listSlackChannels(orgId);
     setChannels(list);
     setChannelError(error);
+    setChannelMeta(meta);
     // A failure returns to 'idle' so the next open tries again; only a clean
     // result is 'loaded'.
     setChannelState(error ? 'idle' : 'loaded');
@@ -360,7 +364,7 @@ export function MfaSourceSection({
           <Field
             label="Channel ID"
             required
-            info="Where the codes arrive. Paste the id, or use Select to look it up — only channels the Slack bot has been added to can be read."
+            info="Where the codes arrive. Paste the id, or use Select to look it up — the picker lists private channels the Slack bot has been added to, since a channel carrying 2FA codes should not be public. A public channel id still works if you paste it."
           >
             <div className={cn('flex items-center gap-2', CONTROL_W)}>
               <Input
@@ -586,12 +590,34 @@ export function MfaSourceSection({
           ) : channels.length === 0 ? (
             <div className="space-y-2 py-4">
               <p className="text-sm">No channels available.</p>
-              <p className="text-xs text-muted-foreground">
-                Slack returned no channels the bot belongs to. Invite it to the channel the
-                codes arrive in and try again — a private channel also needs the token to
-                carry <code className="font-mono">groups:read</code>. You can paste the id
-                directly instead.
-              </p>
+              {/* Name the actual cause instead of listing every possibility.
+                  Slack answers 200 with a full list and we filter it to the
+                  channels the bot can really read — so "returned 14, kept 0"
+                  and "returned 0" are completely different problems that
+                  produced an identical empty box. The counts decide it. */}
+              {channelMeta && channelMeta.returned > 0 ? (
+                channelMeta.private === 0 ? (
+                  <p className="text-xs text-muted-foreground">
+                    Slack returned {channelMeta.returned} channel(s), none of them private. Only
+                    private channels are offered here, and Slack returns one only when the bot
+                    belongs to it AND the token carries{' '}
+                    <code className="font-mono">groups:read</code> — it omits them silently
+                    rather than refusing, so that scope is the first thing to check.
+                  </p>
+                ) : (
+                  <p className="text-xs text-muted-foreground">
+                    Slack returned {channelMeta.private} private channel(s) but none could be
+                    offered. That should not happen — paste the id directly and report it.
+                  </p>
+                )
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  Slack returned no channels at all. Invite the bot to the private channel the
+                  codes arrive in, and check the token carries{' '}
+                  <code className="font-mono">groups:read</code>. You can paste the id directly
+                  instead.
+                </p>
+              )}
             </div>
           ) : (
             <ul className="max-h-72 overflow-y-auto rounded-md border divide-y">
