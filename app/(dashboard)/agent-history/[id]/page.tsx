@@ -27,7 +27,7 @@ import { toast } from 'sonner';
 import {
   Loader2, Zap, LogIn, Play, GitBranch, PauseCircle,
   AlertCircle, Copy, Hash, Bot, History, ChevronRight, ChevronLeft,
-  ImageIcon, ExternalLink,
+  ImageIcon, ExternalLink, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getActionBatchItems, getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
@@ -136,6 +136,29 @@ function SBadge({ status }: { status: string }) {
  * Plain `error_message` values fall back to the original red banner.
  */
 function ActionMessageBanner({ message }: { message: string }) {
+  // COLLAPSED TO THE FIRST LINE, expandable.
+  //
+  // A Playwright failure carries its whole call log in `message` — the retry
+  // ladder, every "waiting for element to be visible", the full element markup.
+  // Forty-odd lines, rendered in full, filled the viewport and pushed the
+  // Input/Output/Logs tabs off screen on exactly the runs an operator opens
+  // this page to read.
+  //
+  // The first line is the diagnosis and the rest is evidence, which is why the
+  // split is at the first newline rather than a character count. Since
+  // annotateStepFailure now prefixes agent-run failures with
+  // `Step N of M — "name" (action):`, that one line answers both "what broke"
+  // and "where" without expanding anything.
+  //
+  // The breadcrumb variants (gate / cascade / skipped / tolerated) are almost
+  // always single-line, so they get no toggle and look exactly as before.
+  const [expanded, setExpanded] = useState(false);
+
+  // Collapse again when drilling into a different action. The component keeps
+  // its position in the tree, so without this an expanded trace stays expanded
+  // over the next action's message.
+  useEffect(() => { setExpanded(false); }, [message]);
+
   const isSkipped =
     message.startsWith('Conditional gate:') ||
     message.startsWith('Cascade:') ||
@@ -143,26 +166,85 @@ function ActionMessageBanner({ message }: { message: string }) {
     message.startsWith('Partition:');
   const isTolerated = message.startsWith('Tolerated ');
 
-  if (isSkipped) {
-    return (
-      <div className="rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40 p-3 flex items-start gap-2">
-        <PauseCircle className="h-4 w-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />
-        <pre className="text-xs text-slate-700 dark:text-slate-300 whitespace-pre-wrap break-words font-mono leading-relaxed">{message}</pre>
-      </div>
-    );
-  }
-  if (isTolerated) {
-    return (
-      <div className="rounded-lg border border-yellow-200 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-950/20 p-3 flex items-start gap-2">
-        <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />
-        <pre className="text-xs text-yellow-700 dark:text-yellow-400 whitespace-pre-wrap break-words font-mono leading-relaxed">{message}</pre>
-      </div>
-    );
-  }
+  const tone = isSkipped
+    ? {
+        box: 'border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40',
+        text: 'text-slate-700 dark:text-slate-300',
+        icon: <PauseCircle className="h-4 w-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />,
+      }
+    : isTolerated
+      ? {
+          box: 'border-yellow-200 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-950/20',
+          text: 'text-yellow-700 dark:text-yellow-400',
+          icon: <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />,
+        }
+      : {
+          box: 'border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20',
+          text: 'text-red-700 dark:text-red-400',
+          icon: <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />,
+        };
+
+  const lines = message.split('\n');
+  const head = lines[0];
+  const rest = lines.slice(1).join('\n').replace(/\s+$/, '');
+  const hiddenCount = rest ? lines.length - 1 : 0;
+
   return (
-    <div className="rounded-lg border border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20 p-3 flex items-start gap-2">
-      <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />
-      <pre className="text-xs text-red-700 dark:text-red-400 whitespace-pre-wrap break-words font-mono leading-relaxed">{message}</pre>
+    <div className={cn('rounded-lg border p-3 flex items-start gap-2', tone.box)}>
+      {tone.icon}
+      {/* min-w-0 so a long unbroken selector wraps instead of stretching the
+          flex row past the card. */}
+      <div className="min-w-0 flex-1">
+        <pre className={cn('text-xs whitespace-pre-wrap break-words font-mono leading-relaxed', tone.text)}>
+          {head}
+        </pre>
+
+        {hiddenCount > 0 && expanded && (
+          // Capped and scrollable: expanding a 200-line trace should not put
+          // the page back where it started.
+          <pre className={cn(
+            'mt-2 text-xs whitespace-pre-wrap break-words font-mono leading-relaxed',
+            'max-h-80 overflow-auto opacity-90',
+            tone.text,
+          )}>
+            {rest}
+          </pre>
+        )}
+
+        {hiddenCount > 0 && (
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className={cn(
+              'mt-1.5 inline-flex items-center gap-1 text-[11px] font-medium',
+              'underline decoration-dotted underline-offset-2 hover:no-underline',
+              tone.text,
+            )}
+          >
+            {expanded ? (
+              <><ChevronUp className="h-3 w-3" /> Show less</>
+            ) : (
+              <><ChevronDown className="h-3 w-3" /> Show {hiddenCount} more line{hiddenCount === 1 ? '' : 's'}</>
+            )}
+          </button>
+        )}
+      </div>
+
+      {/* The full text, always copyable — the collapsed view is for reading,
+          but pasting a trace into a ticket must not require expanding it. */}
+      <button
+        type="button"
+        onClick={() => {
+          navigator.clipboard.writeText(message).then(
+            () => toast.success('Message copied'),
+            () => toast.error('Could not copy'),
+          );
+        }}
+        title="Copy the full message"
+        className={cn('shrink-0 mt-0.5 opacity-50 hover:opacity-100 transition-opacity', tone.text)}
+      >
+        <Copy className="h-3.5 w-3.5" />
+      </button>
     </div>
   );
 }
@@ -954,10 +1036,20 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
     }
   }, [isBatchParent, batchShots, batchShotsLoading, orgId, executionId, action.id]);
 
+  // No error banner here.
+  //
+  // ActionLogs has exactly one call site, and the page renders
+  // ActionMessageBanner from the SAME error_message a few lines above it — so
+  // this was an unconditional duplicate: the identical string, in the identical
+  // component, twice on one screen. On a Playwright failure that is two copies
+  // of a forty-line call log before you reach the tabs, which pushes the tab
+  // strip off screen on exactly the failures you opened the page to read.
+  //
+  // The surviving copy is the page-level one, directly under the summary cards,
+  // because "why did this action fail" belongs with the action's own summary
+  // rather than inside the payload viewer.
   return (
     <div className="space-y-3">
-      {action.error_message && <ActionMessageBanner message={action.error_message} />}
-
       <Tabs defaultValue="input">
         <TabsList variant="line">
           <TabsTrigger value="input">Input</TabsTrigger>
@@ -1272,12 +1364,15 @@ export default function ExecutionDetailPage() {
         <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">No actions recorded.</CardContent></Card>
       )}
 
-      {/* Regular action → show logs (sub_agent actions open modal instead, don't drill here) */}
+      {/* Regular action → input/output/logs/screenshot (sub_agent actions open
+          modal instead, don't drill here).
+
+          Deliberately unheaded. It used to carry an <h2>Logs</h2>, which named
+          the whole panel after one of its four tabs — and the panel opens on
+          Input, so the heading disagreed with what was on screen. The tab strip
+          is its own label. */}
       {isAction && !isSubAgent && (
-        <div>
-          <h2 className="text-sm font-semibold mb-3">Logs</h2>
-          <ActionLogs action={current} orgId={selectedOrgId!} executionId={id} />
-        </div>
+        <ActionLogs action={current} orgId={selectedOrgId!} executionId={id} />
       )}
 
       {/* Sub-agent picker modal */}
