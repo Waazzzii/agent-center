@@ -263,13 +263,20 @@ export default function AgentsPage() {
                   key: 'name',
                   label: 'Name',
                   sortable: true,
-                  // Description shows on hover via native title attribute — we
-                  // dropped the standalone Description column to reclaim
-                  // horizontal space for the more useful Status/Created/Actions.
+                  // NO width — with table-fixed, the unsized columns split what
+                  // the sized ones leave, so constraining the others is what
+                  // gives the name room. It is the only column whose content is
+                  // unbounded and the only one people scan by, so it gets the
+                  // surplus.
                   render: (a) => (
                     <span
-                      className="font-medium"
-                      title={a.description || undefined}
+                      className="block truncate font-medium"
+                      // Name FIRST, then the description under it. The title
+                      // used to carry the description alone, so hovering a
+                      // clipped name — the one reason you would hover it —
+                      // answered a question you had not asked and left the
+                      // name still unread.
+                      title={a.description ? `${a.name}\n\n${a.description}` : a.name}
                     >
                       {a.name}
                     </span>
@@ -279,6 +286,11 @@ export default function AgentsPage() {
                   key: 'status',
                   label: 'Status',
                   sortable: true,
+                  // Sized to its content: the widest value is one "Inactive"
+                  // badge. It was sharing the leftover space equally with the
+                  // name, which is how a two-word column ended up wider than
+                  // the one carrying the agent's identity.
+                  thClassName: 'w-24',
                   render: (a) => a.is_active
                     ? <Badge variant="success">Active</Badge>
                     : <Badge variant="neutral">Inactive</Badge>,
@@ -287,11 +299,15 @@ export default function AgentsPage() {
                   key: 'created',
                   label: 'Created',
                   sortable: true,
+                  // A locale date is ~10 characters and never grows.
+                  thClassName: 'w-28',
+                  tdClassName: 'whitespace-nowrap',
                   render: (a) => new Date(a.created_at).toLocaleDateString(),
                 },
                 {
                   key: 'client',
                   label: 'Client',
+                  thClassName: 'w-40',
                   render: (a) => a.client_id
                     ? (
                       <Badge variant="outline" className="gap-1 border-brand/40 text-brand">
@@ -306,6 +322,7 @@ export default function AgentsPage() {
                   // (rows can carry several tags, so a-z has no meaning).
                   key: 'tags',
                   label: 'Tags',
+                  thClassName: 'w-48',
                   render: (a) => <TagList tags={a.tags} />,
                 },
                 {
