@@ -14,7 +14,7 @@ import {
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import {
-  CheckCircle2, ChevronRight, ChevronLeft, Play, AlertCircle, AlertTriangle, Loader2,
+  CheckCircle2, ChevronRight, ChevronLeft, Play, AlertCircle, Loader2,
   CircleDot, X, XCircle, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
   Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
   Scissors, ShieldAlert, Undo2, GitBranch,
@@ -177,10 +177,16 @@ function stepLabel(step: RecordedStep): string {
  *     moment; edit the step, or let the site change under it, and the dot kept
  *     asserting the old verdict with no way to tell it was stale.
  *
- * The two indicators that survive both answer questions with consequences:
- * requires_approval (replay will PAUSE here) and neverVerifiedLive (this step
- * has more than one candidate selector and running it will pick one). Those are
- * facts about what will happen, not a grade.
+ * The per-step "unverified" warning went the same way, for reason 1 above. It
+ * flagged a step that had never run against a live page, which was true but
+ * inert: nothing keyed off it, and the editor no longer resolves selectors by
+ * running steps — an authored step arrives with its selector already committed,
+ * and a bad one is fixed by refining through the MCP. So it warned about a
+ * condition the operator could neither act on nor clear from this screen.
+ *
+ * The one indicator that survives answers a question with a consequence:
+ * requires_approval (replay will PAUSE here). That is a fact about what will
+ * happen, not a grade.
  */
 
 export function RunScriptModal({
@@ -3085,26 +3091,6 @@ export function RunScriptModal({
     : (stepRunState?.totalSteps ?? script?.steps?.length ?? 0);
 
 
-  // Has this step ever run successfully against a live page?
-  //
-  // _tested is set by the worker after a successful action, so this clears the
-  // moment a step works — including for a hand- or MCP-authored step, which is
-  // the case that matters most: it was typed, never executed, and its selector
-  // has been checked for SHAPE only.
-  //
-  // The old copy called this "multiple selector candidates — run each step to
-  // auto-select the best selector", which described the recorder era and was
-  // simply untrue of an authored step with exactly one selector and nothing to
-  // choose between. The signal was right and the label was wrong, which is the
-  // worst combination: it reads as noise, so it gets ignored, and the one thing
-  // it reliably catches — a step nobody has ever run — goes unnoticed.
-  const neverVerifiedLive = (s: RecordedStep) => {
-    if (s.action === 'navigate' || s.action === 'press_key') return false;
-    const sel = s.selector ?? s.waitFor?.selector;
-    if (!sel || sel === 'body') return false;
-    return !s._tested;
-  };
-
   const portal = createPortal(
     <div className="fixed z-50 inset-0 md:left-64 bg-background flex flex-col">
 
@@ -3518,16 +3504,6 @@ export function RunScriptModal({
                         Undo cleanup
                       </button>
                     )}
-                    {(() => {
-                      const unresolvedCount = stepsToShow.filter(neverVerifiedLive).length;
-                      if (unresolvedCount === 0) return null;
-                      return (
-                        <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400" title={`${unresolvedCount} step${unresolvedCount !== 1 ? 's' : ''} that ${unresolvedCount === 1 ? 'has' : 'have'} never run against a live page. Their selectors are checked for shape only until then.`}>
-                          <AlertTriangle className="h-3 w-3" />
-                          {unresolvedCount} unverified
-                        </span>
-                      );
-                    })()}
                   </div>
 
                 </div>
@@ -3825,11 +3801,8 @@ export function RunScriptModal({
                           </span>
                         )}
                         {/* Actions: edit / duplicate / delete collapsed into an
-                            always-visible ⋮ menu + selector warning (persistent). */}
+                            always-visible ⋮ menu. */}
                         <div className="ml-auto shrink-0 flex items-center gap-1">
-                          {neverVerifiedLive(s) && (
-                            <span title="Never run against a live page — its selector has only been checked for shape"><AlertTriangle className="h-3 w-3 text-amber-500" /></span>
-                          )}
                           <RowActionsMenu
                             title="Step actions"
                             triggerClassName="h-6 w-6 p-0"
