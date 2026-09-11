@@ -61,3 +61,33 @@ export async function getAgentCapacity(orgId: string): Promise<AgentCapacity> {
   );
   return response.data;
 }
+
+/**
+ * One capacity-blockage window: opened on the first refused browser
+ * allocation, extended while refusals continue, closed by the next
+ * successful allocation. ongoing = blocked right now.
+ */
+export interface CapacityEvent {
+  id: string;
+  kind: 'at_capacity' | 'no_workers';
+  reason: string | null;
+  refusal_count: number;
+  started_at: string;
+  last_seen_at: string;
+  ended_at: string | null;
+  ongoing: boolean;
+}
+
+export async function getCapacityEvents(
+  orgId: string,
+  range?: { from?: string; to?: string }
+): Promise<CapacityEvent[]> {
+  const params = new URLSearchParams();
+  if (range?.from) params.set('from', range.from);
+  if (range?.to) params.set('to', range.to);
+  const qs = params.toString();
+  const response = await apiClient.get<{ events: CapacityEvent[] }>(
+    `/admin/organizations/${orgId}/ai-agent/capacity-events${qs ? `?${qs}` : ''}`
+  );
+  return response.data.events ?? [];
+}

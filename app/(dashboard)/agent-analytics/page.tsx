@@ -19,7 +19,7 @@ import {
   type ActionTypeStats,
   type FailureHotspot,
 } from '@/lib/api/agents';
-import { getAgentCapacity, type AgentCapacity, type CapacityWorker } from '@/lib/api/ai-agent';
+import { getAgentCapacity, getCapacityEvents, type AgentCapacity, type CapacityWorker, type CapacityEvent } from '@/lib/api/ai-agent';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -98,6 +98,7 @@ export default function AnalyticsPage() {
   const [customTo, setCustomTo] = useState('');
   const [data, setData] = useState<ExecutionAnalytics | null>(null);
   const [capacity, setCapacity] = useState<AgentCapacity | null>(null);
+  const [capacityEvents, setCapacityEvents] = useState<CapacityEvent[]>([]);
   const [loading, setLoading] = useState(true);
 
   const isCustom = ANALYTICS_RANGES[rangeIdx]?.label === 'Custom';
@@ -116,16 +117,16 @@ export default function AnalyticsPage() {
     if (!selectedOrgId || !range) return;
     setLoading(true);
     try {
-      const [analytics, cap] = await Promise.all([
-        getExecutionAnalytics(selectedOrgId, {
-          from: new Date(range.from + 'T00:00:00').toISOString(),
-          to:   new Date(range.to + 'T23:59:59').toISOString(),
-          compare: true,
-        }),
+      const fromIso = new Date(range.from + 'T00:00:00').toISOString();
+      const toIso   = new Date(range.to + 'T23:59:59').toISOString();
+      const [analytics, cap, events] = await Promise.all([
+        getExecutionAnalytics(selectedOrgId, { from: fromIso, to: toIso, compare: true }),
         getAgentCapacity(selectedOrgId).catch(() => null),
+        getCapacityEvents(selectedOrgId, { from: fromIso, to: toIso }).catch(() => []),
       ]);
       setData(analytics);
       setCapacity(cap);
+      setCapacityEvents(events);
     } catch {
       toast.error('Failed to load analytics');
     } finally {
@@ -185,6 +186,9 @@ export default function AnalyticsPage() {
         <>
           {/* Capacity bars */}
           {capacity && <CapacityCards capacity={capacity} />}
+
+          {/* Availability timeline — capacity blockages / outage windows */}
+          <AvailabilityCard events={capacityEvents} />
 
           {/* Stat cards */}
           <SummaryCards data={data} />
@@ -350,6 +354,104 @@ function InfrastructureCard({ workers }: { workers: CapacityWorker[] }) {
               )}
             </div>
           ))}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── Availability timeline ────────────────────────────────────────
+//
+// Capacity-blockage windows recorded by the coordinator: a window opens on
+// the first browser allocation an org's pods refuse, extends while refusals
+// continue, and closes on the next successful allocation. Ongoing = blocked
+// right now. Collapsed to a single quiet line when the period was clean.
+
+function fmtWindowDuration(ev: CapacityEvent): string {
+  const start = new Date(ev.started_at).getTime();
+  const end   = new Date(ev.ended_at ?? ev.last_seen_at).getTime();
+  const s = Math.max(0, Math.round((end - start) / 1000));
+  if (s < 60)    return `${s}s`;
+  if (s < 3600)  return `${Math.floor(s / 60)}m ${s % 60 ? `${s % 60}s` : ''}`.trim();
+  return `${Math.floor(s / 3600)}h ${Math.round((s % 3600) / 60)}m`;
+}
+
+const EVENT_KIND_META: Record<CapacityEvent['kind'], { label: string; hint: string }> = {
+  at_capacity: {
+    label: 'At capacity',
+    hint:  'Pods were online but refused new browsers (memory/CPU admission gate or slot ceiling). Queued work resumed automatically when the pods cooled down.',
+  },
+  no_workers: {
+    label: 'No pods online',
+    hint:  'No worker pods were registered for your organization — an infrastructure outage (pod crash-loop or failed deploy), not load.',
+  },
+};
+
+function AvailabilityCard({ events }: { events: CapacityEvent[] }) {
+  const ongoing = events.filter((e) => e.ongoing);
+
+  if (events.length === 0) {
+    return (
+      <Card>
+        <CardContent className="py-2.5 px-4 flex items-center gap-2 text-xs text-muted-foreground">
+          <span className="relative flex h-2 w-2"><span className="relative rounded-full h-2 w-2 bg-emerald-500" /></span>
+          <span className="font-medium text-foreground">Availability</span>
+          No capacity blockages in this period — every browser request was placed immediately.
+        </CardContent>
+      </Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardContent className="p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h3 className="text-sm font-semibold flex items-center gap-1.5">
+              <AlertTriangle className={cn('h-4 w-4', ongoing.length > 0 ? 'text-red-500' : 'text-amber-500')} />
+              Availability
+            </h3>
+            <p className="text-xs text-muted-foreground">
+              Windows where browser requests could not be placed — new work queued until capacity recovered
+            </p>
+          </div>
+          <Badge
+            variant="outline"
+            className={cn('text-[10px]', ongoing.length > 0
+              ? 'border-red-400 text-red-500'
+              : 'border-amber-400 text-amber-500')}
+          >
+            {ongoing.length > 0 ? 'Blocked now' : `${events.length} in period`}
+          </Badge>
+        </div>
+        <div className="space-y-1.5">
+          {events.map((ev) => {
+            const meta = EVENT_KIND_META[ev.kind] ?? { label: ev.kind, hint: '' };
+            return (
+              <div key={ev.id} className="flex items-start gap-3 rounded-md border p-2.5" title={meta.hint}>
+                <span className="relative flex h-2 w-2 mt-1.5 shrink-0">
+                  {ev.ongoing && <span className="animate-ping absolute h-full w-full rounded-full bg-red-400 opacity-75" />}
+                  <span className={cn('relative rounded-full h-2 w-2', ev.ongoing ? 'bg-red-500' : 'bg-amber-400')} />
+                </span>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-medium">
+                    {meta.label}
+                    <span className="text-muted-foreground font-normal">
+                      {' '}· {ev.ongoing ? 'ongoing' : fmtWindowDuration(ev)} · {ev.refusal_count} refused request{ev.refusal_count === 1 ? '' : 's'}
+                    </span>
+                  </div>
+                  <div className="text-xs text-muted-foreground truncate">
+                    {new Date(ev.started_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    {' — '}
+                    {ev.ongoing
+                      ? `still blocked (last refusal ${fmtRelative(ev.last_seen_at)})`
+                      : new Date(ev.ended_at!).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}
+                    {ev.reason ? ` · ${ev.reason}` : ''}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </CardContent>
     </Card>
