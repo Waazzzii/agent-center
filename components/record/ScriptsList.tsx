@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
-import { Info, Plus } from 'lucide-react';
+import { Info, Plus, TriangleAlert } from 'lucide-react';
 import { listLogins, type Login } from '@/lib/api/logins';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
@@ -55,6 +55,25 @@ function HeaderHelp({ children }: { children: React.ReactNode }) {
   );
 }
 
+/**
+ * A hover explanation attached to a CELL rather than a column header.
+ *
+ * Same primitive as HeaderHelp, but the trigger is whatever it wraps, so the
+ * explanation sits on the thing that needs explaining instead of on a header
+ * several columns away. Also replaces the native `title` attribute, which gives
+ * an unstyled OS tooltip after a long delay and cannot hold a real sentence.
+ */
+function CellHint({ children, hint }: { children: React.ReactNode; hint: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>{children}</TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs leading-snug font-normal">
+        {hint}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
+
 interface ScriptsListProps {
   orgId: string | null;
   /** Increment this to trigger a list refresh from the outside. */
@@ -88,11 +107,11 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const { tags } = useTags(orgId);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
-  // Login + verify scripts belong to their login profile and are edited from
-  // the login's own page, so they're hidden here by default. The toggle is a
-  // debugging escape hatch — chasing a broken login script with no way to
-  // open it from the list is painful.
-  const [showLoginScripts, setShowLoginScripts] = useState(false);
+  // Login and verify scripts are deliberately NOT listed here. They belong to a
+  // login profile and are edited from it, so mixing them in gave every row a
+  // "Login Required?" column that meant nothing for a third of them. The toggle
+  // that used to reveal them was a filter for a distinction most people reading
+  // this page do not have yet.
   const [tagDialogScript, setTagDialogScript] = useState<BrowserScript | null>(null);
 
   // Sorted + filtered view. Search is a substring match against name OR
@@ -170,7 +189,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
         tagMatch,
         // Login + login-check scripts belong to their login profile and are
         // edited from that login's page. Undefined = every kind (the toggle).
-        kinds: showLoginScripts ? undefined : ['regular'],
+        kinds: ['regular'],
       });
       setScripts(data.scripts ?? []);
     } catch (err: any) {
@@ -190,7 +209,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   useEffect(() => {
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orgId, refreshKey, tagFilter, tagMatch, showLoginScripts]);
+  }, [orgId, refreshKey, tagFilter, tagMatch]);
 
   /**
    * Duplicate a script — copies name + steps + parameters + test_values
@@ -300,20 +319,6 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                 <span className="text-xs text-muted-foreground">{visibleScripts.length} of {scripts.length}</span>
               )}
               <div className="ml-auto flex items-center gap-3">
-                {/* Escape hatch, not a primary filter — deliberately plain
-                    and low-contrast so it doesn't compete with tag filtering. */}
-                <label
-                  className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer select-none"
-                  title="Login and verify scripts belong to a login profile and are normally edited from that login's page."
-                >
-                  <input
-                    type="checkbox"
-                    className="h-3 w-3 accent-current cursor-pointer"
-                    checked={showLoginScripts}
-                    onChange={(e) => setShowLoginScripts(e.target.checked)}
-                  />
-                  Show login scripts
-                </label>
                 <TagFilter tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />
               </div>
             </div>
@@ -331,12 +336,15 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                   key: 'name',
                   label: 'Name',
                   sortable: true,
-                  // Explicit width so it stops absorbing the table's surplus —
-                  // see the Tags column, which now takes that role.
-                  thClassName: 'w-72',
-                  tdClassName: 'w-72',
+                  // Bounded rather than absorbing everything. Script names run
+                  // long and similar ("Create Work Order (Near-term Date)"), so
+                  // they need real room — but left width-less this column took
+                  // the entire surplus and on a wide screen that is mostly empty
+                  // space. Tune this number, not the other columns.
+                  thClassName: 'w-96',
+                  tdClassName: 'w-96',
                   render: (s) => (
-                    <div>
+                    <div className="min-w-0">
                       <span className="font-medium">{s.name}</span>
                       {s.description && (
                         <p className="text-xs text-muted-foreground mt-0.5 truncate">{s.description}</p>
@@ -378,7 +386,7 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                   key: 'requires_login',
                   label: (
                     <span className="inline-flex items-center gap-1">
-                      Login
+                      Login Required?
                       <HeaderHelp>
                         Whether this script needs an authenticated browser. When on, every
                         routine step using this script must choose a login before it will
@@ -389,14 +397,17 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                       </HeaderHelp>
                     </span>
                   ),
-                  thClassName: 'w-44',
-                  tdClassName: 'w-44',
+                  thClassName: 'w-32',
+                  tdClassName: 'w-32',
                   render: (s) => (
                     s.kind !== 'regular' ? (
                       // A login or verify script performs the authentication; it
                       // cannot itself run inside one.
                       <span className="text-xs text-muted-foreground">—</span>
                     ) : (
+                      // The toggle speaks for itself — "Required / Not required"
+                      // beside it only repeated its state in words and cost the
+                      // column most of its width.
                       <div onClick={(e) => e.stopPropagation()} className="flex items-center gap-2">
                         <Switch
                           checked={s.requires_login === true}
@@ -404,9 +415,41 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                           onCheckedChange={(v) => handleToggleRequiresLogin(s, v)}
                           aria-label={`Login required for ${s.name}`}
                         />
-                        <span className="text-xs text-muted-foreground">
-                          {s.requires_login ? 'Required' : 'Not required'}
-                        </span>
+                        {/* Without an indicator this script cannot tell a live
+                            session from a sign-in page — it would run against the
+                            login form and report whatever it found there. Shown
+                            here because the list is where you can see, in one
+                            pass, what is still left to fix. */}
+                        {s.requires_login === true && !s.steps.some((st) => st.login_indicator === true) && (
+                          <CellHint
+                            hint={
+                              <span className="space-y-1">
+                                <span className="block font-medium">No step proves the session</span>
+                                <span className="block">
+                                  A script behind a login needs one step marked as the proof it is
+                                  signed in — something that only succeeds once authenticated, like
+                                  waiting for the app&apos;s own navigation.
+                                </span>
+                                <span className="block">
+                                  That step is what decides whether a login is attempted: if it
+                                  fails, the script signs in and starts again. Without it, the
+                                  script runs against the sign-in page and reports success.
+                                </span>
+                                <span className="block text-muted-foreground">
+                                  Open the script, right-click that step, and choose
+                                  “Proves we are signed in”.
+                                </span>
+                              </span>
+                            }
+                          >
+                            <span
+                              className="inline-flex shrink-0 cursor-help items-center text-amber-600 dark:text-amber-500"
+                              aria-label="No step proves the session"
+                            >
+                              <TriangleAlert className="h-3.5 w-3.5" />
+                            </span>
+                          </CellHint>
+                        )}
                       </div>
                     )
                   ),
@@ -422,10 +465,26 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                       </HeaderHelp>
                     </span>
                   ),
-                  // Deliberately width-LESS: in a table-fixed layout exactly one
-                  // column absorbs the leftover space, and chips benefit from it
-                  // far more than a name does.
+                  // Compact and fixed. Almost every script carries ONE tag, so a
+                  // column sized for several spent most of its width on nothing
+                  // while the name beside it was being truncated. One chip shows,
+                  // the rest collapse into a "+N" whose tooltip lists them all.
+                  thClassName: 'w-36',
+                  tdClassName: 'w-36',
                   render: (s) => (
+                    <CellHint
+                      hint={
+                        <span className="space-y-1">
+                          <span className="block font-medium">
+                            {s.tags?.length ? s.tags.map((t) => t.name).join(', ') : 'No tags yet'}
+                          </span>
+                          <span className="block">
+                            Free-form labels for grouping and filtering — click to edit. Only the
+                            first is shown here; the rest collapse into a count.
+                          </span>
+                        </span>
+                      }
+                    >
                     <div
                       // Editable in place rather than buried in the ⋮ menu. Tagging
                       // is the kind of thing done to several rows in a row, and a
@@ -440,26 +499,26 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                           setTagDialogScript(s);
                         }
                       }}
-                      className="group/tags -mx-1 flex min-h-7 cursor-pointer flex-wrap items-center gap-1 rounded px-1 py-0.5 hover:bg-muted/60 transition-colors"
-                      title="Edit tags"
+                      className="group/tags -mx-1 flex min-h-7 min-w-0 cursor-pointer flex-nowrap items-center gap-1 overflow-hidden rounded px-1 py-0.5 hover:bg-muted/60 transition-colors"
                     >
                       {s.tags?.length ? (
-                        <>
-                          <TagList tags={s.tags} />
-                          {/* Only on hover: a persistent + next to existing chips
-                              reads as another tag. */}
-                          <Plus className="h-3 w-3 shrink-0 text-muted-foreground opacity-0 transition-opacity group-hover/tags:opacity-100" />
-                        </>
+                        // No "+" alongside an existing chip. The whole cell is
+                        // already the button, so the plus added a second thing to
+                        // aim at for the same result — and sitting next to a pill
+                        // it read as another tag rather than an action.
+                        <TagList tags={s.tags} max={1} className="flex-nowrap min-w-0" />
                       ) : (
-                        // Empty cells need a target and an invitation, or the
-                        // whole affordance is invisible on exactly the rows that
-                        // need it.
-                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground/60 group-hover/tags:text-muted-foreground">
-                          <Plus className="h-3 w-3" />
-                          <span className="opacity-0 transition-opacity group-hover/tags:opacity-100">Add tag</span>
+                        // Hover-only, and shaped like a tag so it reads as "a tag
+                        // goes here". Dashed to say it is a placeholder, not one.
+                        // Hidden at rest keeps the column quiet on the many rows
+                        // that will never be tagged.
+                        <span className="inline-flex min-w-0 items-center gap-1 rounded-full border border-dashed border-border px-2 py-0.5 text-xs text-muted-foreground opacity-0 transition-opacity group-hover/tags:opacity-100">
+                          <Plus className="h-3 w-3 shrink-0" />
+                          <span className="truncate">Add tag</span>
                         </span>
                       )}
                     </div>
+                    </CellHint>
                   ),
                 },
                 {

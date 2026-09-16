@@ -18,13 +18,19 @@ export function TagBadge({ tag, onRemove, className, title }: TagBadgeProps) {
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap',
+        // min-w-0 + max-w-full let the pill SHRINK inside a constrained cell.
+        // Without them w-fit wins and the chip simply overflows its column,
+        // which is what a long tag name did to the scripts table.
+        'inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium w-fit min-w-0 max-w-full whitespace-nowrap',
         tagBadgeClass(tag.color),
         className,
       )}
       title={title ?? tag.name}
     >
-      {tag.name}
+      {/* The name is its own element so it can truncate. As a bare text node it
+          becomes an anonymous flex item, which ellipsis does not apply to.
+          Unconstrained — every other use of this badge — it renders unchanged. */}
+      <span className="truncate">{tag.name}</span>
       {onRemove && (
         <button
           type="button"
@@ -65,7 +71,10 @@ export function TagList({ tags, max = 3, empty, className }: TagListProps) {
       ))}
       {overflow > 0 && (
         <span
-          className="inline-flex items-center rounded-full border border-border bg-surface-2 px-1.5 py-0.5 text-xs text-muted-foreground"
+          // shrink-0 so a long first tag truncates rather than squeezing the
+          // overflow count out of view — "there are more" is the one thing the
+          // cell must not lose.
+          className="inline-flex shrink-0 items-center rounded-full border border-border bg-surface-2 px-1.5 py-0.5 text-xs text-muted-foreground"
           title={tags.map((t) => t.name).join(', ')}
         >
           +{overflow}

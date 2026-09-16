@@ -177,6 +177,10 @@ export function StepEditModal({
   // A group has no selector of its own — it has a GUARD and a span — so it
   // gets Branch where every other step gets Selector.
   const isGroup = draft.action === 'group';
+  // Only an ASSERTION can prove a session. Kept in step with the same rule in
+  // step-schema.js — a navigate is excluded because a site that serves its
+  // login form at the requested URL makes it succeed while signed out.
+  const canIndicate = draft.action === 'wait_for' || draft.action === 'extract';
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: 'name', label: 'Name' },
     isGroup ? { id: 'branch', label: 'Branch' } : { id: 'selector', label: 'Selector' },
@@ -307,6 +311,25 @@ export function StepEditModal({
                     disabled={draft.requires_approval === true}
                     onCheckedChange={(v) => setDraft((d) => (d ? { ...d, allow_failure: v } : d))}
                     aria-label="Continue if this step fails"
+                  />
+                </div>
+
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <p className="text-[11px] font-medium">Proves we are signed in</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {canIndicate
+                        ? (draft.requires_approval
+                            ? "Not available on a step that submits. A failed indicator makes the engine sign in and re-run this script from the start, so anything already submitted would be submitted twice."
+                            : "Marks this as the step that proves the session is live. If it fails, the engine signs in and re-runs this script from the start — so it has to come before anything that submits. Only one step per script: setting it here clears it elsewhere.")
+                        : "Only a wait-for or extract step can prove a session, because it has to assert something. A navigate proves nothing — a site that serves its login form at the requested URL succeeds while signed out."}
+                    </p>
+                  </div>
+                  <Switch
+                    checked={draft.login_indicator === true}
+                    disabled={!canIndicate || draft.requires_approval === true}
+                    onCheckedChange={(v) => setDraft((d) => (d ? { ...d, login_indicator: v } : d))}
+                    aria-label="This step proves we are signed in"
                   />
                 </div>
               </div>

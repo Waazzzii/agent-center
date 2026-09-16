@@ -25,9 +25,27 @@ export interface RowAction {
   disabled?: boolean;
 }
 
-export function RowActionsMenu({ actions, title = 'Configure', triggerClassName }: { actions: RowAction[]; title?: string; triggerClassName?: string }) {
+export function RowActionsMenu({
+  actions,
+  title = 'Configure',
+  triggerClassName,
+  open,
+  onOpenChange,
+}: {
+  actions: RowAction[];
+  title?: string;
+  triggerClassName?: string;
+  /**
+   * Controlled open state, so the SAME menu can be raised by something other
+   * than its own trigger — a row's right-click, for instance. Left undefined
+   * the menu manages itself exactly as before, which is what every existing
+   * caller relies on.
+   */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+}) {
   return (
-    <DropdownMenu>
+    <DropdownMenu open={open} onOpenChange={onOpenChange}>
       <DropdownMenuTrigger asChild>
         <Button
           variant="ghost"

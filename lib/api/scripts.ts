@@ -149,6 +149,21 @@ export interface RecordedStep {
    */
   allow_failure?: boolean;
   /**
+   * THE step that proves this script is running against a signed-in session.
+   *
+   * When it fails the engine signs in and RE-RUNS the script from step 0 in
+   * the same browser — each script starts from its own URL, so resuming
+   * mid-way is not possible. That is only safe while nothing has happened
+   * yet, which is why it must come before the first step that submits.
+   *
+   * Exactly one per script. Setting it on a step clears it from any other.
+   * Only wait_for / extract can carry it: the indicator has to ASSERT state,
+   * and a navigate cannot — a site that serves its login form at the
+   * requested URL without redirecting makes the navigate succeed while
+   * signed out.
+   */
+  login_indicator?: boolean;
+  /**
    * Display-only reliability annotation from the AI refine pass. Persisted
    * onto the step so the badge survives a save / reload. Not consumed by the
    * runtime — purely for the editor's at-a-glance review badges.

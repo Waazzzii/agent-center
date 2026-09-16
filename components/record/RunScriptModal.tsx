@@ -17,7 +17,7 @@ import {
   CheckCircle2, ChevronRight, ChevronLeft, Play, AlertCircle, Loader2,
   CircleDot, X, XCircle, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
   Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
-  Scissors, ShieldAlert, Undo2, GitBranch,
+  Scissors, ShieldAlert, Undo2, GitBranch, SkipForward, CircleSlash,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -620,6 +620,14 @@ export function RunScriptModal({
   // Modal lets them rename, tweak the selector, and edit raw JSON in
   // one place — the bottom panel only carries Variables now.
   const [editingStepIndex, setEditingStepIndex] = useState<number | null>(null);
+  // Which row's ⋮ menu is open because the row was RIGHT-CLICKED. Held here
+  // rather than per-row so only one can ever be open, and so right-click and
+  // the ⋮ button raise the identical menu instead of drifting into two lists.
+  const [contextMenuIndex, setContextMenuIndex] = useState<number | null>(null);
+  // Armed by the "no login indicator" banner: the next row click marks that
+  // step. Same arm-then-pick shape as the group range picker, so the list needs
+  // no permanent chrome for something done once per script.
+  const [pickingIndicator, setPickingIndicator] = useState(false);
 
   // ── Current step editor resize ────────────────────────────────
   const [stepEditorHeight, setStepEditorHeight] = useState(200);
@@ -2652,6 +2660,105 @@ export function RunScriptModal({
     }
   };
 
+  /**
+   * Write one edited step back — state, worker, and the DB row.
+   *
+   * Extracted from the edit modal's onSave so the row menu's one-click toggles
+   * go through the SAME path. A second copy would drift, and the half that
+   * drifts is always the persist: an edit that updates the list but never
+   * reaches Postgres looks completely correct until the tab is reloaded.
+   */
+  const applyStepEdit = async (idx: number, updated: RecordedStep) => {
+    // Computed once as a plain variable — used by the React update, the worker
+    // sync AND the DB write. setStepRunState's updater must stay pure (React
+    // may run it twice or skip it), so nothing can be captured out of it.
+    const newSteps = [...(stepRunState?.steps ?? [])];
+    newSteps[idx] = updated;
+    setStepRunState((s) => {
+      if (!s) return s;
+      const merged = [...s.steps];
+      merged[idx] = updated;
+      return { ...s, steps: merged, step: idx === s.currentIndex ? updated : s.step };
+    });
+    setHasChanges(true);
+    if (!orgId) return;
+    const targetScriptId = script?.id ?? tempScriptId ?? null;
+    try {
+      if (runId) await syncStepRunSteps(orgId, runId, newSteps);
+      if (targetScriptId) {
+        await updateScript(orgId, targetScriptId, {
+          steps: newSteps,
+          parameters: buildParameters(newSteps),
+          test_values: {},
+        });
+        setHasChanges(false);
+      }
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to save step');
+    }
+  };
+
+  /**
+   * Drop a key instead of setting it to undefined.
+   *
+   * JSON.stringify would discard either, but an `undefined` key still shows up
+   * in Object.keys and in equality checks, so the in-memory step stops matching
+   * what the server holds — and "the list says skipped, the run disagrees" is a
+   * long afternoon.
+   */
+  const withoutKey = (obj: RecordedStep, key: keyof RecordedStep): RecordedStep => {
+    const next = { ...obj };
+    delete next[key];
+    return next;
+  };
+
+  /**
+   * Make one step THE proof that the session is live, clearing any other.
+   *
+   * Exactly one step can hold it, so this MOVES rather than adds — matching
+   * what the backend does, so the two cannot disagree about what a second
+   * marking meant.
+   */
+  const handleSetLoginIndicator = async (stepIndex: number) => {
+    const steps = stepRunState?.steps ?? [];
+    const target = steps[stepIndex];
+    if (!target) return;
+    // Mirrors the server rule. An indicator has to ASSERT state: a navigate
+    // proves nothing on a site that serves its login form at the requested URL
+    // without redirecting, so the script would run signed out and report
+    // success.
+    if (target.action !== 'wait_for' && target.action !== 'extract') {
+      toast.error('Only a wait-for or extract step can prove a session — it has to assert something. A navigate succeeds even when signed out.');
+      return;
+    }
+    const firstCommit = steps.findIndex((s) => s?.requires_approval === true);
+    if (firstCommit !== -1 && stepIndex > firstCommit) {
+      toast.error('That step comes after one that submits. A failed indicator re-runs the script from the start, so anything already submitted would be submitted twice.');
+      return;
+    }
+    const newSteps = steps.map((s, k) => {
+      if (k === stepIndex) return { ...s, login_indicator: true };
+      if (s?.login_indicator) { const { login_indicator: _drop, ...rest } = s; return rest as RecordedStep; }
+      return s;
+    });
+    setStepRunState((s) => (s ? { ...s, steps: newSteps } : s));
+    setHasChanges(true);
+    if (!orgId) return;
+    const targetScriptId = script?.id ?? tempScriptId ?? null;
+    try {
+      if (runId) await syncStepRunSteps(orgId, runId, newSteps);
+      if (targetScriptId) {
+        await updateScript(orgId, targetScriptId, {
+          steps: newSteps, parameters: buildParameters(newSteps), test_values: {},
+        });
+        setHasChanges(false);
+      }
+      toast.success(`Step ${stepIndex + 1} now proves the session`);
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Failed to set the login indicator');
+    }
+  };
+
   /** Remove a group marker, leaving its members in place and unconditional. */
   const handleUngroup = async (groupIndex: number) => {
     if (!runId || !orgId) return;
@@ -3552,6 +3659,48 @@ export function RunScriptModal({
                 {/* Range picker prompt. Present only while arming a group, so
                     the list carries no permanent selection chrome for a thing
                     you do occasionally. */}
+                {/* A script that needs a login but names no step to prove it
+                    cannot tell a live session from a sign-in page — it would run
+                    against the login form and report whatever it found there.
+                    Surfaced on the list rather than buried in a step's edit
+                    modal because the whole problem is that you cannot see, from
+                    the list, that it is missing. */}
+                {script?.requires_login === true
+                  && !pickingIndicator
+                  && !(stepRunState?.steps ?? []).some((st) => st?.login_indicator === true) && (
+                  <div className="px-3 py-2 flex items-center gap-2 bg-amber-500/10 border-y border-amber-500/30">
+                    <KeyRound className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+                    <p className="text-[11px] flex-1 min-w-0">
+                      <span className="font-medium">No step proves the session.</span>{' '}
+                      Until one does, this script cannot tell a live login from a sign-in page.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-6 px-2 text-[11px]"
+                      onClick={(e) => { e.stopPropagation(); setPickingIndicator(true); }}
+                    >
+                      Pick the step
+                    </Button>
+                  </div>
+                )}
+                {pickingIndicator && (
+                  <div className="px-3 py-2 flex items-center gap-2 bg-emerald-500/10 border-y border-emerald-500/30">
+                    <KeyRound className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                    <p className="text-[11px] flex-1 min-w-0">
+                      Click the step that <span className="font-medium">only succeeds when signed in</span>.
+                      It has to be a wait-for or extract, and come before anything that submits.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-6 px-2 text-[11px]"
+                      onClick={(e) => { e.stopPropagation(); setPickingIndicator(false); }}
+                    >
+                      Cancel
+                    </Button>
+                  </div>
+                )}
                 {groupingFrom !== null && (
                   <div className="px-3 py-2 flex items-center gap-2 bg-brand/10 border-y border-brand/30">
                     <GitBranch className="h-3.5 w-3.5 shrink-0 text-brand" />
@@ -3659,6 +3808,15 @@ export function RunScriptModal({
                         onMouseLeave={() => setHoveredStep(null)}
                         onClick={() => {
                           if (inlineRenameIndex === i) return; // mid-rename, ignore
+                          // An armed picker owns the click: while either is
+                          // waiting, a click means "this one", not "run from
+                          // here". Both disarm themselves so the list never
+                          // stays in a mode the operator has forgotten about.
+                          if (pickingIndicator) {
+                            void handleSetLoginIndicator(i);
+                            setPickingIndicator(false);
+                            return;
+                          }
                           // Picking the other end of a group takes precedence
                           // over jumping the runner — while the picker is armed
                           // a click means "end here", not "run from here".
@@ -3679,6 +3837,16 @@ export function RunScriptModal({
                           if (isExecuting || isRecording) return;
                           e.stopPropagation();
                           setEditingStepIndex(i);
+                        }}
+                        onContextMenu={(e) => {
+                          // Right-click raises the row's own ⋮ menu rather than the
+                          // browser's. Deliberately the SAME menu: a context menu
+                          // with its own action list is one that quietly falls out
+                          // of step with the button beside it.
+                          if (isExecuting || isRecording) return;
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setContextMenuIndex(i);
                         }}
                       >
                         {/* Group disclosure. Shows the member count while
@@ -3800,18 +3968,121 @@ export function RunScriptModal({
                             <ShieldAlert className="h-3 w-3 text-amber-500" />
                           </span>
                         )}
+                        {/* Per-step option markers.
+
+                            Without these the only way to know a step is gated is
+                            to open it, and on a 25-step script that is the
+                            difference between seeing the shape of a run and
+                            guessing at it. The login indicator earns its place
+                            most: exactly ONE step in the whole script carries it,
+                            so finding it by opening steps one at a time is the
+                            worst possible search. */}
+                        {s.login_indicator === true && (
+                          <span
+                            className="shrink-0 inline-flex items-center"
+                            title="Proves we are signed in — if this step fails, the engine signs in and re-runs the script from the start"
+                          >
+                            <KeyRound className="h-3 w-3 text-emerald-500" />
+                          </span>
+                        )}
+                        {(s.skip_if_empty === true || Array.isArray(s.skip_if_empty)) && (
+                          <span
+                            className="shrink-0 inline-flex items-center"
+                            title={Array.isArray(s.skip_if_empty)
+                              ? `Skips when empty: ${s.skip_if_empty.map((k) => `{{${k}}}`).join(', ')}`
+                              : 'Skips when its own input is empty'}
+                          >
+                            <Variable className="h-3 w-3 text-sky-500" />
+                          </span>
+                        )}
+                        {(s.skip_if_missing === true || typeof s.skip_if_missing === 'string') && (
+                          <span
+                            className="shrink-0 inline-flex items-center"
+                            title={typeof s.skip_if_missing === 'string'
+                              ? `Skips when this is not on the page: ${s.skip_if_missing}`
+                              : 'Skips when its element is not on the page'}
+                          >
+                            <SkipForward className="h-3 w-3 text-sky-500" />
+                          </span>
+                        )}
+                        {s.allow_failure === true && (
+                          <span
+                            className="shrink-0 inline-flex items-center"
+                            title="Continues if this step fails — the run carries on and the error is only logged"
+                          >
+                            <CircleSlash className="h-3 w-3 text-muted-foreground" />
+                          </span>
+                        )}
                         {/* Actions: edit / duplicate / delete collapsed into an
                             always-visible ⋮ menu. */}
                         <div className="ml-auto shrink-0 flex items-center gap-1">
                           <RowActionsMenu
                             title="Step actions"
                             triggerClassName="h-6 w-6 p-0"
+                            open={contextMenuIndex === i ? true : undefined}
+                            onOpenChange={(o) => setContextMenuIndex(o ? i : null)}
                             actions={[
                               {
                                 label: 'Edit',
                                 icon: <Pencil className="h-4 w-4" />,
                                 onSelect: () => setEditingStepIndex(i),
                               },
+                              // The toggles from the edit modal, as one click.
+                              // These are the options an operator changes most
+                              // while reading the list, and making each one a
+                              // modal round trip is why scripts end up untagged.
+                              ...(!isGroupHeader && (s.action === 'wait_for' || s.action === 'extract')
+                                ? [{
+                                    label: s.login_indicator ? 'Clear login indicator' : 'Proves we are signed in',
+                                    icon: <KeyRound className="h-4 w-4" />,
+                                    onSelect: () => {
+                                      if (s.login_indicator) void applyStepEdit(i, withoutKey(s, 'login_indicator'));
+                                      else void handleSetLoginIndicator(i);
+                                    },
+                                  }]
+                                : []),
+                              ...(!isGroupHeader
+                                ? [
+                                    {
+                                      label: (s.skip_if_empty === true || Array.isArray(s.skip_if_empty))
+                                        ? 'Always run (ignore empty input)'
+                                        : 'Skip when its input is empty',
+                                      icon: <Variable className="h-4 w-4" />,
+                                      onSelect: () => void applyStepEdit(
+                                        i,
+                                        (s.skip_if_empty === true || Array.isArray(s.skip_if_empty))
+                                          ? withoutKey(s, 'skip_if_empty')
+                                          : { ...s, skip_if_empty: true },
+                                      ),
+                                    },
+                                    {
+                                      label: (s.skip_if_missing === true || typeof s.skip_if_missing === 'string')
+                                        ? 'Always run (ignore missing element)'
+                                        : 'Skip when the element is missing',
+                                      icon: <SkipForward className="h-4 w-4" />,
+                                      disabled: !s.selector && typeof s.skip_if_missing !== 'string',
+                                      onSelect: () => void applyStepEdit(
+                                        i,
+                                        (s.skip_if_missing === true || typeof s.skip_if_missing === 'string')
+                                          ? withoutKey(s, 'skip_if_missing')
+                                          : { ...s, skip_if_missing: true },
+                                      ),
+                                    },
+                                    {
+                                      label: s.allow_failure ? 'Fail the run if this fails' : 'Continue if this step fails',
+                                      icon: <CircleSlash className="h-4 w-4" />,
+                                      // A submit is excluded for the same reason the
+                                      // modal excludes it: continuing past a failed
+                                      // submit reports success for work that never
+                                      // happened.
+                                      disabled: s.requires_approval === true,
+                                      onSelect: () => void applyStepEdit(
+                                        i,
+                                        s.allow_failure ? withoutKey(s, 'allow_failure') : { ...s, allow_failure: true },
+                                      ),
+                                    },
+                                  ]
+                                : []),
                               {
                                 label: 'Duplicate',
                                 icon: <Copy className="h-4 w-4" />,
@@ -4147,73 +4418,10 @@ export function RunScriptModal({
         variableNames={editModalVarNames}
         allSteps={stepRunState?.steps ?? []}
         onSave={async (updated) => {
+          // The body lives in applyStepEdit so the row menu's one-click
+          // toggles persist exactly the way a modal save does.
           if (editingStepIndex == null) return;
-          const idx = editingStepIndex;
-          // Compute the new step list once, in a regular variable — used for
-          // the React state update, the worker sync, AND the persistent DB
-          // update below. Avoid mutating anything inside setStepRunState's
-          // updater: React requires the updater to be pure (it may run
-          // multiple times under StrictMode or be skipped under bail-out),
-          // so capturing values via side effects inside it is unreliable.
-          const newSteps = [...(stepRunState?.steps ?? [])];
-          newSteps[idx] = updated;
-          // Functional updater so we compose against the latest s — if any
-          // concurrent state change touched OTHER steps, they're preserved.
-          // For the step being edited we always win (operator's intent).
-          setStepRunState((s) => {
-            if (!s) return s;
-            const merged = [...s.steps];
-            merged[idx] = updated;
-            return {
-              ...s,
-              steps: merged,
-              step: idx === s.currentIndex ? updated : s.step,
-            };
-          });
-          setHasChanges(true);
-          if (!orgId) return;
-          // Two-tier persist:
-          //   1. syncStepRunSteps — pushes the new step list into the
-          //      worker's in-memory run state so the next Run Step picks it
-          //      up immediately. Fast, low-latency, but only lives as long
-          //      as the test session.
-          //   2. updateScript — writes the full steps array (plus derived
-          //      parameters + current test values) to agent_browser_scripts
-          //      so the edit survives a session teardown, page reload, or
-          //      another operator opening the script. Per operator
-          //      direction this now fires on EVERY modal save so there's no
-          //      gap between "the operator saw their edit committed" and
-          //      "the row in Postgres reflects it" — the previous behavior
-          //      (only the session-level Save button wrote to the DB)
-          //      meant a crashed tab could lose every per-step edit.
-          //
-          // The DB write needs an existing script row to update. In test
-          // mode the `script` prop carries the row id. In record mode the
-          // row is created by the session-level Save button and its id is
-          // stashed in `tempScriptId`. If neither is set yet (a brand-new
-          // recording before its first save) we skip the DB write — the
-          // session-level Save still handles persisting + name capture for
-          // that first-save case.
-          const targetScriptId = script?.id ?? tempScriptId ?? null;
-          try {
-            if (runId) {
-              await syncStepRunSteps(orgId, runId, newSteps);
-            }
-            if (targetScriptId) {
-              await updateScript(orgId, targetScriptId, {
-                steps: newSteps,
-                parameters: buildParameters(newSteps),
-                test_values: {},
-              });
-              // Clear the dirty flag — what was in memory now matches the
-              // DB row. The session-level Save button visibly hides itself
-              // when hasChanges is false; without this clear it would
-              // misleadingly stay lit after a modal save persisted things.
-              setHasChanges(false);
-            }
-          } catch (err: any) {
-            toast.error(err?.response?.data?.error || err?.message || 'Failed to save step');
-          }
+          await applyStepEdit(editingStepIndex, updated);
         }}
       />
 
