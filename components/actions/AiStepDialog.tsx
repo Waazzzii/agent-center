@@ -38,11 +38,13 @@ export function AiStepDialog({
   orgId,
   onSkillsChanged,
 }: AiStepDialogProps) {
+
   const [form, setForm] = useState<AiStepFormData>({
     name: '',
     description: '',
     prompt: '',
-    model: 'claude-sonnet-4-6',
+    // Blank on purpose — AiStepFormBody fills it from the catalog.
+    model: '',
     connector_ids: [],
     outputs: [],
     skill_ids: [],
@@ -54,13 +56,14 @@ export function AiStepDialog({
         name: step?.name ?? '',
         description: step?.description ?? '',
         prompt: step?.prompt ?? '',
-        model: step?.model ?? 'claude-sonnet-4-6',
+        model: step?.model ?? '',
         connector_ids: step?.connector_ids ?? [],
         outputs: step?.outputs ?? [],
         skill_ids: step?.skill_ids ?? [],
       });
     }
   }, [open, step]);
+
 
   const title = readOnly ? (step?.name ?? 'AI Step') : step ? 'Edit AI Step' : 'New AI Step';
 

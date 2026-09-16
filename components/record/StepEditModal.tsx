@@ -177,10 +177,14 @@ export function StepEditModal({
   // A group has no selector of its own — it has a GUARD and a span — so it
   // gets Branch where every other step gets Selector.
   const isGroup = draft.action === 'group';
-  // Only an ASSERTION can prove a session. Kept in step with the same rule in
-  // step-schema.js — a navigate is excluded because a site that serves its
-  // login form at the requested URL makes it succeed while signed out.
-  const canIndicate = draft.action === 'wait_for' || draft.action === 'extract';
+  // The indicator must FAIL when signed out, which means it has to locate an
+  // element. A select waits for its options, a fill for its field, a click for
+  // its target — all as good a proof as a wait_for. Excluded are the ones that
+  // succeed with nothing on the page (navigate, press_key, pause) and download,
+  // which would produce a second file when a failed indicator re-runs the
+  // script. Kept in step with LOGIN_INDICATOR_BLOCKED in step-schema.js.
+  const canIndicate = !['navigate', 'press_key', 'pause', 'group', 'download',
+    'wait_for_tab', 'switch_tab', 'close_tab'].includes(draft.action);
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: 'name', label: 'Name' },
     isGroup ? { id: 'branch', label: 'Branch' } : { id: 'selector', label: 'Selector' },
@@ -322,7 +326,7 @@ export function StepEditModal({
                         ? (draft.requires_approval
                             ? "Not available on a step that submits. A failed indicator makes the engine sign in and re-run this script from the start, so anything already submitted would be submitted twice."
                             : "Marks this as the step that proves the session is live. If it fails, the engine signs in and re-runs this script from the start — so it has to come before anything that submits. Only one step per script: setting it here clears it elsewhere.")
-                        : "Only a wait-for or extract step can prove a session, because it has to assert something. A navigate proves nothing — a site that serves its login form at the requested URL succeeds while signed out."}
+                        : "This step cannot prove a session — it succeeds with nothing on the page. Use one that has to find an element: a wait-for, extract, select, fill or click."}
                     </p>
                   </div>
                   <Switch

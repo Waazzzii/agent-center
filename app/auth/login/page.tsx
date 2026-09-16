@@ -1,5 +1,11 @@
 import { LoginRedirect } from "./login-form";
 
+import type { Metadata } from 'next'
+
+export const metadata: Metadata = {
+  title: 'Sign In',
+}
+
 /**
  * Sign-in is rendered by auth.wazzi.io. This page exists only as a stable
  * redirect target for the middleware auth guard — it generates fresh PKCE

@@ -228,7 +228,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // with a toggle to pick an existing one instead.
   const [aiStepMode, setAiStepMode] = useState<'new' | 'existing'>('new');
   const [newAiStepForm, setNewAiStepForm] = useState<AiStepFormData>({
-    name: '', description: '', prompt: '', model: 'claude-sonnet-4-6',
+    name: '', description: '', prompt: '', model: '',
     connector_ids: [], outputs: [], skill_ids: [],
   });
 
@@ -419,7 +419,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     });
     // Inline editors start blank on "create new".
     setAiStepMode('new');
-    setNewAiStepForm({ name: '', description: '', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], outputs: [], skill_ids: [] });
+    setNewAiStepForm({ name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [], skill_ids: [] });
     setApprovalMode('new');
     setNewApprovalStepForm({ name: '', instructions: '', notificationSlackChannelId: '' });
     setLoginMode('new');
@@ -452,7 +452,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       const s = aiSteps.find((x) => x.id === action.ai_step_id);
       setNewAiStepForm(s
         ? { name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [], skill_ids: s.skill_ids ?? [] }
-        : { name: '', description: '', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], outputs: [], skill_ids: [] });
+        : { name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [], skill_ids: [] });
     }
     if (action.action_type === 'approval') {
       setApprovalMode('existing');
@@ -1545,7 +1545,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       // Keep aiStepId so switching back to "Use existing" restores
                       // the previously-selected step; just blank the draft form.
                       setAiStepMode('new');
-                      setNewAiStepForm({ name: '', description: '', prompt: '', model: 'claude-sonnet-4-6', connector_ids: [], outputs: [], skill_ids: [] });
+                      setNewAiStepForm({ name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [], skill_ids: [] });
                     }}
                     className={cn('rounded px-3 py-1', aiStepMode === 'new' ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground')}
                   >

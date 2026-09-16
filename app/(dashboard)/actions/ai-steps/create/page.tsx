@@ -28,7 +28,7 @@ export default function CreateAiStepPage() {
   const [loading, setLoading] = useState(true);
 
   const [form, setForm] = useState<AiStepFormData>({
-    name: '', description: '', prompt: '', model: 'claude-sonnet-4-6',
+    name: '', description: '', prompt: '', model: '',
     connector_ids: [], outputs: [], skill_ids: [],
   });
 

@@ -35,7 +35,7 @@ export default function EditAiStepPage() {
   const [skills, setSkills] = useState<Skill[]>([]);
 
   const [form, setForm] = useState<AiStepFormData>({
-    name: '', description: '', prompt: '', model: 'claude-sonnet-4-6',
+    name: '', description: '', prompt: '', model: '',
     connector_ids: [], outputs: [], skill_ids: [],
   });
 

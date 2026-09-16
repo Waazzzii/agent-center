@@ -114,6 +114,34 @@ export interface AiStepInput {
   tag_ids?: string[];
 }
 
+/** A row of the model catalog (`ai_models`, migration 355). */
+export interface AiModel {
+  model_id: string;
+  label: string;
+  /** Offered for a NEW step. Retired models come back false, not omitted. */
+  is_active: boolean;
+  is_default: boolean;
+  sort_order: number;
+  /** When to reach for it. Safe to show as help text. */
+  notes: string | null;
+}
+
+/**
+ * The model catalog, from the backend rather than a copy in this file.
+ *
+ * Retired models are included, flagged `is_active: false`, because a step still
+ * running on one has to render as its label rather than a bare id. Filter to
+ * active rows only for the list a NEW step may choose from.
+ */
+export async function listAiModels(
+  orgId: string,
+): Promise<{ models: AiModel[]; default_model: string }> {
+  const res = await agentClient.get<{ models: AiModel[]; default_model: string }>(
+    `/api/admin/${orgId}/ai-models`,
+  );
+  return res.data;
+}
+
 export async function listAiSteps(
   orgId: string,
   opts?: { tagIds?: string[]; tagMatch?: 'any' | 'all' },

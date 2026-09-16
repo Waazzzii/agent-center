@@ -10,10 +10,12 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { useEffect } from 'react';
 import { Plus, Trash2, ArrowUpFromLine } from 'lucide-react';
 import { InputsList, parseVars } from './InputsList';
 import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { SkillChips } from './SkillChips';
+import { useAiModels } from '@/lib/hooks/use-ai-models';
 
 export interface ConnectorOption { id: string; label: string; }
 
@@ -27,11 +29,18 @@ export interface AiStepFormData {
   skill_ids: string[];
 }
 
-export const MODELS = [
-  { value: 'claude-opus-4-8',            label: 'Claude Opus 4.8' },
-  { value: 'claude-sonnet-4-6',          label: 'Claude Sonnet 4.6' },
-  { value: 'claude-haiku-4-5-20251001',  label: 'Claude Haiku 4.5' },
-];
+/**
+ * The model list is NOT here any more.
+ *
+ * It comes from the backend (`GET /:orgId/ai-models`, backed by the `ai_models`
+ * table) via `useAiModels`. It used to be a literal in this file — one of three
+ * copies across three repos with no shared package — and they drifted: the MCP
+ * still validated against the previous generation, so authoring a step on a
+ * current model through the MCP was rejected while this dropdown offered it.
+ *
+ * DEFAULT_MODEL is gone for the same reason. A new step takes its default from
+ * the catalog's `is_default` row; there is nothing to keep in sync by hand.
+ */
 
 interface Props {
   form: AiStepFormData;
@@ -73,6 +82,30 @@ interface Props {
  * surface back in if that turns out to be wrong.
  */
 export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = false, availableVars, orgId, onSkillsChanged, showSkills = false }: Props) {
+  // The catalog, from the backend. `models` carries retired rows too, which is
+  // what lets a step on an old model show a label instead of a raw id.
+  const { models: catalogModels, selectable: selectableModels, defaultModel } = useAiModels(orgId);
+  const catalogLabel = (id: string) =>
+    catalogModels.find((m) => m.model_id === id)?.label ?? id;
+
+  /**
+   * Fill in the catalog default when the caller seeded no model.
+   *
+   * Owned HERE rather than by each page, because there are five places that
+   * build this form's state and every one of them had hardcoded its own model.
+   * They all kept saying claude-sonnet-4-6 long after it was retired — the
+   * dropdown showed the current models while the selected value was the old
+   * one. A page now seeds `model: ''` and the shared form answers, so the next
+   * page someone adds cannot reintroduce a stale literal.
+   *
+   * Only ever fills a BLANK. An existing step's model is never touched, and
+   * nothing is written in read-only views.
+   */
+  useEffect(() => {
+    if (readOnly || form.model || !defaultModel) return;
+    setForm((f) => (f.model ? f : { ...f, model: defaultModel }));
+  }, [readOnly, form.model, defaultModel, setForm]);
+
   const addOutput = () => setForm((f) => ({
     ...f,
     // Required by default — opt-out by unchecking the box. Matches the
@@ -228,7 +261,22 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
           >
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              {MODELS.map((m) => <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>)}
+              {/* A step still on a retired model has to render as ITSELF. Radix
+                  shows an empty trigger when the value matches no item, so
+                  omitting it would make every older step look unconfigured —
+                  and the first person to hit Save while it read blank would be
+                  the one who found out. Listed only when it is this step's
+                  current value, so it is never something newly choosable. The
+                  catalog returns retired rows precisely so this can show a
+                  label rather than a raw id. */}
+              {form.model && !selectableModels.some((m) => m.model_id === form.model) && (
+                <SelectItem value={form.model}>
+                  {catalogLabel(form.model)} — in use, no longer offered
+                </SelectItem>
+              )}
+              {selectableModels.map((m) => (
+                <SelectItem key={m.model_id} value={m.model_id}>{m.label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

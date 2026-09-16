@@ -478,12 +478,11 @@ export function RunScriptModal({
 
   const [groupingFrom, setGroupingFrom] = useState<number | null>(null);
 
-  const [collapsedGroups, setCollapsedGroups] = useState<Set<number>>(new Set());
-  const toggleGroup = (i: number) => setCollapsedGroups((prev) => {
-    const next = new Set(prev);
-    if (next.has(i)) next.delete(i); else next.add(i);
-    return next;
-  });
+  // Groups no longer collapse. The disclosure chevron sat OUTSIDE the number
+  // column, so a group header was the one row that did not line up with the
+  // rest — and folding a block hid work from a list whose whole job is showing
+  // what runs. The tint, the rail and the guard chip say what the chevron said,
+  // without moving anything or taking steps off screen.
 
   // Indices the RUNTIME jumped because a group's guard did not match.
   //
@@ -2723,16 +2722,18 @@ export function RunScriptModal({
     const steps = stepRunState?.steps ?? [];
     const target = steps[stepIndex];
     if (!target) return;
-    // Mirrors the server rule. An indicator has to ASSERT state: a navigate
-    // proves nothing on a site that serves its login form at the requested URL
-    // without redirecting, so the script would run signed out and report
-    // success.
-    if (target.action !== 'wait_for' && target.action !== 'extract') {
-      toast.error('Only a wait-for or extract step can prove a session — it has to assert something. A navigate succeeds even when signed out.');
+    // Mirrors LOGIN_INDICATOR_BLOCKED on the server. The indicator has to FAIL
+    // when signed out, so it must locate an element — a select waits for its
+    // options just as a wait_for waits for its selector. Excluded are the steps
+    // that succeed with nothing on the page, and download, which would produce a
+    // second artifact when a failed indicator re-runs the script.
+    if (['navigate', 'press_key', 'pause', 'group', 'download',
+      'wait_for_tab', 'switch_tab', 'close_tab'].includes(target.action)) {
+      toast.error(`A ${target.action} step cannot prove a session — it succeeds with nothing on the page. Use one that has to find an element: wait-for, extract, select, fill or click.`);
       return;
     }
     const firstCommit = steps.findIndex((s) => s?.requires_approval === true);
-    if (firstCommit !== -1 && stepIndex > firstCommit) {
+    if (firstCommit !== -1 && stepIndex >= firstCommit) {
       toast.error('That step comes after one that submits. A failed indicator re-runs the script from the start, so anything already submitted would be submitted twice.');
       return;
     }
@@ -2766,7 +2767,6 @@ export function RunScriptModal({
     if (currentSteps[groupIndex]?.action !== 'group') return;
     const newSteps = currentSteps.filter((_, k) => k !== groupIndex);
     setStepRunState((st) => st ? { ...st, steps: newSteps, totalSteps: newSteps.length } : st);
-    setCollapsedGroups(new Set());
     setHasChanges(true);
     try {
       await syncStepRunSteps(orgId, runId, newSteps);
@@ -3754,7 +3754,6 @@ export function RunScriptModal({
                   const isOwned       = ownerIdx !== undefined;
                   // A collapsed group hides its members entirely. The header
                   // still says how many, so nothing disappears silently.
-                  if (isOwned && collapsedGroups.has(ownerIdx as number)) return null;
                   const wasSkipped = skippedIdx.has(i);
 
                   const isJumping   = jumpingTo === i;
@@ -3770,6 +3769,14 @@ export function RunScriptModal({
                           isRecording ? 'px-3' : 'px-1.5 cursor-pointer',
                           isCurrent  ? 'bg-brand/10 font-medium' : 'text-muted-foreground',
                           isVarHighlighted && 'bg-purple-500/10 ring-1 ring-inset ring-purple-400/40',
+                          // A guarded block reads as ONE thing: header and members
+                          // share a tint so you can see where the branch starts
+                          // and stops without counting rows against a span.
+                          // Deliberately FIRST in this list — hover and the live
+                          // replay tints below must still win, since "this row is
+                          // running" matters more than "this row is in a group".
+                          isGroupHeader && 'bg-brand/10',
+                          isOwned && 'bg-brand/[0.04]',
                           isHovered && !isCurrent && !isVarHighlighted && 'bg-muted/40',
                           // Live replay status accents — subtle left border +
                           // tinted background so the running/failed/awaiting row
@@ -3849,36 +3856,6 @@ export function RunScriptModal({
                           setContextMenuIndex(i);
                         }}
                       >
-                        {/* Group disclosure. Shows the member count while
-                            collapsed so a folded block never hides how much is
-                            inside it, and stops propagation because the row's
-                            own click jumps the runner to that step. */}
-                        {isGroupHeader && (
-                          <button
-                            type="button"
-                            className="shrink-0 h-4 w-4 -ml-0.5 flex items-center justify-center rounded hover:bg-muted"
-                            onClick={(e) => { e.stopPropagation(); toggleGroup(i); }}
-                            title={collapsedGroups.has(i)
-                              ? `Show the ${groupModel.spanOf.get(i) ?? 0} step(s) in this group`
-                              : 'Collapse this group'}
-                            aria-expanded={!collapsedGroups.has(i)}
-                          >
-                            <ChevronRight
-                              className={cn(
-                                'h-3 w-3 transition-transform',
-                                !collapsedGroups.has(i) && 'rotate-90',
-                              )}
-                            />
-                          </button>
-                        )}
-                        {/* Visible count while folded. A tooltip is not enough:
-                            the whole risk of collapsing a block is that work
-                            disappears from the list without saying so. */}
-                        {isGroupHeader && collapsedGroups.has(i) && (
-                          <span className="shrink-0 text-[10px] text-muted-foreground tabular-nums">
-                            ({groupModel.spanOf.get(i) ?? 0})
-                          </span>
-                        )}
 
                         {/* Drag handle — only in test mode (hidden while recording),
                             revealed on row hover so default rows stay clean. The drag
@@ -3899,7 +3876,26 @@ export function RunScriptModal({
                             otherwise the number, with a small green check tucked
                             beside completed steps. */}
                         <span className="w-5 shrink-0 text-right tabular-nums flex items-center justify-end">
-                          {rowStatus === 'running' ? (
+                          {isGroupHeader ? (
+                            // A group is a MARKER, not work. Numbering it like a
+                            // step invited people to read it as something that
+                            // runs. It does still occupy an index — the engine
+                            // counts it, and the numbers on the rows below are its
+                            // real indices — so the position is in the tooltip
+                            // rather than thrown away.
+                            // The number is hidden, not reassigned. This marker
+                            // really does occupy index i — the engine reports it
+                            // that way and the rows below carry their true
+                            // indices — so the gap in the column is accurate, and
+                            // the position stays one hover away.
+                            <span
+                              className="inline-flex items-center"
+                              aria-label={`Guarded group at position ${i + 1}`}
+                              title={`Guarded group — step ${i + 1} of the script. It runs no action itself; it asks its guard once and either enters the block or skips all ${groupModel.spanOf.get(i) ?? 0} of its steps.`}
+                            >
+                              <GitBranch className="h-3.5 w-3.5 text-brand" />
+                            </span>
+                          ) : rowStatus === 'running' ? (
                             <Loader2 className="h-3.5 w-3.5 text-brand animate-spin" />
                           ) : rowStatus === 'failed' ? (
                             <XCircle className="h-3.5 w-3.5 text-danger" />
@@ -3948,6 +3944,30 @@ export function RunScriptModal({
                             {stepLabel(s)}
                           </span>
                         )}
+                        {/* What actually DECIDES this branch. Without it the row
+                            reads "Two-factor challenge" and says nothing about why
+                            it would be skipped — and a guard that quietly declines,
+                            taking its whole span with it, is the failure mode
+                            groups are most prone to. */}
+                        {isGroupHeader && (() => {
+                          const g = (s as { guard?: { selector?: string; timeout?: number; expect?: 'present' | 'absent' } }).guard;
+                          if (!g?.selector) return null;
+                          const absent = g.expect === 'absent';
+                          const owned = groupModel.spanOf.get(i) ?? 0;
+                          return (
+                            <span
+                              className="shrink-0 max-w-[16rem] truncate px-1.5 py-0 rounded text-[9px] font-medium bg-brand/15 text-brand border border-brand/30"
+                              title={
+                                `Runs its ${owned} step(s) only when this is ${absent ? 'NOT on' : 'on'} the page:\n`
+                                + `${g.selector}\n\n`
+                                + `Asked ONCE, for up to ${g.timeout ?? 8000}ms. If the answer is no, the whole block is `
+                                + `skipped together rather than each step deciding for itself.`
+                              }
+                            >
+                              {absent ? 'unless ' : 'if '}{g.selector}
+                            </span>
+                          );
+                        })()}
                         {/* iframe badge — flags steps that run inside an
                             iframe so operators can tell at a glance. The
                             actual frame_selector is visible in the JSON tab. */}
@@ -4031,7 +4051,8 @@ export function RunScriptModal({
                               // These are the options an operator changes most
                               // while reading the list, and making each one a
                               // modal round trip is why scripts end up untagged.
-                              ...(!isGroupHeader && (s.action === 'wait_for' || s.action === 'extract')
+                              ...(!isGroupHeader && !['navigate', 'press_key', 'pause', 'group', 'download',
+                                'wait_for_tab', 'switch_tab', 'close_tab'].includes(s.action)
                                 ? [{
                                     label: s.login_indicator ? 'Clear login indicator' : 'Proves we are signed in',
                                     icon: <KeyRound className="h-4 w-4" />,

@@ -4,7 +4,7 @@ import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "next-themes";
 import { TokenRefreshProvider } from "@/components/auth/TokenRefreshProvider";
 import { SessionProvider } from "@/components/auth/SessionProvider";
-import { getAgentCenterBranding } from "@/lib/branding";
+import { getBranding, faviconHref } from "@/lib/branding";
 import { cookies, headers } from "next/headers";
 import { BrandingProvider } from "@/components/branding/BrandingProvider";
 import { COOKIE_NAME, getSessionFromToken } from "@/lib/auth";
@@ -20,14 +20,26 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
-export const metadata: Metadata = {
-  title: {
-    default: "Wazzi",
-    template: "%s | Wazzi",
-  },
-  description: "Wazzi Admin Dashboard - Manage organizations, connectors, users, and OAuth clients",
-  applicationName: "Wazzi",
-};
+/**
+ * Title and icon come from the org this hostname belongs to. The template is
+ * what makes per-page titles cheap: a page declares `title: 'Connectors'` and
+ * Next composes "Connectors | Casago Agent Center". No page fetches branding.
+ */
+export async function generateMetadata(): Promise<Metadata> {
+  const host = (await headers()).get("host") ?? "";
+  const branding = await getBranding(host);
+  const icon = faviconHref(branding);
+
+  return {
+    title: {
+      default: branding.site_name,
+      template: `%s | ${branding.site_name}`,
+    },
+    description: "Manage organizations, connectors, users, and OAuth clients",
+    applicationName: branding.site_name,
+    icons: { icon, shortcut: icon, apple: icon },
+  };
+}
 
 export const viewport: Viewport = {
   width: 'device-width',
@@ -51,22 +63,15 @@ export default async function RootLayout({
   const token = cookieStore.get(COOKIE_NAME)?.value;
   const session = token ? await getSessionFromToken(token, host) : null;
 
-  const branding = await getAgentCenterBranding(host);
-
-  const faviconVersion = branding.favicon_storage_path?.split("/").pop()?.split(".")[0]?.slice(-12);
-  const logoVersion    = branding.logo_storage_path?.split("/").pop()?.split(".")[0]?.slice(-12);
-
-  const faviconHref = branding.favicon_storage_path
-    ? `/api/branding/favicon?v=${faviconVersion}`
-    : branding.logo_storage_path
-    ? `/api/branding/logo?v=${logoVersion}`
-    : '/favicon.png';
+  // Deduped with generateMetadata's call by the Next data cache — same URL,
+  // same tag, one backend request.
+  const branding = await getBranding(host);
 
   return (
     <html lang="en" suppressHydrationWarning>
       <head>
-        <link rel="icon" href={faviconHref} />
-        <link rel="apple-touch-icon" href={faviconHref} />
+        {/* The icon is declared in generateMetadata above — Next renders the
+            <link> tags itself, so hand-written ones here would duplicate. */}
         {branding.custom_theme && (
           <style id="agc-custom-theme" dangerouslySetInnerHTML={{ __html: branding.custom_theme }} />
         )}
@@ -75,7 +80,7 @@ export default async function RootLayout({
         className={`${geistSans.variable} ${geistMono.variable} font-sans antialiased`}
       >
         <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-          <BrandingProvider hasLogo={!!branding.logo_storage_path} logoVersion={logoVersion}>
+          <BrandingProvider hasLogo={branding.has_logo} logoVersion={branding.logo_version ?? undefined}>
             <SessionProvider session={session}>
               <TokenRefreshProvider />
               {children}
