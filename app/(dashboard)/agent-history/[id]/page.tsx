@@ -20,6 +20,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import agentClient from '@/lib/api/agent-client';
+import { isInertLoginRow } from '@/lib/api/agents';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -131,6 +132,14 @@ function SBadge({ status }: { status: string }) {
  *     continue_on_failure flag cleared their _status='failed' markers
  *     on items going downstream.
  *
+ *   "Paused — …"  — yellow, and TEMPORARY.
+ *     The script's login_indicator failed and the sign-in it needs is
+ *     either held by another run or waiting on a person. Nothing has
+ *     failed: the executor clears this field when the step resumes, so
+ *     the banner disappears on its own and a step that goes on to finish
+ *     shows no trace of having waited. Red would be wrong twice over —
+ *     it did not fail, and it is not over.
+ *
  * Detection is a simple prefix match — the strings are constants emitted
  * by the executor (see agent-executor.service.js + execution-options.js).
  * Plain `error_message` values fall back to the original red banner.
@@ -164,7 +173,9 @@ function ActionMessageBanner({ message }: { message: string }) {
     message.startsWith('Cascade:') ||
     message.startsWith('Skipped:') ||
     message.startsWith('Partition:');
-  const isTolerated = message.startsWith('Tolerated ');
+  // Waiting, not broken. Shares the yellow treatment with the tolerated
+  // variants because it is the same claim: worth seeing, not a failure.
+  const isTolerated = message.startsWith('Tolerated ') || message.startsWith('Paused — ');
 
   const tone = isSkipped
     ? {
@@ -903,15 +914,16 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
   const [steps, setSteps] = useState<StepRow[]>([]);
   const [loadingSteps, setLoadingSteps] = useState(false);
   // AI steps, browser scripts, AND login steps emit log rows.
-  // - AI steps + browser_script: tool_use / text / result rows from the SDK driver.
-  // - Login: runPromptAction (the AI verify) records its tool_use / text rows
-  //   AND the executor's runVerify helper bookends each verify pass with
-  //   verify_attempt / verify_result init/result rows; the auto-login linked
-  //   script run records its own init / result around the credential fill.
-  //   These are what the "Logs" tab on a login step shows operators when
-  //   triaging "why did the agent ask for HITL but the standalone test says
-  //   I'm logged in?" — the verify_result row carries the AI's
-  //   verified=true/false call so the divergence is visible.
+  // - AI steps: tool_use / text / result rows from the SDK driver.
+  // - browser_script: the same, plus the sign-in breadcrumbs. This is where
+  //   the login story lives now: login_indicator_recovery when the step that
+  //   proves the session failed, then the auto-login script's own init /
+  //   result around the credential fill. Triaging "why did this ask for a
+  //   human?" starts here, on the script's own rows.
+  // - Login: kept for HISTORY. It no longer does anything at run time, so a
+  //   recent run has nothing under it; older runs carry the verify_attempt /
+  //   verify_result pairs from when it ran a verify script, and those still
+  //   render.
   // Approval is the only action type that never emits steps (it's pure HITL,
   // no AI calls), so it stays excluded.
   const hasLogs =
@@ -1292,6 +1304,10 @@ export default function ExecutionDetailPage() {
   const current = crumbs[crumbs.length - 1]?.node ?? tree;
   const isExecution = current?.type === 'execution';
   const isAction = current?.type === 'action';
+  // Inert login rows are filtered out — see isInertLoginRow. Computed once so
+  // the empty state agrees with the list: an agent whose only step is a login
+  // should read "No actions recorded", not render an empty Actions heading.
+  const visibleActions = (current?.children ?? []).filter((c) => !isInertLoginRow(c));
   const isSubAgent = isAction && current?.action_type === 'sub_agent';
 
   if (loading) {
@@ -1354,13 +1370,13 @@ export default function ExecutionDetailPage() {
 
       {/* ── Content ────────────────────────────────────────────── */}
       {/* Agent → show action list */}
-      {isExecution && (current.children?.length ?? 0) > 0 && (
+      {isExecution && visibleActions.length > 0 && (
         <div>
           <h2 className="text-sm font-semibold mb-3">Actions</h2>
-          <ActionList actions={current.children!} onSelect={drillInto} />
+          <ActionList actions={visibleActions} onSelect={drillInto} />
         </div>
       )}
-      {isExecution && (current.children?.length ?? 0) === 0 && (
+      {isExecution && visibleActions.length === 0 && (
         <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">No actions recorded.</CardContent></Card>
       )}
 

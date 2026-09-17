@@ -239,10 +239,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     notificationSlackChannelId: '',
   });
 
-  // Login profiles edit inline the same way (name / URL / verify script).
+  // Login profiles edit inline the same way (name / URL).
   const [loginMode, setLoginMode] = useState<'new' | 'existing'>('new');
   const [newLoginForm, setNewLoginForm] = useState<LoginFormData>({
-    name: '', url: '', verify_script_id: null,
+    name: '',
   });
 
   // Trigger dialog
@@ -423,7 +423,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     setApprovalMode('new');
     setNewApprovalStepForm({ name: '', instructions: '', notificationSlackChannelId: '' });
     setLoginMode('new');
-    setNewLoginForm({ name: '', url: '', verify_script_id: null });
+    setNewLoginForm({ name: '' });
     if (type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
     }
@@ -464,9 +464,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (action.action_type === 'login') {
       setLoginMode('existing');
       const l = logins.find((x) => x.id === action.login_id);
-      setNewLoginForm(l
-        ? { name: l.name, url: l.url, verify_script_id: l.verify_script_id ?? null }
-        : { name: '', url: '', verify_script_id: null });
+      setNewLoginForm(l ? { name: l.name } : { name: '' });
     }
     if (action.action_type === 'sub_agent' && selectedOrgId) {
       getValidSubAgents(selectedOrgId, agentId).then(setValidSubAgents).catch(() => {});
@@ -492,7 +490,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     // AI step + approval step + login are edited inline: require the minimum fields.
     if (actionForm.action_type === 'agent' && (!newAiStepForm.name.trim() || !newAiStepForm.prompt.trim())) return;
     if (actionForm.action_type === 'approval' && !newApprovalStepForm.name.trim()) return;
-    if (actionForm.action_type === 'login' && (!newLoginForm.name.trim() || !newLoginForm.url.trim() || !newLoginForm.verify_script_id)) return;
+    // Name only. The URL is no longer asked for here — it comes from the
+    // login script's first navigate, and this inline editor has no script
+    // picker, so gating on a field nobody can fill would make Save dead.
+    if (actionForm.action_type === 'login' && !newLoginForm.name.trim()) return;
     try {
       setSavingAction(true);
 
@@ -538,8 +539,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       if (actionForm.action_type === 'login') {
         const loginInput = {
           name: newLoginForm.name.trim(),
-          url: newLoginForm.url.trim(),
-          verify_script_id: newLoginForm.verify_script_id as string,
         };
         if (loginMode === 'existing' && loginId) {
           await updateLogin(selectedOrgId, loginId, loginInput);
@@ -1349,7 +1348,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                             <LoginChip
                               orgId={selectedOrgId}
                               login={login}
-                              verifyScriptOptions={browserScripts.map((s) => ({ id: s.id, name: s.name }))}
                               onChanged={() => { if (selectedOrgId) void listLogins(selectedOrgId).then(setLogins).catch(() => {}); }}
                             />
                           </>
@@ -1622,7 +1620,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     type="button"
                     onClick={() => {
                       setLoginMode('new');
-                      setNewLoginForm({ name: '', url: '', verify_script_id: null });
+                      setNewLoginForm({ name: '' });
                     }}
                     className={cn('rounded px-3 py-1', loginMode === 'new' ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground')}
                   >
@@ -1636,7 +1634,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       if (targetId) {
                         const l = logins.find((x) => x.id === targetId);
                         setActionForm(f => ({ ...f, loginId: targetId }));
-                        if (l) setNewLoginForm({ name: l.name, url: l.url, verify_script_id: l.verify_script_id ?? null });
+                        if (l) setNewLoginForm({ name: l.name });
                       }
                     }}
                     className={cn('rounded px-3 py-1', loginMode === 'existing' ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground')}
@@ -1653,7 +1651,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       onChange={(v) => {
                         const l = logins.find((x) => x.id === v);
                         setActionForm(f => ({ ...f, loginId: v }));
-                        if (l) setNewLoginForm({ name: l.name, url: l.url, verify_script_id: l.verify_script_id ?? null });
+                        if (l) setNewLoginForm({ name: l.name });
                       }}
                       options={logins.map((l) => ({ value: l.id, label: l.name, hint: l.url ?? undefined }))}
                       placeholder="Select a login profile to edit…"
@@ -1672,7 +1670,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   <LoginFormBody
                     form={newLoginForm}
                     setForm={setNewLoginForm}
-                    verifyScriptOptions={browserScripts.map((s) => ({ id: s.id, name: s.name }))}
                     availableVars={availableVars}
                   />
                 ) : (
@@ -2086,7 +2083,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 savingAction ||
                 (actionForm.action_type === 'agent' && (!newAiStepForm.name.trim() || !newAiStepForm.prompt.trim())) ||
                 (actionForm.action_type === 'approval' && !newApprovalStepForm.name.trim()) ||
-                (actionForm.action_type === 'login' && (!newLoginForm.name.trim() || !newLoginForm.url.trim() || !newLoginForm.verify_script_id)) ||
+                (actionForm.action_type === 'login' && !newLoginForm.name.trim()) ||
                 (actionForm.action_type === 'browser_script' && !actionForm.scriptId) ||
                 // A requires_login script with no login would be rejected by the
                 // API anyway; refusing here means the operator sees why.

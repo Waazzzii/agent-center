@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
-  getLogin, updateLogin, deleteLogin, verifyLogin, startLogout,
+  getLogin, updateLogin, deleteLogin, startLogout,
   setLoginCredentials, clearLoginCredentials, testAutoLogin, clearLoginSession,
   getLoginCredentialKeys, deleteLoginCredentialKey,
   setLoginTotp, clearLoginTotp, previewLoginTotp,
@@ -15,7 +15,7 @@ import {
 } from '@/lib/api/logins';
 import { isReservedParam } from '@/lib/script-params';
 import { getBrowserRunStatus } from '@/lib/api/agents';
-import { listScripts, deleteScript, type BrowserScript } from '@/lib/api/scripts';
+import { listScripts, type BrowserScript } from '@/lib/api/scripts';
 import {
   getAgentAccessGroups,
   getLoginAccessGroups,
@@ -24,7 +24,6 @@ import {
 } from '@/lib/api/agent-access-groups';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import {
-  listActiveVerifySessions,
   getActiveVerifySession,
   setActiveVerifySession,
   clearActiveVerifySession,
@@ -37,11 +36,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-} from '@/components/ui/dialog';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -49,23 +44,22 @@ import { toast } from 'sonner';
 import {
   Loader2, LogIn, LogOut, Save, Trash2, Eraser,
   CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
-  Sparkles, Plus, X as XIcon, Eye, EyeOff, KeyRound, Pencil,
+  Sparkles, X as XIcon, Eye, EyeOff, KeyRound, Pencil,
   Settings2, History, Camera, Image as ImageIcon,
 } from 'lucide-react';
 import { decodeQrFromFile, imageFromTransfer, cameraSupported } from '@/lib/qr-decode';
 import { QrScannerDialog } from '@/components/actions/QrScannerDialog';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 // LoginFormBody is no longer rendered here — the name moved into the page
-// header, the URL into a disclosure under Login, and the verify script into
-// its own card. The type is still the shape of this page's form state, and
-// the component itself is still used by the create page and LoginChip.
+// header and the URL into a disclosure under Login. The type is still the
+// shape of this page's form state, and the component itself is still used by
+// the create page and LoginChip.
 import { type LoginFormData } from '@/components/actions/LoginFormBody';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
-import { RunScriptModal } from '@/components/record/RunScriptModal';
 import { SlackChannelInput } from '@/components/notifications/SlackChannelInput';
 import { cn } from '@/lib/utils';
 import {
-  Field, FieldNest, InfoBubble, ScriptSlot, CONTROL_W,
+  Field, FieldNest, ScriptSlot, CONTROL_W,
 } from '@/components/actions/login-fields';
 import { MfaSourceSection } from '@/components/actions/MfaSourceSection';
 
@@ -74,10 +68,12 @@ const TERMINAL = new Set(['completed', 'failed', 'aborted']);
 function StatusPill({ status }: { status: Login['status'] }) {
   if (status === 'valid') return <Badge variant="success" className="gap-1"><CheckCircle2 className="h-3 w-3" />Logged In</Badge>;
   if (status === 'needs_login') return <Badge variant="warning" className="gap-1"><AlertCircle className="h-3 w-3" />Not Logged In</Badge>;
-  // 'verifying' is an intermediate state — see Login['status'] docstring.
+  // 'verifying' is gone. It described the gap between a manual-login Done
+  // click and a background verify settling the result — and that verify was
+  // removed: Done marks the login valid in the same request. No row in dev or
+  // prod carries the status, and nothing can write it any more.
   // Spinner + "Verifying..." makes it visually obvious that we're
   // mid-check, so operators don't read it as a settled outcome.
-  if (status === 'verifying') return <Badge variant="neutral" className="gap-1"><Loader2 className="h-3 w-3 animate-spin" />Verifying…</Badge>;
   return <Badge variant="neutral" className="gap-1"><HelpCircle className="h-3 w-3" />Not Yet Checked</Badge>;
 }
 
@@ -102,7 +98,7 @@ function StatusPill({ status }: { status: Login['status'] }) {
  */
 
 /**
- * One script slot (login or verify) — picker, edit, and record.
+ * The login script slot — picker, edit, and record.
  *
  * The empty case is the point of this component. When no scripts of the
  * kind exist there is nothing to pick, so the dropdown is suppressed and
@@ -135,15 +131,14 @@ export default function EditLoginPage() {
   const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
   const [loginGroupIds, setLoginGroupIds] = useState<string[]>([]);
 
-  const [form, setForm] = useState<LoginFormData>({ name: '', url: '', verify_script_id: null });
+  const [form, setForm] = useState<LoginFormData>({ name: '' });
 
-  // Verify / login session state. `startingAction` tracks WHICH button
-  // was just clicked so we only spin the one that's actually starting up
-  // — a single `isStarting` boolean would spin every button (Verify and
-  // Log Out share the row, so the wrong icon would animate). All buttons
+  // Login session state. `startingAction` tracks WHICH button was just
+  // clicked so we only spin the one that's actually starting up — a single
+  // `isStarting` boolean would spin every button in the row. All buttons
   // remain disabled while any action is in flight to prevent the operator
   // from kicking off two browser-slot sessions at once.
-  type StartingAction = 'verify' | 'login' | 'logout' | 'clear_session' | null;
+  type StartingAction = 'login' | 'logout' | 'clear_session' | null;
   const [startingAction, setStartingAction] = useState<StartingAction>(null);
   const { start: startManualLogin } = useStartManualLogin();
   const isStarting = startingAction !== null;
@@ -157,10 +152,10 @@ export default function EditLoginPage() {
   // The credentials editor below tracks proposed values that haven't
   // been submitted yet; users click "Update credentials" explicitly to
   // commit.
-  // `scripts` = the 'login' pool (auto-login slot). `verifyScripts` = the
-  // 'login_verify' pool. Separate because each slot offers only its own kind.
+  // `scripts` = the 'login' pool (auto-login slot). There is no second slot:
+  // the verify script is gone, and proving the session is a step of the
+  // business script now ("Proves we are signed in", in the script editor).
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
-  const [verifyScripts, setVerifyScripts] = useState<BrowserScript[]>([]);
   const [scriptId, setScriptId] = useState<string | null>(null);
   // Credential KEYS are no longer typed by hand — they're the login script's
   // declared inputs. `storedCredKeys` is what's actually on file (names only,
@@ -170,17 +165,10 @@ export default function EditLoginPage() {
   const [credDrafts, setCredDrafts] = useState<Record<string, string>>({});
   const [revealedCred, setRevealedCred] = useState<Record<string, boolean>>({});
   const [savingCreds, setSavingCreds] = useState(false);
-  const [recordModalOpen, setRecordModalOpen] = useState(false);
-  const [recordVerifyModalOpen, setRecordVerifyModalOpen] = useState(false);
   // Login scripts are no longer listed on the general Scripts page — this
   // login IS their home, so the page has to be able to open one for editing.
-  const [editScript, setEditScript] = useState<BrowserScript | null>(null);
-  // Verify scripts can't simply be deleted: verify_script_id is NOT NULL, so
-  // Postgres refuses while a login points at one. Deleting therefore means
-  // REPLACING — this holds the script on its way out plus the chosen stand-in.
-  const [verifyToDelete, setVerifyToDelete] = useState<BrowserScript | null>(null);
-  const [verifyReplacementId, setVerifyReplacementId] = useState<string | null>(null);
-  const [tab, setTab] = useState<'setup' | '2fa' | 'runs' | 'access'>('setup');
+  // '2fa' is gone — two-factor lives inside Setup now.
+  const [tab, setTab] = useState<'setup' | 'runs' | 'access'>('setup');
   const [editingName, setEditingName] = useState(false);
 
   // ── TOTP (authenticator 2FA) state ───────────────────────────────
@@ -190,6 +178,15 @@ export default function EditLoginPage() {
   // phone and know immediately that enrollment worked — otherwise the
   // first signal of a mistyped key is a failed agent run hours later.
   const [totpInput, setTotpInput] = useState('');
+  /**
+   * The 2FA source currently SELECTED in MfaSourceSection, saved or not.
+   *
+   * The enrolment form below is gated on this rather than on login.mfa_source.
+   * Gating on the persisted value meant picking "Authenticator" showed nothing
+   * until the source had been saved — a round trip nobody knew to make, which
+   * read as a missing form. Seeded from the login so the first render is right.
+   */
+  const [selectedMfaSource, setSelectedMfaSource] = useState<Login['mfa_source'] | null>(null);
   const [savingTotp, setSavingTotp] = useState(false);
   const [totpPreview, setTotpPreview] = useState<TotpPreview | null>(null);
   const [totpPreviewLoading, setTotpPreviewLoading] = useState(false);
@@ -327,7 +324,6 @@ export default function EditLoginPage() {
             toastedLogId = activeSession.logId;
             const kindLabel =
               activeSession.kind === 'login_logout' ? 'Logout' :
-              activeSession.kind === 'login_verify' ? 'Verify' :
               activeSession.kind === 'login_manual' ? 'Login' :
               'Operation';
             const action = status.status === 'aborted' ? 'aborted' : 'failed';
@@ -477,31 +473,26 @@ export default function EditLoginPage() {
             || prev.auto_login_script_id !== loginData.auto_login_script_id
             || prev.notification_slack_channel_id !== loginData.notification_slack_channel_id
             || prev.name !== loginData.name
-            || prev.url !== loginData.url
-            || prev.verify_script_id !== loginData.verify_script_id;
+            || prev.url !== loginData.url;
           return changed ? loginData : prev;
         });
         return;
       }
-      // The two slots draw from different pools now (migration 283): the
-      // auto-login picker offers only 'login' scripts, the verify picker
-      // only 'login_verify'. Fetched separately rather than one list
-      // filtered client-side so each picker can't drift from the server's
-      // definition of what belongs in it.
-      const [loginData, groups, loginGroups, loginScriptsData, verifyScriptsData, credKeys] = await Promise.all([
+      // The auto-login picker offers only 'login' scripts (migration 283),
+      // so the kind filter is the server's definition rather than a
+      // client-side guess.
+      const [loginData, groups, loginGroups, loginScriptsData, credKeys] = await Promise.all([
         getLogin(selectedOrgId, id),
         getAgentAccessGroups(selectedOrgId),
         getLoginAccessGroups(selectedOrgId, id),
         listScripts(selectedOrgId, { kinds: ['login'] }).catch(() => ({ scripts: [] as BrowserScript[] })),
-        listScripts(selectedOrgId, { kinds: ['login_verify'] }).catch(() => ({ scripts: [] as BrowserScript[] })),
         getLoginCredentialKeys(selectedOrgId, id).catch(() => [] as string[]),
       ]);
       setLogin(loginData);
-      setForm({ name: loginData.name, url: loginData.url, verify_script_id: loginData.verify_script_id ?? null });
+      setForm({ name: loginData.name });
       setAllGroups(groups);
       setLoginGroupIds(loginGroups.map((g) => g.id));
       setScripts(loginScriptsData.scripts ?? []);
-      setVerifyScripts(verifyScriptsData.scripts ?? []);
       setStoredCredKeys(credKeys);
       setScriptId(loginData.auto_login_script_id ?? null);
       setSlackChannelId(loginData.notification_slack_channel_id ?? '');
@@ -543,9 +534,24 @@ export default function EditLoginPage() {
       : []),
     [selectedOrgId, id, activeSession?.logId]
   );
+  // Poll only when there is something that can change.
+  //
+  // This used to run every 5s for the whole time the page was open, including
+  // while somebody sat on the Setup tab editing a name. Three things publish to
+  // `login:<id>`: the auto-login test's phase events, login-run create/update
+  // (manual login, logout, test), and markLoginChecked/markLoginLoggedIn. The
+  // first two only happen because the operator started them here — and both set
+  // activeSession. So with no session and the Runs tab closed, the only reachable
+  // event is another agent run flipping this login's status, which nothing on
+  // the Setup form is showing.
+  //
+  // What that costs: the status badge can sit stale while you edit if an agent
+  // signs in behind you. It refreshes the moment you open Runs, start anything,
+  // or reload — and it was never the reason this page was open.
+  const watchable = !!activeSession || tab === 'runs';
   useTopicVersions({
     topics: versionTopics,
-    enabled: !!selectedOrgId,
+    enabled: !!selectedOrgId && watchable,
     onChange: () => {
       // Debounce so a burst of near-simultaneous changes (login_run
       // completed + login status flip) coalesces into a single fetch.
@@ -566,9 +572,6 @@ export default function EditLoginPage() {
       // patch. null tells the backend to unset the FK; undefined
       // (= "not provided") would leave it alone.
       const scriptChanged = scriptId !== (login?.auto_login_script_id ?? null);
-      // verify_script_id is required (route-layer rejects nulls). Only send
-      // the field when it changed — otherwise leave the existing value alone.
-      const verifyScriptChanged = form.verify_script_id !== (login?.verify_script_id ?? null);
       // Same explicit-set vs leave-alone semantics for the Slack channel
       // override. Empty string in the UI maps to null in the patch
       // (explicit clear); only send the field if it actually changed.
@@ -576,16 +579,8 @@ export default function EditLoginPage() {
       const slackChanged = normalizedSlack !== (login?.notification_slack_channel_id ?? null);
       await updateLogin(selectedOrgId, id, {
         name: form.name.trim(),
-        url: form.url.trim(),
+
         ...(scriptChanged ? { auto_login_script_id: scriptId } : {}),
-        // verify_script_id is non-null here — the Save button is disabled
-        // when form.verify_script_id is falsy, so we can't reach this point
-        // with a null. Guard at the spread anyway to satisfy the typed
-        // patch shape (LoginPatch.verify_script_id is `string | undefined`,
-        // not nullable — the API rejects null).
-        ...(verifyScriptChanged && form.verify_script_id
-          ? { verify_script_id: form.verify_script_id }
-          : {}),
         ...(slackChanged ? { notification_slack_channel_id: normalizedSlack } : {}),
       });
       await setLoginAccessGroups(selectedOrgId, id, loginGroupIds).catch(() => {});
@@ -612,44 +607,6 @@ export default function EditLoginPage() {
   const linkedLoginScript = scripts.find((s) => s.id === scriptId) ?? null;
 
   /**
-   * The login profile's `url` is no longer something operators should
-   * maintain by hand — the scripts define the flow. It can't be dropped
-   * outright though: the MANUAL (HITL) login path calls
-   * navigateWorkerRun(logId, login.url) to open the operator's browser
-   * somewhere, so an empty url means a blank window and a stuck human.
-   *
-   * So: derive it from the login script's first `navigate` step and keep the
-   * field as a rarely-touched override. Same value, no upkeep.
-   */
-  const scriptStartUrl = useMemo(() => {
-    const nav = (linkedLoginScript?.steps ?? []).find(
-      (s: any) => s?.action === 'navigate' && typeof s?.url === 'string' && s.url.trim(),
-    ) as { url?: string } | undefined;
-    return nav?.url?.trim() ?? null;
-  }, [linkedLoginScript]);
-
-  /**
-   * Keep the manual-login URL in step with the linked script.
-   *
-   * Adopts the script's start URL when the field is empty, AND whenever the
-   * operator switches to a DIFFERENT script — the old value belonged to the
-   * old script, so carrying it over would silently point manual logins at
-   * the wrong site.
-   *
-   * It does NOT re-stomp on every render, so a deliberate edit sticks: a
-   * script's first navigate is sometimes a deep link the automation can hit
-   * but a human shouldn't start from. The "Use script's URL" action re-syncs
-   * on demand after such an edit.
-   */
-  const lastScriptForUrlRef = useRef<string | null | undefined>(undefined);
-  useEffect(() => {
-    const previous = lastScriptForUrlRef.current;
-    const switchedScript = previous !== undefined && previous !== scriptId;
-    lastScriptForUrlRef.current = scriptId;
-    if (!scriptStartUrl) return;
-    setForm((f) => (switchedScript || !f.url.trim() ? { ...f, url: scriptStartUrl } : f));
-  }, [scriptStartUrl, scriptId]);
-  /**
    * Does the login script fill a 2FA field?
    *
    * Same contract as requiredCredKeys just below: the SCRIPT declares what it
@@ -672,9 +629,41 @@ export default function EditLoginPage() {
     }
   }, [linkedLoginScript]);
 
+  /**
+   * The keys this login must supply: what the script DECLARES, plus what its
+   * steps actually reference.
+   *
+   * It used to read `parameters` alone, and `parameters` can be empty on a
+   * script whose steps are full of {{vars}} — it is derived at save time, and a
+   * script saved by a path that skipped that derivation carries an empty one
+   * forever. Four login scripts in dev are in exactly that state, referencing
+   * {{email}}, {{password}}, {{login}} and so on while declaring nothing.
+   *
+   * The cost was invisible: no rows rendered, so the page said the script
+   * "declares no {{variables}} yet" and offered nowhere to put the password.
+   * The credentials were simply unenterable, and the sign-in filled blanks and
+   * failed as a wrong password. It stayed hidden only because these logins had
+   * their credentials stored before the rows disappeared — duplicating one is
+   * what made it visible, since the copy has none.
+   *
+   * Scanning the steps is what the {{_mfa}} check above already does, and for
+   * the same reason: the step text is the only place that cannot drift from
+   * what will actually run.
+   */
   const requiredCredKeys = useMemo(() => {
     const declared = Object.keys(linkedLoginScript?.parameters ?? {});
-    return declared.filter((k) => !isReservedParam(k));
+    let referenced: string[] = [];
+    try {
+      const text = JSON.stringify(linkedLoginScript?.steps ?? []);
+      referenced = [...(text.match(/\{\{\s*[\w.]+\s*\}\}/g) ?? [])]
+        .map((m) => m.replace(/[{}\s]/g, ''));
+    } catch { /* unserialisable steps — fall back to what is declared */ }
+    // Underscore prefix, not just the RESERVED_PARAMS table: `_totp` is the
+    // pre-303 spelling of `_mfa` and still appears in un-migrated scripts, and
+    // offering it as a credential field would invite someone to paste a seed
+    // into a box that stores it beside the password.
+    return [...new Set([...declared, ...referenced])]
+      .filter((k) => !k.startsWith('_') && !isReservedParam(k));
   }, [linkedLoginScript]);
 
   /**
@@ -945,62 +934,6 @@ export default function EditLoginPage() {
   };
 
 
-  /**
-   * Delete the login script from the login that owns it.
-   *
-   * Order matters: agent_logins holds an FK to the script, so the delete is
-   * REFUSED while this login still points at it. Unlink first, persist that,
-   * then delete — the other order produces a confusing FK error on a button
-   * that looks like it should just work.
-   *
-   * Only the LOGIN slot gets this. verify_script_id is a required column
-   * (the API rejects null), so a linked verify script genuinely cannot be
-   * removed — record or pick a replacement first, then delete the orphan
-   * from the Scripts list with "Show login scripts" enabled.
-   */
-  const handleDeleteScript = async (target: BrowserScript) => {
-    if (!selectedOrgId || !id) return;
-    const ok = await confirm({
-      title: `Delete "${target.name}"?`,
-      description: 'This login falls back to manual sign-in until you set another. The script is deleted permanently.',
-      confirmText: 'Delete',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    try {
-      await updateLogin(selectedOrgId, id, { auto_login_script_id: null });
-      await deleteScript(selectedOrgId, target.id);
-      setScriptId(null);
-      setScripts((prev) => prev.filter((x) => x.id !== target.id));
-      toast.success(`Deleted "${target.name}"`);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error || err?.message || 'Failed to delete the script');
-    }
-  };
-
-  /**
-   * Swap the login onto a different verify script, then delete the old one.
-   *
-   * Order is forced by the schema: verify_script_id is required and its FK is
-   * ON DELETE RESTRICT, so the replacement must be persisted BEFORE the old
-   * script can go. Doing it the other way round just earns a 409.
-   */
-  const handleReplaceAndDeleteVerify = async () => {
-    if (!selectedOrgId || !id || !verifyToDelete || !verifyReplacementId) return;
-    const doomed = verifyToDelete;
-    try {
-      await updateLogin(selectedOrgId, id, { verify_script_id: verifyReplacementId });
-      await deleteScript(selectedOrgId, doomed.id);
-      setForm((f) => ({ ...f, verify_script_id: verifyReplacementId }));
-      setVerifyScripts((prev) => prev.filter((x) => x.id !== doomed.id));
-      setVerifyToDelete(null);
-      setVerifyReplacementId(null);
-      toast.success(`Replaced and deleted "${doomed.name}"`);
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error || err?.message || 'Failed to replace the verify script');
-    }
-  };
-
   const handleDelete = async () => {
     if (!selectedOrgId || !id) return;
     const ok = await confirm({
@@ -1016,26 +949,6 @@ export default function EditLoginPage() {
       router.push('/actions/logins');
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to delete');
-    }
-  };
-
-  const handleVerify = async () => {
-    if (!selectedOrgId) return;
-    setStartingAction('verify');
-    try {
-      const result = await verifyLogin(selectedOrgId, id);
-      setActiveVerifySession({
-        entityId: id,
-        kind: 'login_verify',
-        logId: result.executionLogId,
-        label: `Verifying: ${login?.name}`,
-        mode: 'observe',
-      });
-      toast.success('Verifying in the background...');
-    } catch (err: any) {
-      toast.error(err.response?.data?.error || 'Failed to start verify');
-    } finally {
-      setStartingAction(null);
     }
   };
 
@@ -1150,6 +1063,35 @@ export default function EditLoginPage() {
         // mode — but the dialog itself isn't auto-opened here at all.
         mode: 'observe',
       });
+
+      // Watch it closely for a few seconds instead of waiting out the shared
+      // completion poll.
+      //
+      // The work itself is fast — take the login queue, close Chrome for the
+      // profile, delete the user-data-dir, flip the row to needs_login — and
+      // the backend measures it in milliseconds once this run reaches the head
+      // of the queue. Nearly all of the spinner people see is the gap until
+      // the next 4s poll tick, i.e. the UI inventing a wait the system does
+      // not have.
+      //
+      // It is still a real wait, not an assumption: a logout CAN sit behind an
+      // agent run holding the same login, so this polls for the actual
+      // terminal status rather than declaring success. If it is still going
+      // after the budget, the shared poll takes over exactly as before.
+      const deadline = Date.now() + 15_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 400));
+        const st = await getBrowserRunStatus(result.executionLogId).catch(() => null);
+        if (!st) break;
+        if (['completed', 'failed', 'aborted'].includes(st.status)) {
+          clearActiveVerifySession(id);
+          await load(true);
+          if (st.status !== 'completed') {
+            toast.error(st.error ? `Logout failed: ${st.error}` : 'Logout failed.');
+          }
+          break;
+        }
+      }
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to start logout');
     } finally {
@@ -1226,7 +1168,17 @@ export default function EditLoginPage() {
           <Button variant="outline" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
             <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving || !form.name.trim() || !form.verify_script_id}>
+          {/* A login script is required, not optional.
+              Nothing works without one: the agent path signs in by running it,
+              and the manual path derives the URL to open from its first
+              navigate step. A login with no script is a row that can only ever
+              park a run for a human who then has nowhere to be sent. */}
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={saving || !form.name.trim() || !scriptId}
+            title={!scriptId ? 'Choose a login script first — a login cannot sign in without one.' : undefined}
+          >
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Save className="h-3.5 w-3.5 mr-1" />}
             Save
           </Button>
@@ -1250,53 +1202,21 @@ export default function EditLoginPage() {
             </div>
             <div className="flex items-center gap-2">
               {needsLogin ? (
-                // Two distinct in-flight states share this button:
-                //   startingAction === 'login' → request to /startLogin is
-                //     in flight (brief, pre-dialog)
-                //   activeSession.kind === 'login_verify' → user clicked
-                //     Done in the HITL dialog and the post-Done verify is
-                //     running in the background. The login row's status
-                //     is mid-flip from 'needs_login' → 'verifying' (SSE
-                //     hasn't arrived yet), so we'd otherwise still render
-                //     the "Log In" affordance even though there's nothing
-                //     to click. Show "Verifying..." so the operator knows
-                //     it's working.
-                // Once SSE / poll updates login.status to 'verifying',
-                // needsLogin flips false and the else branch (Verify +
-                // Log Out) takes over — its Verify button has the same
-                // login_verify-aware label, so the transition reads as
-                // a continuous "Verifying..." state across button swaps.
+                // Spinner while the request to /startLogin is in flight —
+                // brief, and before the dialog opens.
                 <Button size="sm" onClick={handleLogin} disabled={isStarting || !!activeSession}
                   className="bg-warning hover:bg-warning/90 text-white text-xs">
-                  {startingAction === 'login' || (activeSession && activeSession.kind === 'login_verify')
+                  {startingAction === 'login'
                     ? <Loader2 className="h-3 w-3 animate-spin" />
                     : <LogIn className="h-3 w-3" />}
-                  <span className="ml-1">
-                    {activeSession && activeSession.kind === 'login_verify' ? 'Verifying...' : 'Log In'}
-                  </span>
+                  <span className="ml-1">Log In</span>
                 </Button>
               ) : (
                 <>
-                  {/* Verify button intentionally hidden from operators.
-                      Agent runs and the post-manual-login flow already
-                      verify automatically, and an operator-driven verify
-                      kicks off a fresh slot whose first navigation can
-                      transiently land on a not-yet-loaded page and
-                      flip the row to needs_login — confusing for a
-                      session that's actually fine.
-                      handleVerify is still exported (kept for super-
-                      admin/debug use later) but no button surface it. */}
-                  {/* Spinner-only state when a verify is running in
-                      the background (e.g. fired by an agent or by the
-                      post-manual-login chain) so the operator knows
-                      activity is happening without giving them a
-                      button to trigger it manually. */}
-                  {activeSession && activeSession.kind === 'login_verify' && (
-                    <Button variant="outline" size="sm" disabled className="text-xs">
-                      <Loader2 className="h-3 w-3 animate-spin" />
-                      <span className="ml-1">Verifying...</span>
-                    </Button>
-                  )}
+                  {/* No Verify button, and nothing hidden behind one: there
+                      is no verify to run. Whether the session works is
+                      answered by the next script that uses it, at its
+                      login_indicator step. */}
                   {/* Logout — fully automated. Backend closes Chrome,
                       rm-rf's the profile dir, marks needs_login. The
                       button just shows a spinner + "Logging out..." while
@@ -1348,24 +1268,18 @@ export default function EditLoginPage() {
             resize as labels change length — a ragged tab bar is the first
             thing that makes a page look unfinished. */}
         <TabsList className="h-10">
-          <TabsTrigger value="setup" className="min-w-[128px] gap-1.5">
+          <TabsTrigger value="setup" className="min-w-[148px] gap-1.5">
             <Settings2 className="h-3.5 w-3.5" /> Setup
           </TabsTrigger>
-          <TabsTrigger value="runs" className="min-w-[128px] gap-1.5">
+          <TabsTrigger value="runs" className="min-w-[148px] gap-1.5">
             <History className="h-3.5 w-3.5" /> Runs
           </TabsTrigger>
-          {/* Both things on this tab answer "who handles it when this login
-              needs a human" — the groups allowed to act, and where the ping
-              goes. "Handoff" names that rather than listing the two widgets. */}
-          <TabsTrigger value="access" className="min-w-[128px] gap-1.5">
-            <Users className="h-3.5 w-3.5" /> Handoff
-          </TabsTrigger>
-          {/* 2FA is its own tab because it is a mode, not a field: the form
-              you need depends entirely on which source is chosen, and mixing
-              that into Setup meant three save buttons competing on one
-              screen. */}
-          <TabsTrigger value="2fa" className="min-w-[128px] gap-1.5">
-            <ShieldCheck className="h-3.5 w-3.5" /> Two-factor
+          {/* Was "Handoff", which named the moment rather than the setting —
+              nothing in it said this is where you authorise people. Everything
+              on the tab answers one question, WHO: which groups may complete
+              this login, and where they get told to. So: Access. */}
+          <TabsTrigger value="access" className="min-w-[148px] gap-1.5">
+            <Users className="h-3.5 w-3.5" /> Access
           </TabsTrigger>
         </TabsList>
 
@@ -1465,50 +1379,32 @@ Agents sign in unattended when the script and its values are set.
             </div>
           )}
 
-          {/* Manual login URL — first field. Auto-filled from the login
-              script's first navigate step, so it's normally untouched, but
-              it can't be dropped: the manual (HITL) path navigates the
-              operator's browser here and an empty value means a blank
-              window and a stuck human. */}
-          <Field
-            label="Login URL"
-            action={scriptStartUrl && form.url !== scriptStartUrl ? (
-              <button
-                type="button"
-                onClick={() => setForm((f) => ({ ...f, url: scriptStartUrl }))}
-                className="text-[10px] text-brand hover:underline"
-              >
-                Use script&apos;s URL
-              </button>
-            ) : undefined}
-            info="Where a manual login opens in the browser. Agents never use this — they follow the login script. Auto-filled from the script's first navigate step."
-          >
-            <Input
-              value={form.url}
-              onChange={(e) => setForm((f) => ({ ...f, url: e.target.value }))}
-              placeholder="https://app.example.com/login"
-              className={cn('font-mono text-xs', CONTROL_W)}
-            />
-          </Field>
-
-          {/* Script slot. With no login scripts in the org there's nothing
-              to choose from, so the dropdown is suppressed entirely and
-              recording is the only offered action — an empty select reads
-              as "something is broken" rather than "nothing exists yet". */}
+          {/* Selection only. Recording, editing and deleting moved to the
+              Login Scripts page — they are script operations, and doing them
+              from here meant selecting a script just to delete it, which
+              silently repointed this login on the way past. */}
           <ScriptSlot
             label="Login script"
             info={<>Fills the sign-in form and submits. Every <code className="font-mono">{'{{variable}}'}</code> it declares becomes a credential below, stored encrypted.</>}
             scripts={scripts}
             value={scriptId}
             onChange={setScriptId}
-            onRecord={() => setRecordModalOpen(true)}
-            onEdit={(s) => setEditScript(s)}
-            onDelete={handleDeleteScript}
-            recordLabel="Record login script"
-            emptyHint="Record the sign-in once; agents replay it."
-            allowNone
-            noneLabel="— None (manual login only) —"
+            manageHref="/actions/logins/scripts"
+            manageLabel="Manage login scripts"
+            emptyHint="No login scripts yet — record one to sign this login in."
+            required
           />
+
+          {/* Says why Save is disabled. A login lands here straight from the
+              New Login dialog with nothing attached, so this is the first
+              state most logins are in — leaving the button dead with no
+              explanation reads as a broken page. */}
+          {!scriptId && scripts.length > 0 && (
+            <p className="text-xs text-amber-600 dark:text-amber-500 -mt-1">
+              Choose a login script before saving — it is how this login signs in,
+              and where a manual sign-in opens.
+            </p>
+          )}
 
           {/* Credentials — rows derived from the login script's inputs.
               Keys are no longer typed by hand: a misspelled key used to
@@ -1634,36 +1530,18 @@ Agents sign in unattended when the script and its values are set.
         </CardContent>
       </Card>
 
-      {/* Verify Login */}
-      <Card>
-        <CardContent className="py-3 px-5 space-y-3">
-          <Label className="flex items-center gap-1.5">
-            <CheckCircle2 className="h-3.5 w-3.5 text-brand" />
-            Verify Login
-          </Label>
-          <ScriptSlot
-            label="Verify script"
-            required
-            info={<>Runs before every action to confirm the session is still signed in. Completing = signed in; any step failure or timeout = not signed in.<br /><br />Every login must have one, so this script can&apos;t be deleted while it&apos;s selected. To remove it, pick or record a replacement first, then delete the old one from <strong>Scripts</strong> with &ldquo;Show login scripts&rdquo; enabled.</>}
-            scripts={verifyScripts}
-            value={form.verify_script_id}
-            onChange={(v) => setForm((f) => ({ ...f, verify_script_id: v }))}
-            onRecord={() => setRecordVerifyModalOpen(true)}
-            onEdit={(s) => setEditScript(s)}
-            // "Delete" opens a replace-then-delete flow rather than a plain
-            // confirm: verify_script_id is NOT NULL with an ON DELETE
-            // RESTRICT FK, so the login must be pointed at a replacement
-            // before the old script can go.
-            onDelete={(s) => { setVerifyReplacementId(null); setVerifyToDelete(s); }}
-            recordLabel="Record verify script"
-            emptyHint="Open a page only a signed-in user can see."
-          />
-        </CardContent>
-      </Card>
 
-        </TabsContent>
+      {/* Two-factor — was its own tab.
+          It moved here because Setup had shrunk to a script picker and a
+          credentials list, and because the split was misleading: a 2FA source
+          is part of HOW this login signs in, which is the question this tab
+          answers. It was separated when it owned three competing save buttons;
+          it no longer does.
 
-        <TabsContent value="2fa" className="space-y-3 mt-0">
+          Self-gating, so it costs nothing when unused: the source dropdown
+          defaults to None, and the enrolment form for a source only renders
+          once that source is chosen. A login with no second factor sees one
+          dropdown. */}
 
       <Card>
         <CardContent className="p-5 space-y-4">
@@ -1676,13 +1554,14 @@ Agents sign in unattended when the script and its values are set.
             requiredByScript={mfaRequiredByScript}
             scriptName={linkedLoginScript?.name ?? null}
             onSaved={() => { void load(true); }}
+            onSourceChange={setSelectedMfaSource}
           />
 
           {/* Authenticator enrolment — only for the totp source. A login with no
               second factor, or one reading codes from Slack, has nothing to
               enrol, and showing the seed capture anyway invited storing a
               secret that would never be used. */}
-          {(login.mfa_source ?? (login.totp_secret_id ? 'totp' : 'none')) === 'totp' && (
+          {(selectedMfaSource ?? login.mfa_source ?? (login.totp_secret_id ? 'totp' : 'none')) === 'totp' && (
           <div className="border-t pt-3">
           <Field
             label="Authenticator secret"
@@ -1705,16 +1584,6 @@ Agents sign in unattended when the script and its values are set.
                 problem look unsolved. Removing brings the capture UI back. */}
             {!login.totp_secret_id && (
               <>
-                {/* Storing the seed alongside the password means this account
-                    is effectively single-factor for automation. That is the
-                    point, but the operator should make the call knowingly
-                    rather than discover it in a post-incident review. Shown
-                    only here — it's a decision prompt, not a standing notice. */}
-                <p className="text-[10px] text-amber-600 dark:text-amber-500 leading-snug pb-1">
-                  Storing the secret lets this login run unattended, but the second factor no longer
-                  protects this account. Prefer a service account over a personal one.
-                </p>
-
                 {/* The field accepts a pasted or dropped QR IMAGE as well as
                     text. Screenshot-and-paste is the fastest path in practice:
                     the operator is already on the 2FA setup page, on the same
@@ -1887,12 +1756,17 @@ Agents sign in unattended when the script and its values are set.
 
         <TabsContent value="access" className="space-y-3 mt-0">
 
-      {/* Access groups */}
+      {/* Groups and channel in ONE card, because they are one decision.
+          The channel is not general-purpose notification: it is resolved for
+          exactly two events, notifyHitlPause ("this login needs a human") and
+          notifyLoginAutoResolved ("it recovered, stand down"). Both are
+          addressed to the same people the groups authorise, so splitting them
+          across two cards asked the same question twice. */}
       <Card>
-        <CardContent className="py-3 px-5">
+        <CardContent className="py-3 px-5 space-y-4">
           <Field
-            label="Access groups"
-            info="Who gets notified and who can complete this login when an agent pauses for a human. Shared across every agent that uses this login profile."
+            label="Who can complete this login"
+            info="The groups allowed to finish a sign-in when an agent pauses for a human. Shared across every agent that uses this login profile."
           >
           <div className={cn('space-y-2', CONTROL_W)}>
           <MultiSelectTags
@@ -1918,21 +1792,21 @@ Agents sign in unattended when the script and its values are set.
           )}
           </div>
           </Field>
-        </CardContent>
-      </Card>
 
-      {/* Slack notification override for this login profile. When the login
-          action HITL-pauses, the notify service uses this channel before
-          falling back to program (for submissions runs) or the org default.
-          Persisted by the main Save button at the top of the page. */}
-      <Card>
-        <CardContent className="py-3 px-5">
-          <SlackChannelInput
-            scope="login"
-            value={slackChannelId}
-            onChange={setSlackChannelId}
-            description="Click Save at the top of the page to persist changes here."
-          />
+          {/* Where those people are told.
+              Blank DOES mean silent. There is no org-default channel — it was
+              retired in migration 200 — so the cascade is: this field, then the
+              run's program channel if it is a submissions run, then nothing.
+              SlackChannelInput says so itself; this description only covers
+              what the channel is used for. */}
+          <div className="border-t pt-4">
+            <SlackChannelInput
+              scope="login"
+              value={slackChannelId}
+              onChange={setSlackChannelId}
+              description="Used for two things only: this login needs a human to sign in, and this login recovered on its own. Click Save at the top of the page to persist."
+            />
+          </div>
         </CardContent>
       </Card>
 
@@ -2091,138 +1965,13 @@ Agents sign in unattended when the script and its values are set.
           // 'login_logout' is the only kind that flips this to logout
           // wording; login_verify and login_manual both stay 'login'.
           purpose={activeSession.kind === 'login_logout' ? 'logout' : 'login'}
-          // After Done on a manual login, the backend kicks off an
-          // independent verify run. Swap the activeSession to track THAT
-          // run's id so the existing polling effect drives the
-          // "Verifying..." pill back to a settled state ('valid' or
-          // 'needs_login') when it completes. Without this, the post-Done
-          // verify was invisible to the UI and the spinner stayed stuck.
-          onVerifyStarted={(verifyRunId) => {
-            setActiveVerifySession({
-              entityId: id,
-              kind: 'login_verify',
-              logId: verifyRunId,
-              label: `Verifying: ${login?.name}`,
-              mode: 'observe',
-            });
-          }}
+          // Drop the session and refetch the row immediately. The server has
+          // already marked the login valid inside the Done request, so waiting
+          // for the completion poll only kept "Watch" on screen and Log In
+          // disabled for a few more seconds after the job was finished.
+          onCompleted={() => { clearActiveVerifySession(id); void load(true); }}
         />
       )}
-
-      {/* Inline record-a-new-login-script flow. Reuses the same modal
-          used everywhere else (Scripts list, agent action editor) so
-          there's exactly one recording UI to maintain. `script={null}` +
-          `mode="record"` puts it into recording mode; onSaved fires once
-          the operator saves the recorded script. We then refresh the
-          scripts list and auto-select the new script for this login. */}
-      <RunScriptModal
-        script={null}
-        orgId={selectedOrgId}
-        open={recordModalOpen}
-        onClose={() => setRecordModalOpen(false)}
-        mode="record"
-        // Stamp it as a login script so it appears in this login's picker.
-        // Without this it would save as 'regular' and be invisible here.
-        recordKind="login"
-        ownerLoginId={id}
-        onSaved={async () => {
-          // Re-fetch scripts; pick the newest one (it was just created)
-          // and auto-select it for this login. The operator can confirm
-          // the selection and hit the main Save button to persist the
-          // linkage to the login profile.
-          if (!selectedOrgId) return;
-          try {
-            // Same 'login' pool the picker draws from — refetching unfiltered
-            // here would repopulate it with every script in the org.
-            const data = await listScripts(selectedOrgId, { kinds: ['login'] });
-            const all = data.scripts ?? [];
-            setScripts(all);
-            // "Newest" = max created_at. Sorts the cached list and picks.
-            const newest = [...all].sort((a, b) =>
-              new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-            )[0];
-            if (newest) {
-              setScriptId(newest.id);
-              toast.success(`Recorded "${newest.name}" — click Save to link it to this login`);
-            }
-          } catch {
-            toast.error('Recording saved, but failed to refresh script list');
-          }
-        }}
-      />
-
-      {/* Replace-and-delete for the verify script.
-          A login must always have a verify script (verify_script_id is NOT
-          NULL, FK ON DELETE RESTRICT), so "delete" here really means
-          "swap, then delete". Confirm stays disabled until a replacement is
-          chosen — there is no valid state where the old one simply goes. */}
-      <Dialog
-        open={!!verifyToDelete}
-        onOpenChange={(v) => { if (!v) { setVerifyToDelete(null); setVerifyReplacementId(null); } }}
-      >
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle className="text-base">Replace &ldquo;{verifyToDelete?.name}&rdquo;?</DialogTitle>
-            <DialogDescription className="text-xs">
-              Every login needs a verify script, so pick the one that takes over. The old script is
-              then deleted permanently.
-            </DialogDescription>
-          </DialogHeader>
-
-          {(() => {
-            const alternatives = verifyScripts.filter((sc) => sc.id !== verifyToDelete?.id);
-            if (alternatives.length === 0) {
-              return (
-                <div className="space-y-2">
-                  <p className="text-[11px] text-amber-600 dark:text-amber-500 leading-snug">
-                    There&apos;s no other verify script to switch to. Record one first, then delete this.
-                  </p>
-                  <Button
-                    type="button" variant="outline" size="sm"
-                    onClick={() => { setVerifyToDelete(null); setRecordVerifyModalOpen(true); }}
-                  >
-                    <Plus className="h-3.5 w-3.5 mr-1" /> Record verify script
-                  </Button>
-                </div>
-              );
-            }
-            return (
-              <div className="space-y-1.5">
-                <Label className="text-xs">Use this one instead</Label>
-                <Select
-                  value={verifyReplacementId ?? '__none__'}
-                  onValueChange={(v) => setVerifyReplacementId(v === '__none__' ? null : v)}
-                >
-                  <SelectTrigger><SelectValue placeholder="Select a replacement…" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none__" disabled>Select a replacement…</SelectItem>
-                    {alternatives.map((sc) => (
-                      <SelectItem key={sc.id} value={sc.id}>{sc.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            );
-          })()}
-
-          <DialogFooter>
-            <Button
-              type="button" variant="outline" size="sm"
-              onClick={() => { setVerifyToDelete(null); setVerifyReplacementId(null); }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type="button" size="sm" variant="destructive"
-              onClick={handleReplaceAndDeleteVerify}
-              disabled={!verifyReplacementId}
-              title={!verifyReplacementId ? 'Choose a replacement first' : undefined}
-            >
-              Replace and delete
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Camera QR scan. Closes itself on a hit; the decoded otpauth:// URI
           goes straight to enrollment without touching the text field. */}
@@ -2235,59 +1984,7 @@ Agents sign in unattended when the script and its values are set.
         }}
       />
 
-      {/* Record a VERIFY script. Separate instance from the login recorder
-          purely so recordKind differs — without it the new script saves as
-          'regular' and never appears in the verify picker. */}
-      <RunScriptModal
-        script={null}
-        orgId={selectedOrgId}
-        open={recordVerifyModalOpen}
-        onClose={() => setRecordVerifyModalOpen(false)}
-        mode="record"
-        recordKind="login_verify"
-        ownerLoginId={id}
-        onSaved={async () => {
-          if (!selectedOrgId) return;
-          try {
-            const data = await listScripts(selectedOrgId, { kinds: ['login_verify'] });
-            const all = data.scripts ?? [];
-            setVerifyScripts(all);
-            const newest = [...all].sort((a, b) =>
-              new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-            )[0];
-            if (newest) {
-              setForm((f) => ({ ...f, verify_script_id: newest.id }));
-              toast.success(`Recorded "${newest.name}" — click Save to link it to this login`);
-            }
-          } catch {
-            toast.error('Recording saved, but failed to refresh the verify script list');
-          }
-        }}
-      />
 
-      {/* Edit an existing login script. Same modal as the Scripts page —
-          this login page is simply the entry point, since login scripts no
-          longer appear in the general list. */}
-      <RunScriptModal
-        script={editScript}
-        orgId={selectedOrgId}
-        open={!!editScript}
-        onClose={() => setEditScript(null)}
-        mode="test"
-        // This editor was opened from THIS login, so {{_mfa}} can resolve
-        // even before the link has been saved on the page.
-        ownerLoginId={id}
-        onSaved={async () => {
-          if (!selectedOrgId) return;
-          // Refresh so the picker reflects a renamed script.
-          try {
-            const data = await listScripts(selectedOrgId, { kinds: ['login'] });
-            setScripts(data.scripts ?? []);
-          } catch {
-            /* non-fatal — the link is unchanged, only the cached name */
-          }
-        }}
-      />
     </div>
     </TooltipProvider>
   );

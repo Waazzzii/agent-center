@@ -1,11 +1,11 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { Loader2, CheckCircle2, AlertCircle, FlaskConical } from 'lucide-react';
+import { Loader2, CheckCircle2, AlertCircle, FlaskConical, ShieldCheck, KeyRound } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Switch } from '@/components/ui/switch';
+import { Label } from '@/components/ui/label';
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
@@ -32,7 +32,7 @@ import { cn } from '@/lib/utils';
  * into a visible, immediate answer.
  */
 export function MfaSourceSection({
-  orgId, login, requiredByScript = false, scriptName = null, onSaved,
+  orgId, login, requiredByScript = false, scriptName = null, onSaved, onSourceChange,
 }: {
   orgId: string | null;
   login: Login;
@@ -46,6 +46,16 @@ export function MfaSourceSection({
   scriptName?: string | null;
   /** Called after a successful save so the parent can refetch. */
   onSaved?: () => void;
+  /**
+   * The source currently SELECTED, saved or not.
+   *
+   * The parent renders the authenticator-enrolment form beside this section
+   * and used to gate it on the persisted login.mfa_source — so picking
+   * "Authenticator" appeared to do nothing until the source was saved, and the
+   * form only showed up after a round trip nobody knew to make. It read as a
+   * missing form rather than an unsaved one.
+   */
+  onSourceChange?: (source: Login['mfa_source']) => void;
 }) {
   const [source, setSource] = useState<Login['mfa_source']>(login.mfa_source ?? 'none');
   const [channelId, setChannelId] = useState(login.mfa_slack_channel_id ?? '');
@@ -104,6 +114,8 @@ export function MfaSourceSection({
     // result is 'loaded'.
     setChannelState(error ? 'idle' : 'loaded');
   }, [orgId, channelState]);
+
+  useEffect(() => { onSourceChange?.(source); }, [source, onSourceChange]);
 
   const dirty =
     source !== (login.mfa_source ?? 'none')
@@ -229,7 +241,7 @@ export function MfaSourceSection({
     if (!orgId) return;
     setSaving(true);
     try {
-      await updateLogin(orgId, login.id, {
+      const saved = await updateLogin(orgId, login.id, {
         mfa_source: 'none',
         mfa_slack_channel_id: null,
         mfa_gmail_mailbox: null,
@@ -242,7 +254,14 @@ export function MfaSourceSection({
       setGmailQuery('');
       setPattern('');
       setDisableOpen(false);
-      toast.success('Two-factor disabled');
+      // The save landed either way. When the script still fills {{_mfa}} the
+      // backend says so, and that is worth more than a success tick — it is
+      // the only place the resulting failure mode gets named before it happens.
+      if (saved?.warning) {
+        toast.warning('Two-factor removed', { description: saved.warning, duration: 12_000 });
+      } else {
+        toast.success('Two-factor disabled');
+      }
       onSaved?.();
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
@@ -256,84 +275,120 @@ export function MfaSourceSection({
 
   return (
     <div className="space-y-4">
-      {/* Enabled/disabled first. Everything else is downstream of it, so a
-          single switch is the honest control — a method dropdown sitting on a
-          login with no second factor implies one is in use. */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="space-y-0.5">
-          <p className="text-sm font-medium">Two-factor authentication</p>
-          <p className="text-xs text-muted-foreground">
-            {enabled
-              ? <>Supplies <code className="font-mono">{'{{_mfa}}'}</code> to the login script from{' '}
-                  {source === 'totp' ? 'an authenticator secret' : 'a Slack channel'}.</>
-              : requiredByScript
-                ? <>Required{scriptName ? <> by <span className="font-medium">{scriptName}</span></> : null},
-                    which fills <code className="font-mono">{'{{_mfa}}'}</code>. Pick a method below.</>
-                : <>Off. Enable it only if the sign-in asks for a code — the login script does
-                    not reference one.</>}
-          </p>
-        </div>
-        {/* Locked on when the script asks for a code. Turning it off would not
-            disable anything — the script would still reach the 2FA field and fill
-            it blank — so offering the choice would be offering a way to break the
-            login quietly. */}
-        <Switch
-          checked={enabled || requiredByScript}
-          disabled={saving || requiredByScript}
-          onCheckedChange={(v) => {
-            if (v) { setPendingMethod('totp'); setEnableOpen(true); }
-            else setDisableOpen(true);
+      {/* One dropdown, "None" included.
+          There was a switch here as well, on the reasoning that a method
+          dropdown on a login with no second factor implies one is in use. But
+          "None" IS a method — it is the answer for most logins — and a switch
+          plus a method row meant two controls for one decision, with the second
+          only appearing after the first was flipped.
+
+          The icon matches the Login section above so the two read as siblings
+          rather than as a subsection of credentials. */}
+      <div className="space-y-2">
+        <Label className="flex items-center gap-1.5">
+          <ShieldCheck className="h-3.5 w-3.5 text-brand" />
+          Two-factor authentication
+        </Label>
+
+        <Select
+          value={source ?? 'none'}
+          disabled={saving}
+          onValueChange={(v) => {
+            const next = v as Login['mfa_source'];
+            if (next === source) return;
+            // Both paths keep their confirmation. Turning it off clears stored
+            // fields, and turning it on has setup to do — neither is a thing to
+            // apply silently on a dropdown change.
+            //
+            // Deferred by a tick. Both Select and Dialog are Radix dismissable
+            // layers, and both set `pointer-events: none` on <body> while open,
+            // restoring it on teardown (see react-dismissable-layer). Opening
+            // one from inside the other's close handler interleaves those two
+            // lifecycles in the same commit, which is a long-standing source of
+            // a dead page or an unclickable dialog. These dialogs were opened
+            // by a Switch and a button until this control became a Select, so
+            // the interleaving is new. A macrotask keeps them sequential — it
+            // costs nothing and removes the class of problem rather than
+            // relying on the ordering happening to work out.
+            setTimeout(() => {
+              if (next === 'none') setDisableOpen(true);
+              else { setPendingMethod(next as 'totp' | 'slack' | 'gmail'); setEnableOpen(true); }
+            }, 0);
           }}
-          aria-label="Enable two-factor authentication"
-        />
+        >
+          <SelectTrigger className="max-w-lg"><SelectValue /></SelectTrigger>
+          <SelectContent>
+            {/* Selectable even when the script fills {{_mfa}}.
+                It was disabled, on the reasoning that removing the source
+                cannot stop the script reaching the 2FA field. True — but every
+                login that HAS a second factor also has a script that fills one,
+                so the option was greyed out on exactly the logins where someone
+                would reach for it, with nothing to say why. That reads as a
+                broken control, not as a guard rail.
+                The warning belongs in the confirmation, where it can explain
+                itself, so that is where it went. */}
+            <SelectItem value="none">No two-factor</SelectItem>
+            <SelectItem value="totp">Authenticator app (TOTP)</SelectItem>
+            <SelectItem value="gmail">Code emailed to a mailbox</SelectItem>
+            <SelectItem value="slack">Code posted to a Slack channel</SelectItem>
+          </SelectContent>
+        </Select>
+
+        {/* Only when the setting and the script AGREE, and only then because
+            the warnings below already cover every case where they do not.
+            This used to render in all four combinations, so the two mismatch
+            states said the same thing twice — once here in grey and again in
+            the warning underneath.
+            Of the agreeing states only one is worth a remark: "2FA on and the
+            script uses it" is the state you want and nothing else confirms it.
+            "No 2FA and the script never asks" is the default for most logins —
+            the dropdown already reads "No two-factor". */}
+        {enabled && requiredByScript && (
+          <p className="text-xs text-muted-foreground flex items-start gap-1.5">
+            <KeyRound className="h-3.5 w-3.5 shrink-0 mt-px" />
+            <span>
+              Supplies <code className="font-mono">{'{{_mfa}}'}</code> to{' '}
+              {scriptName ? <span className="font-medium">{scriptName}</span> : 'the login script'}
+              {' '}from {source === 'totp' ? 'an authenticator secret'
+                       : source === 'gmail' ? 'a mailbox' : 'a Slack channel'}.
+            </span>
+          </p>
+        )}
       </div>
 
-      {/* Required but unset. Loud, because the run does not error — it fills an
-          empty 2FA box and the site blames the password. */}
+      {/* The two ways the setting and the script can disagree. Both are
+          WARNINGS, not blocks — the script is editable and so is this, and
+          which one is wrong depends on what the site actually does. Guessing
+          on the operator's behalf is what made "No two-factor" unselectable
+          on every login that had 2FA. */}
+
+      {/* Script asks, nothing supplies. Loud, because the run does not report a
+          2FA error: the field fills blank and the site blames the password. */}
       {requiredByScript && !enabled && (
         <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
           <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
           <div className="space-y-1">
             <p>
-              This login has no way to get a 2FA code, but its script fills one. Sign-ins
-              will fail with what looks like a wrong password.
+              <strong>Sign-ins will fail.</strong> The script fills{' '}
+              <code className="font-mono">{'{{_mfa}}'}</code> but no source is set, so it will
+              fill blank and the site will answer &ldquo;wrong password&rdquo;. Either pick a
+              source, or remove the 2FA step from the script if the site no longer asks.
             </p>
-            <button
-              type="button"
-              className="font-medium underline"
-              onClick={() => { setPendingMethod('totp'); setEnableOpen(true); }}
-            >
-              Choose a method
-            </button>
           </div>
         </div>
       )}
 
-      {/* Configured but unused — the mirror image, and worth saying rather than
-          leaving someone to wonder why their secret never gets read. */}
+      {/* Supplied, nothing asks. The mirror image and much milder — stored and
+          never read costs nothing, but it usually means a script that was
+          expected to have a 2FA step does not. */}
       {enabled && !requiredByScript && (
-        <p className="text-[10px] text-muted-foreground">
-          The login script does not reference <code className="font-mono">{'{{_mfa}}'}</code>,
-          so this is stored but never read. Harmless — but if a 2FA step was expected,
-          the script is missing it.
-        </p>
-      )}
-
-      {enabled && (
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Method:</span>
-          <span className="font-medium">
-            {source === 'totp'  ? 'Authenticator app (TOTP)'
-             : source === 'gmail' ? 'Code emailed to a mailbox'
-             : 'Code posted to a Slack channel'}
+        <div className="flex items-start gap-2 rounded-md border border-amber-300/40 dark:border-amber-800/40 bg-amber-50/50 dark:bg-amber-950/20 px-3 py-2 text-xs text-amber-700 dark:text-amber-500">
+          <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+          <span>
+            <strong>Configured but unused.</strong> The script never references{' '}
+            <code className="font-mono">{'{{_mfa}}'}</code>, so this is stored and never read.
+            Harmless — but if the sign-in does ask for a code, the script is missing that step.
           </span>
-          <button
-            type="button"
-            className="text-brand hover:underline"
-            onClick={() => { setPendingMethod(source); setEnableOpen(true); }}
-          >
-            Change
-          </button>
         </div>
       )}
 
@@ -341,15 +396,6 @@ export function MfaSourceSection({
         <div className="pl-3 space-y-3">
         {source === 'slack' && (
           <>
-          {/* Stated once, at the point of decision. A channel of codes is a
-              shared secret store with searchable history — worth knowing before
-              wiring it up, not after. */}
-          <p className="text-[10px] text-amber-600 dark:text-amber-500 leading-snug">
-            Invite the Slack bot to the channel or it cannot read the codes. Anyone who can
-            read this channel can complete this login, and the codes are not
-            held in the secret store. Keep the channel private and its membership small.
-          </p>
-
           {/* The channel ID is the field, always, and it never changes shape.
               What we STORE is an id — the channel's name is not persisted
               anywhere — so an id is the only thing that can be rendered
@@ -364,7 +410,7 @@ export function MfaSourceSection({
           <Field
             label="Channel ID"
             required
-            info="Where the codes arrive. Paste the id, or use Select to look it up — the picker lists private channels the Slack bot has been added to, since a channel carrying 2FA codes should not be public. A public channel id still works if you paste it."
+            info="Where the codes arrive. The Slack bot must be invited to the channel or it cannot read them. Paste the id, or use Select to look it up — the picker lists private channels the bot has been added to, since a channel carrying 2FA codes should not be public. A public channel id still works if you paste it. To find an id in Slack: right-click the channel, View channel details, and it is at the bottom."
           >
             <div className={cn('flex items-center gap-2', CONTROL_W)}>
               <Input
@@ -381,10 +427,6 @@ export function MfaSourceSection({
                 Select…
               </Button>
             </div>
-            <p className="text-[10px] text-muted-foreground pt-1">
-              In Slack: right-click the channel → View channel details → the id is at the
-              bottom.
-            </p>
           </Field>
 
           </>
@@ -396,17 +438,10 @@ export function MfaSourceSection({
               a channel is scoped to itself, a mailbox is not. The query narrows
               what is FETCHED, it is not a permission boundary — the delegation
               grants the whole inbox. */}
-          <p className="text-[10px] text-amber-600 dark:text-amber-500 leading-snug">
-            This grants read access to the whole mailbox, not just the matching mail —
-            the search below narrows what is fetched, it does not limit what could be.
-            Point it at a dedicated alias that receives nothing else, never a person&apos;s
-            inbox.
-          </p>
-
           <Field
             label="Mailbox"
             required
-            info="The address whose inbox receives the codes. Gmail signs in AS this mailbox, so it must be a real account in your Google Workspace with domain-wide delegation granted to the service account."
+            info="The address whose inbox receives the codes. Gmail signs in AS this mailbox, so it must be a real account in your Google Workspace with domain-wide delegation granted to the service account. This grants read access to the WHOLE mailbox — the search query narrows what is fetched, not what could be — so use a dedicated alias rather than a person’s inbox."
           >
             <Input
               value={mailbox}
@@ -419,7 +454,7 @@ export function MfaSourceSection({
           <Field
             label="Search query"
             required
-            info={<>Gmail search syntax, the same as the search box in Gmail. This picks the MESSAGE; the pattern below pulls the code out of it.</>}
+            info={<>Gmail search syntax, the same as the search box in Gmail. This picks the MESSAGE; the pattern below pulls the code out of it. Narrow it to the sender that issues codes — the newest match wins.</>}
           >
             <Input
               value={gmailQuery}
@@ -427,11 +462,6 @@ export function MfaSourceSection({
               placeholder="from:noreply@vendor.com subject:code"
               className={cn('font-mono text-xs', CONTROL_W)}
             />
-            <p className="text-[10px] text-muted-foreground pt-1">
-              Narrow this to the sender that issues codes. Left broad, the newest matching
-              mail wins — which on a busy mailbox may be something else entirely, and the
-              site would only report a bad code.
-            </p>
           </Field>
           </>
         )}
@@ -439,7 +469,7 @@ export function MfaSourceSection({
           <Field
             label="Code pattern"
             required
-            info={<>Regular expression that pulls the code out of the message. Capture group 1 if you use one, otherwise the whole match.</>}
+            info={<>Regular expression that pulls the code out of the message. Capture group 1 if you use one, otherwise the whole match. Anchor it on the words around the code rather than the digits alone — the first match wins.</>}
           >
             <Input
               value={pattern}
@@ -447,12 +477,6 @@ export function MfaSourceSection({
               placeholder={String.raw`verification code is\s*(\d{4,8})`}
               className={cn('font-mono text-xs', CONTROL_W)}
             />
-            <p className="text-[10px] text-muted-foreground pt-1">
-              Anchor on the words around the code, not the digits alone. A bare
-              four-digit pattern will match a phone number or a year earlier in the
-              message — the first match wins, so it would submit the wrong code and
-              the site would only say bad credentials.
-            </p>
           </Field>
 
           <Field
@@ -550,13 +574,9 @@ export function MfaSourceSection({
             {saving && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
             {source === 'gmail' ? 'Save Gmail settings' : 'Save Slack settings'}
           </Button>
-          {incomplete && (
-            <span className="text-[10px] text-muted-foreground">
-              {source === 'gmail'
-                ? 'Fill the mailbox, query and pattern first — a half-configured source fills the 2FA field blank.'
-                : 'Pick a channel and a pattern first — a half-configured source fills the 2FA field blank.'}
-            </span>
-          )}
+          {/* No sentence beside the button. It restated which fields were
+              empty, next to required fields that are already marked, under a
+              Save that is already disabled — three signals for one fact. */}
         </div>
       )}
 
@@ -647,43 +667,38 @@ export function MfaSourceSection({
         </DialogContent>
       </Dialog>
 
-      {/* Method chooser */}
+      {/* Confirmation, not a second chooser.
+          The method has already been picked in the dropdown above; this says
+          what that choice means and gives a way back out. It used to repeat the
+          Select, which meant two dropdowns for one decision. */}
       <Dialog open={enableOpen} onOpenChange={(o) => { if (!o && !saving) setEnableOpen(false); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>How does this login receive its code?</DialogTitle>
+            <DialogTitle>
+              {pendingMethod === 'totp' ? 'Use an authenticator app?'
+               : pendingMethod === 'gmail' ? 'Read the code from a mailbox?'
+               : 'Read the code from a Slack channel?'}
+            </DialogTitle>
             <DialogDescription>
               The login script is identical either way — it fills{' '}
               <code className="font-mono">{'{{_mfa}}'}</code> and does not know the source.
             </DialogDescription>
           </DialogHeader>
 
-          <Select value={pendingMethod} onValueChange={(v) => setPendingMethod(v as 'totp' | 'slack' | 'gmail')}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="totp">Authenticator app (TOTP)</SelectItem>
-              <SelectItem value="gmail">Code emailed to a mailbox</SelectItem>
-              <SelectItem value="slack">Code posted to a Slack channel</SelectItem>
-            </SelectContent>
-          </Select>
-
+          {/* One line each. The dialog is a confirmation, not a comparison —
+              the trade-offs between the three belong wherever someone is
+              choosing, and they have already chosen by the time this opens. */}
           {pendingMethod === 'totp' ? (
             <p className="text-xs text-muted-foreground">
-              You will paste or scan the site&apos;s setup key next. Stronger than either
-              message route, because the secret stays in the secret store.
+              You will paste or scan the site&apos;s setup key next.
             </p>
           ) : pendingMethod === 'gmail' ? (
-            <p className="text-xs text-amber-600 dark:text-amber-500">
-              For sites that will not issue a setup key and email the code instead. Reads a
-              mailbox you name — use a dedicated alias, since this grants access to
-              everything in that inbox.
+            <p className="text-xs text-muted-foreground">
+              You will name a mailbox and a search that finds the code email.
             </p>
           ) : (
-            <p className="text-xs text-amber-600 dark:text-amber-500">
-              For sites that will not issue a setup key and text or email the code instead.
-              Anyone who can read the channel can complete this login, so keep it private.
+            <p className="text-xs text-muted-foreground">
+              You will name the Slack channel the codes arrive in.
             </p>
           )}
 
@@ -704,13 +719,35 @@ export function MfaSourceSection({
       <Dialog open={disableOpen} onOpenChange={(o) => { if (!o && !saving) setDisableOpen(false); }}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>Turn off two-factor?</DialogTitle>
+            <DialogTitle>Remove two-factor from this login?</DialogTitle>
             <DialogDescription>
-              Any login script that fills a 2FA field will start failing, and the stored
-              channel, mailbox, query and pattern are cleared. An enrolled authenticator
-              secret is kept.
+              The stored channel, mailbox, query and pattern are cleared. An enrolled
+              authenticator secret is kept, so re-enabling does not mean re-enrolling.
             </DialogDescription>
           </DialogHeader>
+
+          {/* The specific consequence, when we know the script asks for a code.
+              Not a generic "any script that fills 2FA" — this names the script
+              and says what the failure will look like, because it does NOT look
+              like a 2FA error: the field fills blank and the site blames the
+              password. */}
+          {requiredByScript ? (
+            <div className="flex items-start gap-2 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+              <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                <strong>Sign-ins will break.</strong>{' '}
+                {scriptName ? <><span className="font-medium">{scriptName}</span> fills</> : 'This login’s script fills'}{' '}
+                <code className="font-mono">{'{{_mfa}}'}</code>, and with no source it will fill
+                blank — the site answers &ldquo;wrong password&rdquo; and the real cause is
+                invisible. Remove the 2FA step from the script too, or pick another source.
+              </span>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              This login&apos;s script does not fill <code className="font-mono">{'{{_mfa}}'}</code>,
+              so nothing depends on it.
+            </p>
+          )}
           <DialogFooter>
             <Button variant="outline" onClick={() => setDisableOpen(false)} disabled={saving}>
               Cancel

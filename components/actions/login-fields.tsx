@@ -1,11 +1,12 @@
 'use client';
 
 import * as React from 'react';
-import { Info, Plus, Pencil, Trash2 } from 'lucide-react';
+import Link from 'next/link';
+import { Info, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
+import { ScriptPickerDialog } from './ScriptPickerDialog';
 import { cn } from '@/lib/utils';
 import type { BrowserScript } from '@/lib/api/scripts';
 
@@ -14,9 +15,9 @@ import type { BrowserScript } from '@/lib/api/scripts';
  *
  * Extracted from the edit page so the CREATE page can present the same thing.
  * They were identical work rendered two different ways: creating a login needs
- * the same script slots as editing one — you cannot even save a login without a
- * verify script, so "pick one from a list that might be empty" was a dead end
- * whenever the login being set up was the first of its kind.
+ * the same script slot as editing one, and "pick one from a list that might be
+ * empty" was a dead end whenever the login being set up was the first of its
+ * kind.
  *
  * Kept as presentational pieces with no data fetching, so create (no row yet)
  * and edit (a row with credentials, 2FA and run history) can both use them
@@ -88,19 +89,25 @@ export function FieldNest({ children }: { children: React.ReactNode }) {
 }
 
 /**
- * A script slot: pick an existing script, or record a new one.
+ * A script slot: shows what is selected, opens a picker to change it.
  *
- * With no scripts to choose from, recording becomes the only offered action. An
- * empty select reads as "something is broken"; a single labelled button reads as
- * "do this next" — which is the common case on a brand-new login, where the
- * verify script does not exist yet.
+ * The picker used to be a native select. That worked at three scripts and fell
+ * apart at twenty — no search, no ordering, and no way to see what a script was
+ * without selecting it. Worse, edit and delete hung off the SLOT, so removing a
+ * script you did not want selected meant selecting it first, which silently
+ * repointed the login.
  *
- * Login and verify scripts are hidden from the general Scripts list (they belong
- * to their login), so this row is also the only way to open one for editing.
+ * Now the slot only displays and opens; ScriptPickerDialog does the choosing,
+ * searching and managing. Nothing in the picker changes this login except
+ * clicking a row.
+ *
+ * With no scripts at all, recording is the only offered action — an empty
+ * picker reads as "something is broken", a single labelled button reads as
+ * "do this next", and that is the common case on a brand-new login.
  */
 export function ScriptSlot({
-  label, info, scripts, value, onChange, onRecord, onEdit, onDelete,
-  recordLabel, emptyHint, allowNone = false, noneLabel = '— None —', required = false,
+  label, info, scripts, value, onChange, manageHref, manageLabel,
+  emptyHint, required = false,
   disabled = false,
 }: {
   label: string;
@@ -108,30 +115,25 @@ export function ScriptSlot({
   scripts: BrowserScript[];
   value: string | null;
   onChange: (id: string | null) => void;
-  onRecord: () => void;
-  onEdit: (script: BrowserScript) => void;
-  /** Delete the selected script outright. Omit to hide the action. */
-  onDelete?: (script: BrowserScript) => void;
-  recordLabel: string;
+  /** The Login Scripts page — where recording, editing and deleting happen. */
+  manageHref: string;
+  manageLabel?: string;
   emptyHint?: string;
-  allowNone?: boolean;
-  noneLabel?: string;
   required?: boolean;
   /** Greys the whole slot out — used where a login row must exist first. */
   disabled?: boolean;
 }) {
   const selected = scripts.find((s) => s.id === value) ?? null;
+  const [pickerOpen, setPickerOpen] = React.useState(false);
 
   return (
     <Field label={label} info={info} required={required}>
       {scripts.length === 0 ? (
         <div className="flex items-center gap-2.5">
-          <Button
-            type="button" variant="outline" size="sm"
-            onClick={onRecord} disabled={disabled} className="shrink-0"
-          >
-            <Plus className="h-3.5 w-3.5 mr-1" />
-            {recordLabel}
+          <Button type="button" variant="outline" size="sm" disabled={disabled} asChild={!disabled} className="shrink-0">
+            {disabled
+              ? <span><Settings2 className="h-3.5 w-3.5 mr-1 inline" />{manageLabel ?? 'Manage scripts'}</span>
+              : <Link href={manageHref}><Settings2 className="h-3.5 w-3.5 mr-1" />{manageLabel ?? 'Manage scripts'}</Link>}
           </Button>
           {emptyHint && (
             <span className="text-[10px] text-muted-foreground leading-snug">{emptyHint}</span>
@@ -139,59 +141,51 @@ export function ScriptSlot({
         </div>
       ) : (
         <div className={cn('flex items-center gap-2', CONTROL_W)}>
-          <Select
-            value={value ?? '__none__'}
-            onValueChange={(v) => onChange(v === '__none__' ? null : v)}
+          {/* The button IS the current value — clicking anywhere on it opens
+              the picker, so there is no separate "change" affordance to hunt
+              for. */}
+          <button
+            type="button"
+            onClick={() => setPickerOpen(true)}
             disabled={disabled}
+            className={cn(
+              'flex-1 min-w-0 flex items-center justify-between gap-2 rounded-md border bg-background',
+              'px-3 h-9 text-sm text-left transition-colors',
+              disabled ? 'opacity-50 cursor-not-allowed' : 'hover:bg-muted/40',
+            )}
+            title={selected ? `${selected.name} — click to change` : 'Choose a script'}
           >
-            <SelectTrigger className="flex-1 min-w-0">
-              <SelectValue placeholder="Select a script…" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="__none__" disabled={!allowNone}>
-                {allowNone ? noneLabel : 'Select a script…'}
-              </SelectItem>
-              {scripts.map((s) => (
-                <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {selected && (
-            <Button
-              type="button" variant="outline" size="icon"
-              className="h-9 w-9 shrink-0"
-              onClick={() => onEdit(selected)}
-              disabled={disabled}
-              title={`Open "${selected.name}" in the editor`}
-            >
-              <Pencil className="h-4 w-4" />
-            </Button>
-          )}
+            <span className={cn('truncate', !selected && 'text-muted-foreground')}>
+              {selected ? selected.name : 'Select a script…'}
+            </span>
+            <span className="text-[10px] text-muted-foreground shrink-0">
+              {scripts.length} available
+            </span>
+          </button>
           <Button
             type="button" variant="outline" size="icon"
             className="h-9 w-9 shrink-0"
-            onClick={onRecord}
             disabled={disabled}
-            title={recordLabel}
+            title={manageLabel ?? 'Manage scripts'}
+            asChild={!disabled}
           >
-            <Plus className="h-4 w-4" />
+            {disabled ? <span><Settings2 className="h-4 w-4" /></span>
+                      : <Link href={manageHref}><Settings2 className="h-4 w-4" /></Link>}
           </Button>
-          {/* Deleting lives here because this page is the script's only home —
-              they are hidden from the Scripts list, so there was nowhere else to
-              remove one from. */}
-          {selected && onDelete && (
-            <Button
-              type="button" variant="ghost" size="icon"
-              className="h-9 w-9 shrink-0 text-muted-foreground hover:text-destructive"
-              onClick={() => onDelete(selected)}
-              disabled={disabled}
-              title={`Delete "${selected.name}"`}
-            >
-              <Trash2 className="h-4 w-4" />
-            </Button>
-          )}
         </div>
       )}
+
+      <ScriptPickerDialog
+        open={pickerOpen}
+        onOpenChange={setPickerOpen}
+        title={`Choose a ${label.toLowerCase()}`}
+        description="Recording, editing and deleting live on the Login Scripts page — nothing here changes a script, only which one this login uses."
+        scripts={scripts}
+        value={value}
+        onSelect={onChange}
+        manageHref={manageHref}
+        manageLabel={manageLabel}
+      />
     </Field>
   );
 }

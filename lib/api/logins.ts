@@ -5,15 +5,9 @@ export interface Login {
   organization_id: string;
   name: string;
   url: string;
-  /** @deprecated — superseded by verify_script_id. Kept in the type only
-   *  because the column still exists in the DB until a future migration
-   *  drops it. No UI surface reads this anymore. */
+  /** @deprecated — the column still exists in the DB until a future migration
+   *  drops it. Nothing reads it. */
   verify_text: string;
-  /** Browser script that proves the session is logged in. Required for new
-   *  logins (enforced at API + UI). Running the script to completion = valid;
-   *  any step error or timeout = needs_login. ON DELETE RESTRICT: the script
-   *  cannot be deleted while any login still references it here. */
-  verify_script_id: string | null;
   /**
    * Where the 2FA code comes from.
    *   none  — no second factor
@@ -48,33 +42,25 @@ export interface Login {
    */
   mfa_timeout_seconds: number;
   browser_session_id: string | null;
-  /** Any time we ran a verify (regardless of outcome). */
+  /** Any time a run reported on this login's state, either outcome. */
   last_checked_at: string | null;
   /** Last time the session was confirmed / refreshed valid. */
   last_logged_in_at: string | null;
   // Login profile status lifecycle:
-  //   valid       — the saved session has been verified (recently or
-  //                 just now) to authenticate against the site.
-  //   needs_login — the saved session doesn't authenticate (expired,
-  //                 logged out, never set up, etc.) and a human needs
-  //                 to log in via the "Log In" button.
-  //   verifying   — INTERMEDIATE: the user clicked Done after a
-  //                 manual login / completed HITL, and a background
-  //                 verify is in flight to confirm the saved state.
-  //                 Transitions to valid or needs_login when the
-  //                 verify finishes (~5s typical). The UI renders this
-  //                 with a spinner so the operator knows we don't yet
-  //                 know the outcome. Without this state, the previous
-  //                 design optimistically wrote 'valid' on Done click
-  //                 and reverted to 'needs_login' once verify failed —
-  //                 a stale-valid window operators occasionally caught
-  //                 in flight and made decisions on.
-  //   unknown     — never been checked (fresh login profile, no verify
-  //                 has run yet).
-  status: 'valid' | 'needs_login' | 'verifying' | 'unknown';
-  /** Optional browser script that the agent executor will attempt before
-   *  falling through to HITL when verification fails. Auto-login is only
-   *  attempted when BOTH this AND credentials_secret_id are set. */
+  //   valid       — a script ran against this session and its
+  //                 login_indicator step passed, or a sign-in just
+  //                 completed.
+  //   needs_login — a sign-in was needed and automation could not
+  //                 finish it, so a human has to use "Log In".
+  //   unknown     — nothing has reported on it yet.
+  //
+  // There is no 'verifying'. A manual Done marks the login valid in the same
+  // request and nothing runs behind it, so the state had nothing left to
+  // describe. Checked before removing: no row in dev or prod carries it.
+  status: 'valid' | 'needs_login' | 'unknown';
+  /** Browser script that signs this login in. Runs when a script's
+   *  login_indicator step fails. Only attempted when BOTH this AND
+   *  credentials_secret_id are set; otherwise the run parks for a human. */
   auto_login_script_id: string | null;
   /** UUID of the encrypted credentials row in organization_secrets. The
    *  actual values are NEVER returned by the API — operators re-enter to
@@ -97,26 +83,24 @@ export interface Login {
   updated_at: string;
 }
 
+/**
+ * A name is all it takes. The sign-in URL comes from the login script's first
+ * navigate step, read at the moment a manual sign-in needs it, so it is not
+ * stored on the login and not asked for here.
+ */
 export interface LoginInput {
   name: string;
-  url: string;
-  /** Required: browser-script ID that verifies the login state. */
-  verify_script_id: string;
 }
 
 /** Patch payload for updateLogin.
  *   undefined → leave unchanged
- *   null      → explicitly clear (only for fields that allow clearing —
- *               verify_script_id does NOT allow null, the API rejects it)
+ *   null      → explicitly clear
  *   <uuid>    → set to that value
  *  (Credentials use the dedicated setLoginCredentials / clearLoginCredentials
  *   endpoints — never set them via patch since they need encryption.) */
 export interface LoginPatch {
   name?: string;
-  url?: string;
   auto_login_script_id?: string | null;
-  /** Required field — can be replaced but not cleared. API rejects null. */
-  verify_script_id?: string;
   /** undefined = leave alone, null = clear, string = set. Empty string is
    *  treated as null at the API call site. */
   notification_slack_channel_id?: string | null;
@@ -195,6 +179,27 @@ export async function createLogin(orgId: string, data: LoginInput): Promise<Logi
 }
 
 /**
+ * Copy a login's configuration to a new row: script, 2FA wiring, notification
+ * channel, access groups.
+ *
+ * NOT copied — credentials, the authenticator seed, and the Chrome profile.
+ * Those are the identity rather than the configuration, and sharing them
+ * between two rows means a delete or a logout on either takes out both. The
+ * copy starts signed-out with no credentials on file.
+ *
+ * The 2FA METHOD comes across, including 'totp' — the type was never in
+ * question, only the secret behind it. `warning` is set in that case, because
+ * the copy then says "authenticator" with nothing enrolled yet. Slack and Gmail
+ * copy whole: a channel, a query and a regex are configuration, not secrets.
+ */
+export async function duplicateLogin(orgId: string, id: string): Promise<Login & { warning?: string }> {
+  const res = await agentClient.post<Login & { warning?: string }>(
+    `/api/admin/${orgId}/logins/${id}/duplicate`,
+  );
+  return res.data;
+}
+
+/**
  * Try a code pattern against the channel's recent messages.
  *
  * Omit either argument to re-check what is already stored. Resolves even when
@@ -248,7 +253,14 @@ export async function testLoginGmailMfaPattern(
   }
 }
 
-export async function updateLogin(orgId: string, id: string, data: LoginPatch): Promise<Login> {
+/**
+ * A save that succeeded but left the login inconsistent with its script comes
+ * back with `warning` alongside the row — currently only for turning 2FA off
+ * while the script still fills {{_mfa}}. It is not an error: the write landed.
+ */
+export type LoginWithWarning = Login & { warning?: string };
+
+export async function updateLogin(orgId: string, id: string, data: LoginPatch): Promise<LoginWithWarning> {
   const res = await agentClient.patch<Login>(`/api/admin/${orgId}/logins/${id}`, data);
   return res.data;
 }
@@ -413,11 +425,6 @@ export async function previewLoginTotp(orgId: string, id: string): Promise<TotpP
   return res.data;
 }
 
-export async function verifyLogin(orgId: string, id: string): Promise<VerifyResult> {
-  const res = await agentClient.post<VerifyResult>(`/api/admin/${orgId}/logins/${id}/verify`);
-  return res.data;
-}
-
 /** Start an interactive manual login — allocates a browser, navigates to the
  *  login URL, and pauses for the user.  Returns the execution log id to open
  *  in the noVNC dialog. */
@@ -462,10 +469,10 @@ export async function clearLoginSession(
 }
 
 /**
- * Test the auto-login chain end-to-end — runs the same verify → script →
- * re-verify path the agent uses, but standalone (no HITL fallback). Lets
- * operators confirm a fresh credentials + script config works before
- * relying on it in production.
+ * Test the auto-login script with its stored credentials — the same path an
+ * agent takes when a script's login_indicator step fails, but standalone (no
+ * HITL fallback). Clears the stored session first, so the script is actually
+ * exercised rather than skipped by an already-live one.
  *
  * Returns 400 from the API if auto-login isn't fully configured
  * (script + credentials both required).

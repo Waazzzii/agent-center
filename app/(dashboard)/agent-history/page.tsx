@@ -9,24 +9,17 @@ import {
   getAgents,
   getExecutionHistory,
   abortBrowserRun,
+  isInertLoginRow,
   type Agent,
   type ExecutionRun,
 } from '@/lib/api/agents';
 import { tagFilterParams } from '@/lib/api/tags';
+import { FilterPicker } from '@/components/execution/FilterPicker';
 import { useTags } from '@/lib/hooks/use-tags';
 import { TagList } from '@/components/tags/tag-badge';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
@@ -50,8 +43,7 @@ import {
   ArrowUpRight,
   CalendarIcon,
   GitBranch,
-  Tag as TagIcon,
-} from 'lucide-react';
+  Tag as TagIcon, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
@@ -225,7 +217,14 @@ function RunsTable({
       {/* Rows */}
       <div className="divide-y divide-border/40">
         {runs.map((run) => {
-          const actions = run.action_logs ?? [];
+          // Inert login rows are hidden here too, or the dot strip and the
+          // n/total counter would disagree with the detail view they open.
+          // The denominator drops by the same count: total_actions counts the
+          // agent's definition, which still contains the login action.
+          const allActions = run.action_logs ?? [];
+          const actions = allActions.filter((a) => !isInertLoginRow(a));
+          const hiddenLogins = allActions.length - actions.length;
+          const totalActions = Math.max(0, (run.total_actions ?? allActions.length) - hiddenLogins);
           const displayStatus = run.display_status ?? run.status;
           const isRunning     = run.status === 'executing' || run.status === 'provisioning';
           const isAwaiting    = run.status === 'awaiting_approval';
@@ -286,10 +285,10 @@ function RunsTable({
                       'bg-muted'
                     )} title={`${a.action_name ?? a.action_type} · ${a.status}`} />
                   ))}
-                  {Array.from({ length: Math.max(0, (run.total_actions ?? actions.length) - actions.length) }).map((_, i) => (
+                  {Array.from({ length: Math.max(0, totalActions - actions.length) }).map((_, i) => (
                     <span key={`p-${i}`} className="h-1.5 w-3 rounded-full bg-muted/50" />
                   ))}
-                  <span className="text-[9px] text-muted-foreground/50 ml-1 tabular-nums">{completedSteps}/{run.total_actions ?? actions.length}</span>
+                  <span className="text-[9px] text-muted-foreground/50 ml-1 tabular-nums">{completedSteps}/{totalActions}</span>
                 </div>
                 {/* Status */}
                 <StatusBadge status={displayStatus} />
@@ -417,8 +416,6 @@ export default function AgentExecutionsPage() {
   const { tags } = useTags(selectedOrgId);
 
   // Inline date input state
-  const [pendingDate, setPendingDate]       = useState<'from' | 'to' | null>(null);
-  const [dateInputValue, setDateInputValue] = useState('');
 
   const initialAgentId = useRef(searchParams.get('agent_id'));
 
@@ -501,27 +498,50 @@ export default function AgentExecutionsPage() {
     loadHistory(1, { statuses, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: toFilter });
   };
 
-  const applyDate = (type: 'from' | 'to', value: string) => {
-    if (!value) return;
-    if (type === 'from' && toFilter && value > toFilter) { toast.error('From date cannot be after To date'); return; }
-    if (type === 'to' && fromFilter && value < fromFilter) { toast.error('To date cannot be before From date'); return; }
-    if (type === 'from') {
-      setFromFilter(value);
-      loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: value, to: toFilter });
-    } else {
-      setToFilter(value);
-      loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: value });
-    }
-    setPage(1);
-    setPendingDate(null);
-    setDateInputValue('');
-  };
 
   const toggleTag = (tagId: string, checked: boolean) => {
     const next = checked ? [...tagFilters, tagId] : tagFilters.filter((t) => t !== tagId);
     setTagFilters(next);
     setPage(1);
     loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: toFilter, tags: next });
+  };
+
+  /**
+   * Apply one filter field. '' clears it.
+   *
+   * Every field funnels through here so the reload is written once — the old
+   * bar repeated the same six-argument loadHistory call in each dropdown's
+   * handler, and they drifted (the tag menu forgot to pass tags on one path).
+   *
+   * status and tag are stored as arrays because the summary cards apply named
+   * groups of statuses; this sets exactly one, or none.
+   */
+  const applyFilter = (key: string, value: string) => {
+    const next = {
+      statuses: statusFilters,
+      trigger:  triggerFilter,
+      agentId:  agentFilter,
+      from:     fromFilter,
+      to:       toFilter,
+      tags:     tagFilters,
+    };
+    if (key === 'status')  { next.statuses = value ? [value] : []; setStatusFilters(next.statuses); }
+    if (key === 'trigger') { next.trigger  = value; setTriggerFilter(value); }
+    if (key === 'agent')   { next.agentId  = value; setAgentFilter(value); }
+    if (key === 'tag')     { next.tags     = value ? [value] : []; setTagFilters(next.tags); }
+    // Ordering guard, kept from the old date buttons: a From after the To
+    // silently returns nothing, which reads as "no runs" rather than as a
+    // bad range. Refuse instead of querying.
+    if (key === 'from') {
+      if (value && toFilter && value > toFilter) { toast.error('From date cannot be after To date'); return; }
+      next.from = value; setFromFilter(value);
+    }
+    if (key === 'to') {
+      if (value && fromFilter && value < fromFilter) { toast.error('To date cannot be before From date'); return; }
+      next.to = value; setToFilter(value);
+    }
+    setPage(1);
+    loadHistory(1, next);
   };
 
   const clearFilters = () => {
@@ -707,216 +727,50 @@ export default function AgentExecutionsPage() {
           {/* Runs Table Card */}
           <Card>
             <CardHeader className="pb-3 border-b">
-              {/* Filter dropdowns row */}
+              {/* One control, two steps: which field, then which value.
+                  See FilterPicker — six side-by-side dropdowns wrapped onto a
+                  second line on a narrow window, and the agent menu had no
+                  search, which is the one list that actually gets long. */}
               <div className="flex flex-wrap items-center gap-2">
 
-                {/* Status multi-select */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className={cn('gap-1.5 text-xs border-dashed', statusFilters.length > 0 && 'border-solid border-brand/40 text-foreground')}
-                    >
-                      <Filter className="h-3 w-3" />
-                      Status
-                      {statusFilters.length > 0 && (
-                        <Badge variant="brand" className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">{statusFilters.length}</Badge>
-                      )}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start" className="w-52">
-                    <DropdownMenuLabel className="text-xs text-muted-foreground pb-1">Active</DropdownMenuLabel>
-                    {(['provisioning', 'executing', 'queued', 'awaiting_approval'] as const).map(s => (
-                      <DropdownMenuCheckboxItem
-                        key={s}
-                        checked={statusFilters.includes(s)}
-                        onCheckedChange={(c) => toggleStatus(s, c)}
-                        onSelect={(e) => e.preventDefault()}
-                      >
-                        {STATUS_LABELS[s]}
-                      </DropdownMenuCheckboxItem>
-                    ))}
-                    <DropdownMenuSeparator />
-                    <DropdownMenuLabel className="text-xs text-muted-foreground pb-1">History</DropdownMenuLabel>
-                    {(['completed', 'failed', 'aborted'] as const).map(s => (
-                      <DropdownMenuCheckboxItem
-                        key={s}
-                        checked={statusFilters.includes(s)}
-                        onCheckedChange={(c) => toggleStatus(s, c)}
-                        onSelect={(e) => e.preventDefault()}
-                      >
-                        {STATUS_LABELS[s]}
-                      </DropdownMenuCheckboxItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                {/* Trigger dropdown */}
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className={cn('gap-1.5 text-xs border-dashed', triggerFilter && 'border-solid border-brand/40 text-foreground')}
-                    >
-                      <Webhook className="h-3 w-3" />
-                      Trigger
-                      {triggerFilter && (
-                        <Badge variant="brand" className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">1</Badge>
-                      )}
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="start">
-                    {FILTERABLE_TRIGGERS.map(t => (
-                      <DropdownMenuCheckboxItem
-                        key={t}
-                        checked={triggerFilter === t}
-                        onCheckedChange={(c) => {
-                          const next = c ? t : '';
-                          setTriggerFilter(next);
-                          setPage(1);
-                          loadHistory(1, { statuses: statusFilters, trigger: next, agentId: agentFilter, from: fromFilter, to: toFilter });
-                        }}
-                        onSelect={(e) => e.preventDefault()}
-                      >
-                        {TRIGGER_LABELS[t]}
-                      </DropdownMenuCheckboxItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-
-                {/* Agent dropdown */}
-                {agents.length > 0 && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={cn('gap-1.5 text-xs border-dashed', agentFilter && 'border-solid border-brand/40 text-foreground')}
-                      >
-                        <Monitor className="h-3 w-3" />
-                        Agent
-                        {agentFilter && (
-                          <Badge variant="brand" className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">1</Badge>
-                        )}
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-56 max-h-60 overflow-y-auto">
-                      {agents.map(a => (
-                        <DropdownMenuCheckboxItem
-                          key={a.id}
-                          checked={agentFilter === a.id}
-                          onCheckedChange={(c) => {
-                            const next = c ? a.id : '';
-                            setAgentFilter(next);
-                            setPage(1);
-                            loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: next, from: fromFilter, to: toFilter });
-                          }}
-                          onSelect={(e) => e.preventDefault()}
-                        >
-                          {a.name}
-                        </DropdownMenuCheckboxItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-
-                {/* Tag multi-select — resolves through each run's agent */}
-                {tags.length > 0 && (
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className={cn('gap-1.5 text-xs border-dashed', tagFilters.length > 0 && 'border-solid border-brand/40 text-foreground')}
-                      >
-                        <TagIcon className="h-3 w-3" />
-                        Tags
-                        {tagFilters.length > 0 && (
-                          <Badge variant="brand" className="ml-0.5 h-4 min-w-4 px-1 text-[10px]">{tagFilters.length}</Badge>
-                        )}
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="start" className="w-56 max-h-60 overflow-y-auto">
-                      {tags.map((t) => (
-                        <DropdownMenuCheckboxItem
-                          key={t.id}
-                          checked={tagFilters.includes(t.id)}
-                          onCheckedChange={(c) => toggleTag(t.id, c)}
-                          onSelect={(e) => e.preventDefault()}
-                        >
-                          {t.name}
-                        </DropdownMenuCheckboxItem>
-                      ))}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                )}
-
-                {/* From date */}
-                {pendingDate === 'from' ? (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">From:</span>
-                    <Input
-                      type="date"
-                      value={dateInputValue}
-                      onChange={(e) => setDateInputValue(e.target.value)}
-                      max={toFilter || undefined}
-                      className="h-[28px] text-xs w-[136px]"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && dateInputValue) applyDate('from', dateInputValue);
-                        if (e.key === 'Escape') { setPendingDate(null); setDateInputValue(''); }
-                      }}
-                    />
-                    <Button size="sm" className="text-xs" onClick={() => applyDate('from', dateInputValue)} disabled={!dateInputValue}>Add</Button>
-                    <Button variant="ghost" size="sm" className="text-xs" onClick={() => { setPendingDate(null); setDateInputValue(''); }}>Cancel</Button>
-                  </div>
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className={cn('gap-1.5 text-xs border-dashed', fromFilter && 'border-solid border-brand/40 text-foreground')}
-                    onClick={() => { setPendingDate('from'); setDateInputValue(fromFilter); }}
-                  >
-                    <CalendarIcon className="h-3 w-3" />
-                    From{fromFilter && `: ${formatShortDate(fromFilter)}`}
-                  </Button>
-                )}
-
-                {/* To date */}
-                {pendingDate === 'to' ? (
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium text-muted-foreground">To:</span>
-                    <Input
-                      type="date"
-                      value={dateInputValue}
-                      onChange={(e) => setDateInputValue(e.target.value)}
-                      min={fromFilter || undefined}
-                      className="h-[28px] text-xs w-[136px]"
-                      autoFocus
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter' && dateInputValue) applyDate('to', dateInputValue);
-                        if (e.key === 'Escape') { setPendingDate(null); setDateInputValue(''); }
-                      }}
-                    />
-                    <Button size="sm" className="text-xs" onClick={() => applyDate('to', dateInputValue)} disabled={!dateInputValue}>Add</Button>
-                    <Button variant="ghost" size="sm" className="text-xs" onClick={() => { setPendingDate(null); setDateInputValue(''); }}>Cancel</Button>
-                  </div>
-                ) : (
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    className={cn('gap-1.5 text-xs border-dashed', toFilter && 'border-solid border-brand/40 text-foreground')}
-                    onClick={() => { setPendingDate('to'); setDateInputValue(toFilter); }}
-                  >
-                    <CalendarIcon className="h-3 w-3" />
-                    To{toFilter && `: ${formatShortDate(toFilter)}`}
-                  </Button>
-                )}
+                <FilterPicker
+                  align="start"
+                  onApply={applyFilter}
+                  kinds={[
+                    {
+                      key: 'status', label: 'Status', icon: Filter,
+                      // Single value from here. The summary cards above still
+                      // apply named GROUPS, which is why statusFilters stays an
+                      // array — see applyFilter.
+                      current: statusFilters.length === 1 ? statusFilters[0] : null,
+                      options: FILTERABLE_STATUSES.map((v) => ({
+                        value: v, label: STATUS_LABELS[v] ?? v,
+                      })),
+                    },
+                    {
+                      key: 'trigger', label: 'Trigger', icon: Webhook,
+                      current: triggerFilter || null,
+                      options: FILTERABLE_TRIGGERS.map((t) => ({ value: t, label: TRIGGER_LABELS[t] ?? t })),
+                    },
+                    {
+                      key: 'agent', label: 'Agent', icon: Bot,
+                      current: agentFilter || null,
+                      options: agents.map((a) => ({ value: a.id, label: a.name })),
+                      emptyHint: 'no agents',
+                    },
+                    {
+                      key: 'tag', label: 'Tag', icon: TagIcon,
+                      current: tagFilters.length === 1 ? tagFilters[0] : null,
+                      options: tags.map((t) => ({ value: t.id, label: t.name })),
+                      emptyHint: 'no tags',
+                    },
+                    { key: 'from', label: 'From date', icon: CalendarIcon, current: fromFilter || null },
+                    { key: 'to',   label: 'To date',   icon: CalendarIcon, current: toFilter   || null },
+                  ]}
+                />
 
                 {/* Clear all */}
-                {hasFilters && pendingDate === null && (
+                {hasFilters && (
                   <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={clearFilters}>
                     Clear all
                   </Button>

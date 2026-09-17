@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/navigation';
 import { createPortal } from 'react-dom';
 import { toast } from 'sonner';
@@ -623,11 +623,6 @@ export function RunScriptModal({
   // rather than per-row so only one can ever be open, and so right-click and
   // the ⋮ button raise the identical menu instead of drifting into two lists.
   const [contextMenuIndex, setContextMenuIndex] = useState<number | null>(null);
-  // Armed by the "no login indicator" banner: the next row click marks that
-  // step. Same arm-then-pick shape as the group range picker, so the list needs
-  // no permanent chrome for something done once per script.
-  const [pickingIndicator, setPickingIndicator] = useState(false);
-
   // ── Current step editor resize ────────────────────────────────
   const [stepEditorHeight, setStepEditorHeight] = useState(200);
   const [dragStepIdx, setDragStepIdx] = useState<number | null>(null);
@@ -967,12 +962,26 @@ export function RunScriptModal({
   const buildParameters = (steps: RecordedStep[]): Record<string, string> => {
     const vars = analyzeVariables(steps);
     const result: Record<string, string> = {};
-    // Reserved engine-supplied variables ({{_mfa}}) must NOT be persisted
-    // as parameters — a declared entry renders as an empty operator field
-    // and shadows the value the executor injects at run time. This mirrors
-    // the same exclusion in the backend's refine pass.
-    for (const name of vars.keys()) {
+    for (const [name, info] of vars) {
+      // Reserved engine-supplied variables ({{_mfa}}) must NOT be persisted
+      // as parameters — a declared entry renders as an empty operator field
+      // and shadows the value the executor injects at run time. This mirrors
+      // the same exclusion in the backend's refine pass.
       if (isReservedParam(name)) continue;
+      // CONSUMERS only. analyzeVariables also tracks each extract step's
+      // field_name as a SOURCE, because the Variables Panel draws the
+      // produced-here/used-there relationship — but a produced value is an
+      // output, and `parameters` is read everywhere as "what must be filled
+      // in before this runs". Including sources meant a harvest script that
+      // extracts fifteen figures declared fifteen empty inputs: fifteen boxes
+      // on its preview card, fifteen names offered to the agent editor, and
+      // on a login script, fifteen credential rows to type into.
+      //
+      // This is also what the backend already does — collectParamRefs
+      // (step-schema.js) walks the same fields for {{name}} and never looks
+      // at field_name — so a script saved from the editor and the same script
+      // saved through the MCP now declare the same thing.
+      if (info.consumers.length === 0) continue;
       result[name] = '';
     }
     return result;
@@ -2683,7 +2692,15 @@ export function RunScriptModal({
     if (!orgId) return;
     const targetScriptId = script?.id ?? tempScriptId ?? null;
     try {
-      if (runId) await syncStepRunSteps(orgId, runId, newSteps);
+      // The DATABASE first, the worker second — this used to be the other way
+      // round, and the order was the bug.
+      //
+      // syncStepRunSteps talks to the worker's in-memory copy of the run, and
+      // it throws for reasons that have nothing to do with the edit: the run
+      // expired, the slot was released, the worker restarted. When it threw,
+      // the await below it never ran, so the edit reached the live session and
+      // never reached the script. It looked applied until the session ended,
+      // then it was simply gone.
       if (targetScriptId) {
         await updateScript(orgId, targetScriptId, {
           steps: newSteps,
@@ -2691,6 +2708,14 @@ export function RunScriptModal({
           test_values: {},
         });
         setHasChanges(false);
+      }
+      // Keeps the live browser running the version just saved. Failing here
+      // costs this session its accuracy, not the edit — so it says that,
+      // rather than reporting a save that did happen as a failure.
+      if (runId) {
+        await syncStepRunSteps(orgId, runId, newSteps).catch(() => {
+          toast.warning('Saved — but this browser session is still running the previous version. Restart the session to pick it up.');
+        });
       }
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to save step');
@@ -2710,6 +2735,33 @@ export function RunScriptModal({
     delete next[key];
     return next;
   };
+
+  /**
+   * Can the step the list is currently on be the indicator, and if not, why?
+   *
+   * The same three rules handleSetLoginIndicator enforces, evaluated ahead of
+   * the click so the button can be disabled with the reason on it rather than
+   * accepting the click and answering with an error toast.
+   */
+  const indicatorCandidate = useMemo(() => {
+    const steps = stepRunState?.steps ?? [];
+    const idx = stepRunState?.currentIndex ?? 0;
+    const step = steps[idx];
+    if (!step) return { idx, ok: false, why: 'Select a step first.' };
+    if (['navigate', 'press_key', 'pause', 'group', 'download',
+      'wait_for_tab', 'switch_tab', 'close_tab'].includes(step.action)) {
+      return { idx, ok: false,
+        why: `A ${step.action} step succeeds with nothing on the page, so it cannot prove a `
+           + 'session. Select one that has to find an element — wait-for, extract, select, fill or click.' };
+    }
+    const firstCommit = steps.findIndex((x) => x?.requires_approval === true);
+    if (firstCommit !== -1 && idx >= firstCommit) {
+      return { idx, ok: false,
+        why: `Step ${idx + 1} is at or after step ${firstCommit + 1}, which submits. A failed `
+           + 'indicator re-runs the script from the start, so anything already submitted would go twice.' };
+    }
+    return { idx, ok: true, why: null as string | null };
+  }, [stepRunState?.steps, stepRunState?.currentIndex]);
 
   /**
    * Make one step THE proof that the session is live, clearing any other.
@@ -2747,14 +2799,28 @@ export function RunScriptModal({
     if (!orgId) return;
     const targetScriptId = script?.id ?? tempScriptId ?? null;
     try {
-      if (runId) await syncStepRunSteps(orgId, runId, newSteps);
+      // Script first, worker second — see applyStepEdit for why the reverse
+      // order silently dropped the edit.
       if (targetScriptId) {
         await updateScript(orgId, targetScriptId, {
           steps: newSteps, parameters: buildParameters(newSteps), test_values: {},
         });
         setHasChanges(false);
       }
-      toast.success(`Step ${stepIndex + 1} now proves the session`);
+      if (runId) {
+        await syncStepRunSteps(orgId, runId, newSteps).catch(() => {
+          toast.warning('Saved — but this browser session is still running the previous version. Restart the session to pick it up.');
+        });
+      }
+      // Only claim it is saved when something was saved. Before the first Save
+      // in record mode there is no script row yet, and this said "now proves
+      // the session" regardless — so a mark that lived only in memory read as
+      // a durable one, right up until the session closed and it was gone.
+      if (targetScriptId) {
+        toast.success(`Step ${stepIndex + 1} now proves the session`);
+      } else {
+        toast.warning(`Step ${stepIndex + 1} marked — use Save to keep it, this script has not been saved yet.`);
+      }
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to set the login indicator');
     }
@@ -3666,38 +3732,31 @@ export function RunScriptModal({
                     modal because the whole problem is that you cannot see, from
                     the list, that it is missing. */}
                 {script?.requires_login === true
-                  && !pickingIndicator
                   && !(stepRunState?.steps ?? []).some((st) => st?.login_indicator === true) && (
                   <div className="px-3 py-2 flex items-center gap-2 bg-amber-500/10 border-y border-amber-500/30">
                     <KeyRound className="h-3.5 w-3.5 shrink-0 text-amber-500" />
                     <p className="text-[11px] flex-1 min-w-0">
                       <span className="font-medium">No step proves the session.</span>{' '}
-                      Until one does, this script cannot tell a live login from a sign-in page.
+                      Select the step that only works when signed in, then pick it.
                     </p>
+                    {/* Acts on the step the list is ALREADY on, rather than
+                        arming a mode and waiting for a second click.
+                        Arm-then-pick read as finished the moment the button was
+                        pressed — the banner changed, so the job looked done, and
+                        the click that actually marked the step never came.
+                        Nothing here changes state until this button is pressed,
+                        and it will not press until the current step can legally
+                        be the indicator. The reason rides on the tooltip, so a
+                        disabled button explains itself instead of taking the
+                        click and answering with an error. */}
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="h-6 px-2 text-[11px]"
-                      onClick={(e) => { e.stopPropagation(); setPickingIndicator(true); }}
+                      disabled={!indicatorCandidate.ok}
+                      title={indicatorCandidate.why ?? `Mark step ${indicatorCandidate.idx + 1} as the proof this session is live`}
+                      className="h-6 px-2 text-[11px] font-medium shrink-0"
+                      onClick={(e) => { e.stopPropagation(); void handleSetLoginIndicator(indicatorCandidate.idx); }}
                     >
-                      Pick the step
-                    </Button>
-                  </div>
-                )}
-                {pickingIndicator && (
-                  <div className="px-3 py-2 flex items-center gap-2 bg-emerald-500/10 border-y border-emerald-500/30">
-                    <KeyRound className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
-                    <p className="text-[11px] flex-1 min-w-0">
-                      Click the step that <span className="font-medium">only succeeds when signed in</span>.
-                      It has to be a wait-for or extract, and come before anything that submits.
-                    </p>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="h-6 px-2 text-[11px]"
-                      onClick={(e) => { e.stopPropagation(); setPickingIndicator(false); }}
-                    >
-                      Cancel
+                      Pick Current Step
                     </Button>
                   </div>
                 )}
@@ -3815,15 +3874,6 @@ export function RunScriptModal({
                         onMouseLeave={() => setHoveredStep(null)}
                         onClick={() => {
                           if (inlineRenameIndex === i) return; // mid-rename, ignore
-                          // An armed picker owns the click: while either is
-                          // waiting, a click means "this one", not "run from
-                          // here". Both disarm themselves so the list never
-                          // stays in a mode the operator has forgotten about.
-                          if (pickingIndicator) {
-                            void handleSetLoginIndicator(i);
-                            setPickingIndicator(false);
-                            return;
-                          }
                           // Picking the other end of a group takes precedence
                           // over jumping the runner — while the picker is armed
                           // a click means "end here", not "run from here".

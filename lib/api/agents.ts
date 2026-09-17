@@ -519,18 +519,37 @@ export async function getBrowserRunStatus(runId: string): Promise<BrowserRunStat
  * Resume an agent run that is paused waiting for a browser login.
  * Call this after the human has logged in via the noVNC iframe.
  *
- * For manual-login login runs (kind='manual'), the backend kicks off an
- * independent post-login verify run and returns its id as `verifyRunId`.
- * Callers can use that to subscribe to the verify's status — drives the
- * "Verifying..." spinner on the login details page back to a settled
- * state once the verify completes. Returns `null` for non-manual flows
- * (e.g. logout, or agent-action resumes that don't spawn a verify).
+ * Nothing re-checks the operator afterwards. This used to return the id of an
+ * independent post-login verify run, which the login page subscribed to for a
+ * "Verifying..." spinner; that run, and verification generally, is gone.
  */
-export async function resumeBrowserRun(runId: string): Promise<{ verifyRunId: string | null }> {
-  const res = await agentClient.post<{ ok: boolean; verifyRunId?: string | null }>(
-    `/agent/run/${runId}/resume`,
-  );
-  return { verifyRunId: res.data?.verifyRunId ?? null };
+/**
+ * A login action row that did nothing, and so is not worth showing.
+ *
+ * The login step used to open a browser, run a verify script, and sign in when
+ * that failed. It does none of that now: proving the session is a step of the
+ * BROWSER SCRIPT (login_indicator), and the sign-in it triggers is recorded
+ * against that script's row, beside the step that prompted it. What is left is
+ * a passthrough — same items in, same items out, no browser.
+ *
+ * Shown, it claimed a login had happened before the script, which is the one
+ * thing that is no longer true, and sent anyone looking for the sign-in to an
+ * empty row.
+ *
+ * Only the INERT case is hidden. A login row that failed, was aborted, or is
+ * still parked (older runs, from when the login step could pause for HITL) had
+ * something happen to it and still shows.
+ *
+ * The row is NOT deleted — resolveActiveSessionId reads agent_action_log to
+ * bind an AI step with the browser connector to this run's session, and the
+ * executor's gating/cascade bookkeeping runs per row. This is a view decision.
+ */
+export function isInertLoginRow(row: { action_type?: string | null; status?: string | null }): boolean {
+  return row.action_type === 'login' && row.status === 'completed';
+}
+
+export async function resumeBrowserRun(runId: string): Promise<void> {
+  await agentClient.post(`/agent/run/${runId}/resume`);
 }
 
 /**

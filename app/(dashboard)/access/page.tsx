@@ -376,7 +376,6 @@ export default function AccessPage() {
                       <LogIn className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
                         <div className="text-sm font-medium">{login.name}</div>
-                        <div className="text-[10px] text-muted-foreground font-mono truncate">{login.url}</div>
                       </div>
                       <ExternalLink className="h-3 w-3 text-muted-foreground/30 group-hover:text-muted-foreground shrink-0" />
                     </Link>

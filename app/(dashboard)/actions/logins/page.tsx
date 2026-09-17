@@ -6,27 +6,25 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   listLogins,
-  startLogout,
+  createLogin,
+  duplicateLogin,
   type Login,
 } from '@/lib/api/logins';
-import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
 import { getBrowserRunStatus } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  Plus, Trash2, LogIn, LogOut, Loader2, CheckCircle2, AlertCircle, HelpCircle,
-} from 'lucide-react';
+  Plus, Trash2, Copy, LogIn, Loader2, CheckCircle2, AlertCircle, HelpCircle, Search, ArrowUp, ArrowDown } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
-import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import { DeleteLoginDialog } from '@/components/logins/DeleteLoginDialog';
+import { NewLoginDialog } from '@/components/logins/NewLoginDialog';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import {
   listActiveVerifySessions,
-  getActiveVerifySession,
-  setActiveVerifySession,
   clearActiveVerifySession,
   subscribeActiveVerifySessions,
   type ActiveVerifySession,
@@ -34,12 +32,16 @@ import {
 
 // ─── Helpers ────────────────────────────────────────────────
 
+/** What the 2FA column says for each source. */
+const MFA_LABELS: Record<string, string> = {
+  totp:  'Authenticator',
+  slack: 'Slack',
+  gmail: 'Gmail',
+};
+
 function StatusPill({ status }: { status: Login['status'] }) {
   if (status === 'valid') return <Badge variant="success" className="gap-1"><CheckCircle2 className="h-3 w-3" />Logged In</Badge>;
   if (status === 'needs_login') return <Badge variant="warning" className="gap-1"><AlertCircle className="h-3 w-3" />Not Logged In</Badge>;
-  // 'verifying' renders between a manual-login Done click and the
-  // background verify completing — see Login['status'] in lib/api/logins.ts.
-  if (status === 'verifying') return <Badge variant="neutral" className="gap-1"><Loader2 className="h-3 w-3 animate-spin" />Verifying…</Badge>;
   return <Badge variant="neutral" className="gap-1"><HelpCircle className="h-3 w-3" />Not Yet Checked</Badge>;
 }
 
@@ -59,22 +61,27 @@ const TERMINAL = new Set(['completed', 'failed', 'aborted']);
 export default function LoginsPage() {
   const { selectedOrgId } = useAdminViewStore();
   const allowed = useRequirePermission('agent_center_user');
-  const { confirm } = useConfirmDialog();
   const [deleteTarget, setDeleteTarget] = useState<Login | null>(null);
   const router = useRouter();
+  const [newLoginOpen, setNewLoginOpen] = useState(false);
+  // Local filtering — the list is small enough that a round trip per keystroke
+  // would be slower than rendering it, and the status filter has to agree with
+  // the search anyway.
+  const [search, setSearch] = useState('');
+  // 'needs_creds' is not a status — it is "configured but unusable", which is
+  // the thing worth finding in a list where every login is meant to be
+  // automatic. A login with no credentials cannot sign itself in, so its first
+  // run parks for a human no matter what its status says.
+  const [statusFilter, setStatusFilter] = useState<'all' | 'valid' | 'needs_login' | 'needs_creds'>('all');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const [items, setItems] = useState<Login[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Per-login "starting" state (during the initial POST call)
   const [starting, setStarting] = useState<Record<string, boolean>>({});
-  const { start: startManualLogin } = useStartManualLogin();
-
   // Active sessions from localStorage, keyed by login id
   const [activeSessions, setActiveSessions] = useState<Record<string, ActiveVerifySession>>({});
-
-  // Which login's session is currently open in the HITL dialog
-  const [viewingLoginId, setViewingLoginId] = useState<string | null>(null);
 
   // ── Load active sessions from localStorage on mount + subscribe ──
   useEffect(() => {
@@ -114,7 +121,6 @@ export default function LoginsPage() {
               toasted.add(s.logId);
               const kindLabel =
                 s.kind === 'login_logout' ? 'Logout' :
-                s.kind === 'login_verify' ? 'Verify' :
                 s.kind === 'login_manual' ? 'Login' :
                 'Operation';
               const action = status.status === 'aborted' ? 'aborted' : 'failed';
@@ -172,85 +178,48 @@ export default function LoginsPage() {
   // offers to move them before anything is destroyed.
   const handleDelete = (item: Login) => setDeleteTarget(item);
 
-  // ── Log Out / Log In actions ───────────────────────────────
-  // Log In still opens the noVNC dialog (operator interacts with the
-  // login form). Log Out is fully automated server-side — backend
-  // closes Chrome + rm-rf's the profile dir + marks needs_login — so
-  // it just kicks off the run and lets the polling effect track it to
-  // terminal. The row's button shows a spinner while active; the
-  // shared poll surfaces failure via toast.
-  const handleLogout = async (item: Login) => {
+  // ── Log In ────────────────────────────────────────────────
+  // Log Out used to live here too. It is a destructive, profile-wiping
+  // operation that fails any run currently holding the login, and it sat one
+  // stray click away from Delete on every row of a list people scan. It now
+  // lives only on the login's own page, where the operator has the context
+  // that decision needs. Nothing else moved: the poll below still tracks a
+  // logout started there, because the active-session store is shared.
+
+  // Straight to the copy's edit page: a duplicate always needs its own
+  // credentials before it can do anything, so landing on the list would just
+  // mean finding the new row and clicking into it.
+  const handleDuplicate = async (item: Login) => {
     if (!selectedOrgId) return;
-
-    // Destructive confirm — see actions/logins/[id]/page.tsx for the
-    // full rationale. Same warning text so operators get a consistent
-    // message whether they trigger logout from the list or the detail
-    // page.
-    const confirmed = await confirm({
-      title:       'Log Out of this Profile?',
-      description: (
-        <div className="space-y-2">
-          <p>
-            This will close every Chrome window using{' '}
-            <span className="font-medium text-foreground">{item.name}</span>{' '}
-            and wipe its saved session.
-          </p>
-          <p>
-            <span className="font-medium text-destructive">
-              Any agent runs currently using this login will fail mid-step.
-            </span>{' '}
-            Queued runs will need to re-acquire the login (new HITL prompts)
-            before they can continue.
-          </p>
-          <p>Only continue if you intend to force a fresh login from scratch.</p>
-        </div>
-      ),
-      confirmText: 'Log Out',
-      cancelText:  'Cancel',
-      variant:     'destructive',
-    });
-    if (!confirmed) return;
-
     setStarting((s) => ({ ...s, [item.id]: true }));
     try {
-      const result = await startLogout(selectedOrgId, item.id);
-      setActiveVerifySession({
-        entityId: item.id,
-        kind: 'login_logout',
-        logId: result.executionLogId,
-        label: `Log out: ${item.name}`,
-        // 'observe' rather than 'interactive' — there's no HITL step
-        // for logout anymore, so any dialog-opening code path treats
-        // this as read-only.
-        mode: 'observe',
-      });
-      // Intentionally NO setViewingLoginId here — logout has nothing
-      // for the operator to do in the dialog. The button on the row
-      // shows the spinner state via activeSessions[item.id].kind.
+      const copy = await duplicateLogin(selectedOrgId, item.id);
+      if (copy.warning) toast.warning(copy.warning);
+      toast.success(`Created ${copy.name} — add its credentials to finish.`);
+      router.push(`/actions/logins/${copy.id}`);
     } catch (err: unknown) {
       const e = err as { response?: { data?: { error?: string } } };
-      toast.error(e.response?.data?.error || 'Failed to start logout');
-    } finally {
+      toast.error(e.response?.data?.error || 'Failed to duplicate login');
       setStarting((s) => ({ ...s, [item.id]: false }));
     }
   };
 
-  const handleLogin = async (item: Login) => {
-    if (!selectedOrgId) return;
-    setStarting((s) => ({ ...s, [item.id]: true }));
-    // Centralized in useStartManualLogin — same flow as the
-    // Interactions page and the edit-login page. Pre-clears stale
-    // storage_state, kicks off the login_run, and stamps the
-    // active-verify-sessions store. Returns null on error (toast
-    // already fired) or { logId } on success.
-    const result = await startManualLogin(selectedOrgId, item.id, `Log in: ${item.name}`);
-    setStarting((s) => ({ ...s, [item.id]: false }));
-    if (result) setViewingLoginId(item.id);
-  };
+  const visible = items
+    .filter((l) => {
+      if (statusFilter === 'needs_creds' && l.credentials_secret_id) return false;
+      if (statusFilter === 'valid' && l.status !== 'valid') return false;
+      if (statusFilter === 'needs_login' && l.status !== 'needs_login') return false;
+      const q = search.trim().toLowerCase();
+      return !q || l.name.toLowerCase().includes(q);
+    })
+    // Numeric-aware so "Market 2" sorts before "Market 10" — logins get named
+    // in sequences per market often enough for that to matter.
+    .sort((a, b) => {
+      const c = a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+      return sortDir === 'asc' ? c : -c;
+    });
 
   if (!allowed) return <NoPermissionContent />;
-
-  const activeForDialog = viewingLoginId ? activeSessions[viewingLoginId] : null;
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
@@ -263,8 +232,28 @@ export default function LoginsPage() {
             Reusable login profiles.  One session per login, shared across every agent that uses it.
           </p>
         </div>
-        <Button onClick={() => router.push('/actions/logins/create')}><Plus className="h-4 w-4 mr-1" /> New Login</Button>
+        <Button onClick={() => setNewLoginOpen(true)} disabled={!selectedOrgId}>
+          <Plus className="h-4 w-4 mr-1" /> New Login
+        </Button>
       </div>
+
+      {/* Name, then straight into the editor — there is no separate create
+          form any more. See NewLoginDialog for why a row is created up front
+          rather than drafted. */}
+      <NewLoginDialog
+        open={newLoginOpen}
+        onOpenChange={setNewLoginOpen}
+        onCreate={async (name) => {
+          if (!selectedOrgId) throw new Error('No organization selected');
+          try {
+            const created = await createLogin(selectedOrgId, { name });
+            router.push(`/actions/logins/${created.id}`);
+          } catch (err: any) {
+            toast.error(err?.response?.data?.error || err?.message || 'Failed to create login');
+            throw err;   // keeps the dialog open with the name still typed
+          }
+        }}
+      />
 
       {loading ? (
         <div className="flex items-center justify-center py-16">
@@ -276,65 +265,123 @@ export default function LoginsPage() {
         </CardContent></Card>
       ) : (
         <Card className="overflow-hidden py-0">
+            {/* Same shape as the scripts list: search on the left, count while
+                filtering, filters on the right. */}
+            <div className="flex items-center gap-2 border-b px-3 py-2">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search logins by name…"
+                  className="h-9 pl-8"
+                />
+              </div>
+              {(search || statusFilter !== 'all') && (
+                <span className="text-xs text-muted-foreground">{visible.length} of {items.length}</span>
+              )}
+              <div className="ml-auto flex items-center gap-1">
+                {([
+                  ['all', 'All'],
+                  ['valid', 'Logged in'],
+                  ['needs_login', 'Needs login'],
+                  ['needs_creds', 'Needs credentials'],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setStatusFilter(key)}
+                    className={cn(
+                      'px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
+                      statusFilter === key ? 'bg-brand text-brand-fg' : 'text-muted-foreground hover:bg-muted',
+                    )}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
             <table className="w-full text-sm">
               <thead className="bg-muted/40 text-xs text-muted-foreground">
                 <tr>
-                  <th className="text-left font-medium px-4 py-2">Name</th>
-                  <th className="text-left font-medium px-4 py-2">URL</th>
+                  <th className="text-left font-medium px-4 py-2">
+                    <button
+                      type="button"
+                      onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                      className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+                      title={`Sort ${sortDir === 'asc' ? 'Z→A' : 'A→Z'}`}
+                    >
+                      Name
+                      {sortDir === 'asc'
+                        ? <ArrowUp className="h-3 w-3" />
+                        : <ArrowDown className="h-3 w-3" />}
+                    </button>
+                  </th>
+                  {/* Was URL, then briefly "Sign-in". Every login is automatic
+                      now, so saying so on each row said nothing. The two things
+                      that actually vary — and that decide whether a login can
+                      run unattended — are whether its credentials are stored
+                      and where its second factor comes from. */}
+                  <th className="text-left font-medium px-4 py-2 w-36">Credentials</th>
+                  <th className="text-left font-medium px-4 py-2 w-32">Two-factor</th>
                   <th className="text-left font-medium px-4 py-2 w-28">Status</th>
                   <th className="text-left font-medium px-4 py-2 w-28">Last Checked</th>
-                  <th className="w-32" />
+                  <th className="w-20" />
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => {
+                {visible.length === 0 && (
+                  <tr className="border-t">
+                    <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                      {search
+                        ? <>Nothing matches &ldquo;{search}&rdquo;.</>
+                        : statusFilter === 'needs_creds'
+                          ? 'Every login has its credentials stored.'
+                          : 'No logins match this filter.'}
+                    </td>
+                  </tr>
+                )}
+                {visible.map((item) => {
                   const active = activeSessions[item.id];
                   const isStarting = !!starting[item.id];
-                  const needsLogin = item.status === 'needs_login';
-                  // 'verifying' is the intermediate state between a manual-
-                  // login Done click and the background verify settling on
-                  // valid / needs_login. Previously this branch was missing
-                  // — the button immediately rendered as Log Out (since
-                  // needsLogin is false) and the operator couldn't tell
-                  // that anything was happening in the background.
-                  const isVerifying = item.status === 'verifying';
-
                   return (
                     <tr key={item.id} className="border-t hover:bg-muted/30 cursor-pointer transition-colors"
                         onClick={() => router.push(`/actions/logins/${item.id}`)}>
                       <td className="px-4 py-2.5 font-medium">{item.name}</td>
-                      <td className="px-4 py-2.5 text-xs font-mono text-muted-foreground truncate max-w-[200px]">{item.url}</td>
+                      <td className="px-4 py-2.5 text-xs">
+                        {!item.auto_login_script_id ? (
+                          <span className="text-amber-600 dark:text-amber-500">No login script</span>
+                        ) : item.credentials_secret_id ? (
+                          <span className="text-muted-foreground">Stored</span>
+                        ) : (
+                          <span className="text-amber-600 dark:text-amber-500">Not set</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                        {item.mfa_source && item.mfa_source !== 'none'
+                          ? MFA_LABELS[item.mfa_source] ?? item.mfa_source
+                          : <span className="text-muted-foreground/50">None</span>}
+                      </td>
                       <td className="px-4 py-2.5"><StatusPill status={item.status} /></td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(item.last_checked_at)}</td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-                          {isVerifying ? (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled
-                              className="text-xs"
-                              title="Verifying the saved session — this finishes in a few seconds."
-                            >
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                              <span className="ml-1">Verifying…</span>
-                            </Button>
-                          ) : needsLogin ? (
-                            <Button size="sm" onClick={() => handleLogin(item)} disabled={isStarting || !!active}
-                              className="bg-warning hover:bg-warning/90 text-white text-xs">
-                              {isStarting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
-                              <span className="ml-1">Log In</span>
-                            </Button>
-                          ) : (
-                            <Button variant="outline" size="sm" onClick={() => handleLogout(item)} disabled={isStarting || !!active} className="text-xs">
-                              {isStarting || active ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogOut className="h-3 w-3" />}
-                              <span className="ml-1">
-                                {active?.kind === 'login_logout' ? 'Logging out…' : 'Log Out'}
-                              </span>
-                            </Button>
-                          )}
+                          {/* Duplicate and Delete only. Log In and Log Out
+                              both moved to the login's own page: one opens a
+                              live browser the operator has to sit in front of,
+                              the other wipes a profile and fails any run
+                              holding it. Neither belongs a stray click away
+                              from Delete on a list people scan. The Status
+                              column still says which logins need attention;
+                              the row click goes to where it can be given. */}
+                          <Button variant="ghost" size="icon-sm" className="text-muted-foreground/60 hover:text-foreground"
+                            onClick={() => handleDuplicate(item)} disabled={isStarting || !!active}
+                            title="Duplicate — copies the script and 2FA setup, not the credentials or session">
+                            <Copy className="h-3.5 w-3.5" />
+                          </Button>
                           <Button variant="ghost" size="icon-sm" className="text-destructive/50 hover:text-destructive"
-                            onClick={() => handleDelete(item)} disabled={!!active}>
+                            onClick={() => handleDelete(item)} disabled={!!active}
+                            title="Delete">
                             <Trash2 className="h-3.5 w-3.5" />
                           </Button>
                         </div>
@@ -355,19 +402,6 @@ export default function LoginsPage() {
         allLogins={items}
         onDeleted={() => { void load(); }}
       />
-      {/* Live browser view */}
-      {activeForDialog && (
-        <BrowserHITLDialog
-          open={!!viewingLoginId}
-          onOpenChange={(open) => {
-            if (!open) setViewingLoginId(null);
-          }}
-          runId={activeForDialog.logId}
-          agentName={activeForDialog.label}
-          mode={activeForDialog.mode}
-          purpose={activeForDialog.kind === 'login_logout' ? 'logout' : 'login'}
-        />
-      )}
     </div>
   );
 }

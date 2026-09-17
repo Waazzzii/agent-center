@@ -13,7 +13,7 @@ import {
 } from '@/lib/api/notifications';
 
 interface Props {
-  /** Current Slack channel id, or empty string for "use org default". */
+  /** Current Slack channel id, or empty string for "do not notify". */
   value: string;
   /** Setter — pass empty string back to clear the override. */
   onChange: (next: string) => void;
@@ -24,9 +24,12 @@ interface Props {
   /**
    * Where this input is being rendered. Drives the "what gets used if I
    * leave this blank?" explanation under the field.
-   *   'approval' — falls back to program / org default for this run
-   *   'login'    — falls back to program / org default for this run
-   *   'program'  — falls back to org default
+   * There is NO org-default channel — it was retired in migration 200, so the
+   * end of every cascade is silence, not a fallback. See fallbackText below,
+   * which mirrors the backend's _resolveTargetChannel.
+   *   'approval' — falls back to the run's program channel, else silent
+   *   'login'    — falls back to the run's program channel, else silent
+   *   'program'  — no fallback; blank is silent
    */
   scope: 'approval' | 'login' | 'program';
   /** Optional: pass a pre-fetched status to skip the internal fetch. */

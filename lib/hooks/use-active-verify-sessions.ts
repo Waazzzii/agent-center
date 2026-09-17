@@ -1,16 +1,16 @@
 'use client';
 
 /**
- * Persistent store for in-flight login verify sessions (and similar per-entity
- * browser sessions we want to be able to reconnect to).
+ * Persistent store for in-flight per-entity browser sessions we want to be able
+ * to reconnect to — a manual login, a manual logout.
  *
  * Unlike the single-session `use-active-browser-session` (browser script editor),
- * this is a MAP keyed by entity id (login id) so multiple verifies can be in
- * flight at once.
+ * this is a MAP keyed by entity id (login id) so several can be in flight at
+ * once.
  *
  * Each entry stores:
  *   logId  — the execution log id (also the Redis routing key for the browser slot)
- *   kind   — 'login_verify' for now, extensible to 'agent_hitl' etc.
+ *   kind   — which flow the session belongs to, extensible to 'agent_hitl' etc.
  *   label  — what to show the user ("Verifying: Salesforce")
  *   createdAt
  *
@@ -24,7 +24,9 @@
 const STORAGE_KEY = 'active_verify_sessions';
 const MAX_SESSION_AGE_MS = 2 * 60 * 60 * 1000;
 
-export type VerifyKind = 'login_verify' | 'login_manual' | 'login_logout';
+// 'login_verify' is gone with verification itself: nothing starts one, so the
+// union no longer admits it and every branch that handled it has been removed.
+export type VerifyKind = 'login_manual' | 'login_logout';
 
 export interface ActiveVerifySession {
   entityId: string;   // e.g. login id

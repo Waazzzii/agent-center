@@ -12,18 +12,17 @@ import {
 } from '@/lib/api/agents';
 import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
 import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  CheckCircle2, XCircle, Eye, Loader2, MessageSquare, LogIn, PauseCircle, Users,
-} from 'lucide-react';
+  CheckCircle2, XCircle, Eye, Loader2, MessageSquare, LogIn, PauseCircle, Users, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import {
-  setActiveVerifySession,
   clearActiveVerifySession,
   listActiveVerifySessions,
   subscribeActiveVerifySessions,
@@ -49,6 +48,10 @@ export default function InteractionsPage() {
   const [items, setItems] = useState<AgentApprovalItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterType>('all');
+  // Local, like the other lists. The type filter is server-side (it changes
+  // which action types are fetched); search is a narrowing on top of whatever
+  // came back, so it must not trigger a refetch.
+  const [search, setSearch] = useState('');
   const [viewItem, setViewItem] = useState<AgentApprovalItem | null>(null);
   const [deciding, setDeciding] = useState<Record<string, boolean>>({});
 
@@ -61,7 +64,7 @@ export default function InteractionsPage() {
     const refresh = () => {
       const map: Record<string, ActiveVerifySession> = {};
       for (const s of listActiveVerifySessions()) {
-        if (s.kind === 'login_manual' || s.kind === 'login_verify') map[s.entityId] = s;
+        if (s.kind === 'login_manual') map[s.entityId] = s;
       }
       setActiveLoginSessions(map);
     };
@@ -73,7 +76,15 @@ export default function InteractionsPage() {
     if (!selectedOrgId) return;
     if (!silent) setLoading(true);
     try {
-      const typesParam = filter === 'all' ? 'approval,login' : filter;
+      // browser_script is in the login bucket, not a third category.
+      //
+      // A run parks for a login when the script's own login_indicator step
+      // fails and automation cannot sign in, so the row waiting for a human
+      // is a browser_script row. Asking only for 'login' left those runs
+      // parked with nothing on this page to click — invisible, not absent.
+      const typesParam = filter === 'login'
+        ? 'login,browser_script'
+        : filter === 'all' ? 'approval,login,browser_script' : filter;
       const res = await getApprovals(selectedOrgId, {
         status: 'awaiting_approval',
         action_types: typesParam,
@@ -172,7 +183,6 @@ export default function InteractionsPage() {
               toasted.add(s.logId);
               const kindLabel =
                 s.kind === 'login_logout' ? 'Logout' :
-                s.kind === 'login_verify' ? 'Verify' :
                 s.kind === 'login_manual' ? 'Login' :
                 'Operation';
               const action = status.status === 'aborted' ? 'aborted' : 'failed';
@@ -197,9 +207,21 @@ export default function InteractionsPage() {
 
   if (!allowed) return <NoPermissionContent />;
 
-  // Group logins by login_id
-  const approvals = items.filter((i) => i.action_type !== 'login');
-  const logins = items.filter((i) => i.action_type === 'login');
+  // Group logins by login_id. A parked browser_script is a login pause — see
+  // the types param above — so it groups and renders exactly like one.
+  const isLoginPause = (i: AgentApprovalItem) =>
+    i.action_type === 'login' || i.action_type === 'browser_script';
+
+  // Applied before grouping on purpose: a login group shows "N runs blocked",
+  // and that number has to mean the rows actually on screen.
+  const q = search.trim().toLowerCase();
+  const matches = (i: AgentApprovalItem) => !q || [
+    i.agent_name, i.action_name, i.login_name, i.approval_instructions,
+  ].some((f) => (f ?? '').toLowerCase().includes(q));
+
+  const shown = items.filter(matches);
+  const approvals = shown.filter((i) => !isLoginPause(i));
+  const logins = shown.filter(isLoginPause);
   const loginGroups = new Map<string, AgentApprovalItem[]>();
   const ungroupedLogins: AgentApprovalItem[] = [];
   for (const i of logins) {
@@ -212,24 +234,9 @@ export default function InteractionsPage() {
 
   // Build unified rows
   type Row = { type: 'login-group'; loginId: string; group: AgentApprovalItem[] }
-    | { type: 'login-verify'; loginId: string; session: ActiveVerifySession }
     | { type: 'item'; item: AgentApprovalItem };
   const rows: Row[] = [];
   for (const [loginId, group] of loginGroups) rows.push({ type: 'login-group', loginId, group });
-
-  // Synthetic verify rows — when the user clicks Done in the HITL dialog,
-  // the backend immediately flips the awaiting_approval action_log to
-  // 'executing' (so the original row disappears from this list) and
-  // kicks off an independent background verify. activeLoginSessions
-  // tracks that verify in localStorage. Without a synthetic row here,
-  // the post-Done "Verifying…" state has nowhere to render — the row
-  // just vanishes. Render one synthetic row per in-flight login_verify
-  // that doesn't already have a backing awaiting_approval group.
-  for (const [loginId, session] of Object.entries(activeLoginSessions)) {
-    if (session.kind !== 'login_verify') continue;
-    if (loginGroups.has(loginId)) continue; // group still has rows — original row handles the badge
-    rows.push({ type: 'login-verify', loginId, session });
-  }
 
   for (const item of [...ungroupedLogins, ...approvals]) rows.push({ type: 'item', item });
 
@@ -260,13 +267,32 @@ export default function InteractionsPage() {
         </div>
       </div>
 
+      {/* Search sits above the table rather than in the header row: the type
+          filter is already up there, and two control clusters in one header
+          reads as a toolbar nobody can parse at a glance. */}
+      {items.length > 0 && (
+        <div className="relative max-w-sm">
+          <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by agent, step, or login…"
+            className="h-9 pl-8"
+          />
+        </div>
+      )}
+
       {loading && items.length === 0 ? (
         <div className="flex items-center justify-center py-16">
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : rows.length === 0 ? (
         <Card><CardContent className="py-10 text-center text-sm text-muted-foreground flex items-center justify-center gap-2">
-          <CheckCircle2 className="h-4 w-4 text-success" /> No interactions waiting
+          {search ? (
+            <>Nothing matches &ldquo;{search}&rdquo;.</>
+          ) : (
+            <><CheckCircle2 className="h-4 w-4 text-success" /> No interactions waiting</>
+          )}
         </CardContent></Card>
       ) : (
         <Card className="overflow-hidden py-0">
@@ -312,17 +338,12 @@ export default function InteractionsPage() {
                       <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(primary.started_at)}</td>
                       <td className="px-4 py-2.5 text-right">
                         {active ? (
-                          // Two states share this branch:
-                          //   login_manual  → dialog is open, user is logging in
-                          //   login_verify  → Done was clicked, post-login verify
-                          //                   is running in the background
-                          // Both render as a disabled spinner button so the row
-                          // doesn't bounce back to a clickable "Log In" between
-                          // Done and verify-completion. Label differs so the
-                          // operator knows which phase we're in.
+                          // The dialog is open and the operator is signing in.
+                          // Disabled spinner rather than a live button so the
+                          // row cannot be clicked into a second session.
                           <Button size="sm" disabled className="bg-warning/60 text-white disabled:opacity-100 text-xs">
                             <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                            {active.kind === 'login_verify' ? 'Verifying...' : 'Logging in...'}
+                            Logging in...
                           </Button>
                         ) : (
                           <Button size="sm" onClick={() => handleOpenBrowser(loginId, primary.login_name ?? 'Login')}
@@ -336,39 +357,8 @@ export default function InteractionsPage() {
                   );
                 }
 
-                if (row.type === 'login-verify') {
-                  // Post-Done verify, no backing awaiting_approval row.
-                  // The polling effect above tears this synthetic row down
-                  // when the verify reaches a terminal status.
-                  const { loginId, session } = row;
-                  return (
-                    <tr key={`lv-${loginId}`} className="border-t bg-muted/10">
-                      <td className="px-4 py-2.5">
-                        <Badge variant="warning" className="gap-1">
-                          <LogIn className="h-3 w-3" /> Login
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-2.5 font-medium text-muted-foreground">
-                        {session.label}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                        Verifying saved session in background
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                        {formatRelative(new Date(session.createdAt).toISOString())}
-                      </td>
-                      <td className="px-4 py-2.5 text-right">
-                        <Button size="sm" disabled className="bg-warning/60 text-white disabled:opacity-100 text-xs">
-                          <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                          Verifying...
-                        </Button>
-                      </td>
-                    </tr>
-                  );
-                }
-
                 const { item } = row;
-                const isLogin = item.action_type === 'login';
+                const isLogin = isLoginPause(item);
                 return (
                   <tr key={item.id} className="border-t hover:bg-muted/30 transition-colors cursor-pointer"
                       onClick={() => !isLogin && setViewItem(item)}>
@@ -488,25 +478,6 @@ export default function InteractionsPage() {
           runId={activeLoginSessions[viewingLoginId].logId}
           agentName={activeLoginSessions[viewingLoginId].label}
           mode={activeLoginSessions[viewingLoginId].mode}
-          // After Done on a manual login, the backend kicks off an
-          // independent verify run. Swap the active session for this
-          // loginId to track THAT run's id so the row stays in the
-          // "Verifying..." state instead of bouncing back to a
-          // clickable "Log In" button between Done and verify-completion.
-          // The polling effect above keys off the active session's
-          // logId — it'll pick up the new id, poll to terminal, and
-          // then clear, refreshing the row to its final state.
-          onVerifyStarted={(verifyRunId) => {
-            const loginId = viewingLoginId;
-            const label = activeLoginSessions[loginId]?.label ?? 'Verifying login';
-            setActiveVerifySession({
-              entityId: loginId,
-              kind: 'login_verify',
-              logId: verifyRunId,
-              label,
-              mode: 'observe',
-            });
-          }}
         />
       )}
     </div>

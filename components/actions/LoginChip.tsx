@@ -9,18 +9,15 @@ import { LogIn, Trash2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
-interface VerifyScriptOption { id: string; name: string; }
-
 /**
  * The login for a browser-script step, shown as a compact card-styled piece
  * beside the step (matching the step card's height/style). The WHOLE piece is
  * clickable — it opens the reusable login editor in a right slide-out. Purely a
  * presentation of the existing paired login action; no data-model change.
  */
-export function LoginChip({ orgId, login, verifyScriptOptions, onChanged, onDetach, readOnly }: {
+export function LoginChip({ orgId, login, onChanged, onDetach, readOnly }: {
   orgId: string | null;
   login: Login | null;
-  verifyScriptOptions: VerifyScriptOption[];
   onChanged?: () => void;
   /** Detach the login from this workflow step (removes the paired login step; the login profile stays). */
   onDetach?: () => void;
@@ -58,7 +55,6 @@ export function LoginChip({ orgId, login, verifyScriptOptions, onChanged, onDeta
         <LoginEditSheet
           orgId={orgId}
           login={login}
-          verifyScriptOptions={verifyScriptOptions}
           onClose={() => setOpen(false)}
           onChanged={onChanged}
         />
@@ -67,25 +63,26 @@ export function LoginChip({ orgId, login, verifyScriptOptions, onChanged, onDeta
   );
 }
 
-function LoginEditSheet({ orgId, login, verifyScriptOptions, onClose, onChanged }: {
+function LoginEditSheet({ orgId, login, onClose, onChanged }: {
   orgId: string;
   login: Login;
-  verifyScriptOptions: VerifyScriptOption[];
   onClose: () => void;
   onChanged?: () => void;
 }) {
   const [form, setForm] = useState<LoginFormData>({
-    name: login.name, url: login.url, verify_script_id: login.verify_script_id ?? null,
+    name: login.name,
   });
   const [saving, setSaving] = useState(false);
-  const valid = !!(form.name.trim() && form.url.trim() && form.verify_script_id);
+  // Name only — the URL is derived from the login script now and is not
+  // editable from this sheet, so requiring it would make Save unreachable.
+  const valid = !!form.name.trim();
 
   const save = async () => {
     if (!valid) return;
     setSaving(true);
     try {
       await updateLogin(orgId, login.id, {
-        name: form.name.trim(), url: form.url.trim(), verify_script_id: form.verify_script_id as string,
+        name: form.name.trim(),
       });
       toast.success('Login updated');
       onChanged?.();
@@ -102,7 +99,7 @@ function LoginEditSheet({ orgId, login, verifyScriptOptions, onClose, onChanged 
       <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col gap-0 p-0">
         <SheetHeader className="border-b px-4 py-4 sm:px-6"><SheetTitle>Edit login</SheetTitle></SheetHeader>
         <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
-          <LoginFormBody form={form} setForm={setForm} verifyScriptOptions={verifyScriptOptions} />
+          <LoginFormBody form={form} setForm={setForm} />
         </div>
         <SheetFooter className="border-t px-4 py-4 sm:px-6">
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>

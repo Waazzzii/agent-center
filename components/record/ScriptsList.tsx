@@ -15,7 +15,7 @@ import {
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
 import { Trash2, Pencil, Copy, Search, KeyRound } from 'lucide-react';
-import { listScripts, deleteScript, createScript, updateScript, getScriptLoginUsage, type BrowserScript } from '@/lib/api/scripts';
+import { listScripts, deleteScript, createScript, updateScript, getScriptLoginUsage, type BrowserScript, type ScriptKind } from '@/lib/api/scripts';
 import { Switch } from '@/components/ui/switch';
 import { RunScriptModal } from './RunScriptModal';
 import { useTags } from '@/lib/hooks/use-tags';
@@ -78,9 +78,19 @@ interface ScriptsListProps {
   orgId: string | null;
   /** Increment this to trigger a list refresh from the outside. */
   refreshKey?: number;
+  /**
+   * Which script kinds to list. Defaults to the business scripts.
+   *
+   * A prop rather than a second component: login scripts want the same table,
+   * the same search, the same sort and the same delete guard, and the one
+   * column that does not apply to them (Login Required?) already renders "—"
+   * for any non-regular kind. Forking this to get a different WHERE clause
+   * would have duplicated ~600 lines to change one array.
+   */
+  kinds?: ScriptKind[];
 }
 
-export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
+export function ScriptsList({ orgId, refreshKey, kinds = ['regular'] }: ScriptsListProps) {
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
   const [loginTogglePending, setLoginTogglePending] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -107,8 +117,9 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
   const { tags } = useTags(orgId);
   const [tagFilter, setTagFilter] = useState<string[]>([]);
   const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
-  // Login and verify scripts are deliberately NOT listed here. They belong to a
-  // login profile and are edited from it, so mixing them in gave every row a
+  // Login scripts are not listed in the DEFAULT mount. They have their own
+  // page (same table, kinds={['login']}) reached from a login, because mixing
+  // them into the business-script list gave every row a
   // "Login Required?" column that meant nothing for a third of them. The toggle
   // that used to reveal them was a filter for a distinction most people reading
   // this page do not have yet.
@@ -187,9 +198,9 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
       const data = await listScripts(orgId, {
         tagIds: tagFilter,
         tagMatch,
-        // Login + login-check scripts belong to their login profile and are
-        // edited from that login's page. Undefined = every kind (the toggle).
-        kinds: ['regular'],
+        // Defaults to business scripts. The login-script manager passes
+        // ['login'] — same table, different pool.
+        kinds,
       });
       setScripts(data.scripts ?? []);
     } catch (err: any) {
@@ -401,8 +412,8 @@ export function ScriptsList({ orgId, refreshKey }: ScriptsListProps) {
                   tdClassName: 'w-32',
                   render: (s) => (
                     s.kind !== 'regular' ? (
-                      // A login or verify script performs the authentication; it
-                      // cannot itself run inside one.
+                      // A login script performs the authentication; it cannot
+                      // itself run inside one.
                       <span className="text-xs text-muted-foreground">—</span>
                     ) : (
                       // The toggle speaks for itself — "Required / Not required"

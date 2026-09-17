@@ -53,14 +53,12 @@ interface Props {
    */
   purpose?: 'login' | 'logout';
   /**
-   * Fires when the user clicks Done for a manual-login flow and the backend
-   * has kicked off the independent post-login verify run. The caller (login
-   * details page) uses this id to subscribe to the verify's status so the
-   * "Verifying..." spinner can flip to its terminal state when verify
-   * completes. Not fired for logout flows or when the backend doesn't
-   * return a verifyRunId.
+   * Fired the instant Done succeeds, so the opener can settle its own UI
+   * without waiting for a poll. The server has already marked the login
+   * valid by then — nothing runs afterwards — so a page that waits is
+   * showing a pause the system does not have.
    */
-  onVerifyStarted?: (verifyRunId: string) => void;
+  onCompleted?: () => void;
 }
 
 const POLL_INTERVAL_MS = 5_000;
@@ -88,14 +86,13 @@ function StatusPill({ status, purpose = 'login' }: { status: BrowserRunStatus['s
   );
 }
 
-export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe', purpose = 'login', onVerifyStarted }: Props) {
-  // postDone = the user has clicked the Done button and we've handed off
-  // to the backend for session-save + (for logins) post-Done verification.
-  // The original browser slot is being torn down; a fresh one may be
-  // allocated server-side for the verify. We do NOT want the user trapped
-  // in interactive mode while that runs — close should be allowed, and
-  // the live-viewer iframe should be hidden (it points at a now-dead VNC
-  // endpoint).
+export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode = 'observe', purpose = 'login', onCompleted }: Props) {
+  // postDone = the user has clicked Done and the backend is saving the
+  // session. The original browser slot is being torn down, so the operator
+  // must not stay trapped in interactive mode: close is allowed again and
+  // the live-viewer iframe is hidden, since it points at a dead VNC
+  // endpoint. (This used to also cover "a fresh slot may be allocated for
+  // the verify" — there is no verify.)
   const [postDone, setPostDone] = useState(false);
   const isInteractive = mode === 'interactive' && !postDone;
   const isLogout = purpose === 'logout';
@@ -275,19 +272,23 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
   const handleDone = async () => {
     setResuming(true);
     try {
-      const { verifyRunId } = await resumeBrowserRun(runId);
-      // For logins, the server kicks off an independent background verify
-      // (separate logId) right after the save — its result will reflect
-      // on the Logins list row, not this dialog. For logouts, the save
-      // IS the job. Either way, the user is done here — auto-close the
-      // dialog. Leaving it open invited stale-runId 404s from getNoVNCInfo
-      // / getBrowserRunStatus once the loginRun's 30s grace expired,
-      // which surfaced as misleading "Run not found" toasts even when
-      // the operation had succeeded.
+      await resumeBrowserRun(runId);
+      // Fires here, not on the caller's next poll tick. The server marks the
+      // login valid inside this request — there is no verify behind it — so
+      // any delay in the opener is the UI inventing a wait that the system
+      // does not have. Without it the page kept "Watch" on screen and Log In
+      // disabled for another poll interval after the work was finished.
+      onCompleted?.();
+      // The save IS the job, for both purposes — nothing runs afterwards to
+      // second-guess it. So the user is done here: auto-close the dialog.
+      // Leaving it open invited stale-runId 404s from getNoVNCInfo /
+      // getBrowserRunStatus once the loginRun's 30s grace expired, which
+      // surfaced as misleading "Run not found" toasts even when the
+      // operation had succeeded.
       toast.success(
         purpose === 'logout'
           ? 'Logged out — session saved.'
-          : 'Logged in — verifying in the background.'
+          : 'Logged in — session saved.'
       );
       // Stop any polling/SSE-driven status refetches we were running
       // against this runId; the backend cleanup continues independently,
@@ -299,13 +300,6 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
       }
       setNovnc(null);
       onOpenChange(false);
-      // Hand the verify run's id to the caller AFTER closing the dialog,
-      // so the parent's activeSession swap doesn't briefly re-render this
-      // dialog with the new runId during teardown. Logouts and agent-
-      // action resumes return null here.
-      if (verifyRunId && purpose !== 'logout') {
-        onVerifyStarted?.(verifyRunId);
-      }
     } catch (err: any) {
       // Real failure (e.g. resume route rejected) — keep the dialog open
       // so the user can see what happened.
@@ -410,12 +404,15 @@ export function BrowserHITLDialog({ open, onOpenChange, runId, agentName, mode =
             {isTerminal && (() => {
               // Tailor the wording to login / logout flows when the dialog
               // is purpose-scoped; otherwise stay generic for agent runs.
-              // For login, "completed" here means session was saved — the
-              // independent verify runs as a separate background job and
-              // its outcome shows on the Logins list row, not this dialog.
+              // No verify follows a login. The operator's Done IS the
+              // answer, and whether the session really works is settled by
+              // the next script that uses it, at its login_indicator step.
+              // This used to promise "running background verify (the login
+              // row will update shortly)" — a wait that no longer exists,
+              // describing a job that no longer runs.
               const succeededTxt =
                 purpose === 'logout' ? 'Logged out — session saved.' :
-                purpose === 'login'  ? 'Session saved — running background verify (the login row will update shortly).' :
+                purpose === 'login'  ? 'Logged in — session saved.' :
                 'Agent run completed successfully.';
               const failedPrefix =
                 purpose === 'logout' ? 'Logout did not complete' :

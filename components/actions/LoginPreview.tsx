@@ -34,8 +34,6 @@ export function LoginPreview({
 }) {
   const form = {
     name: login.name,
-    url: login.url,
-    verify_script_id: login.verify_script_id,
   };
 
   return (
