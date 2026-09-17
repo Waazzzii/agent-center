@@ -10,7 +10,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Trash2, CheckCircle2, Loader2 } from 'lucide-react';
+import { Plus, Trash2, CheckCircle2, Loader2, Search, ArrowUp, ArrowDown } from 'lucide-react';
+import { Input } from '@/components/ui/input';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 
 /**
@@ -34,6 +35,11 @@ export default function ApprovalStepsPage() {
 
   const [items, setItems] = useState<ApprovalStep[]>([]);
   const [loading, setLoading] = useState(true);
+  // Same shape as the logins and scripts lists: local search, local sort. The
+  // set is small enough that a round trip per keystroke would be slower than
+  // filtering what is already here.
+  const [search, setSearch] = useState('');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const load = useCallback(async () => {
     if (!selectedOrgId) return;
@@ -67,6 +73,21 @@ export default function ApprovalStepsPage() {
     }
   };
 
+  // Name AND instructions, because an approval is usually remembered by what
+  // it asks a person to check rather than by whatever it was named.
+  const visible = items
+    .filter((a) => {
+      const q = search.trim().toLowerCase();
+      if (!q) return true;
+      return a.name.toLowerCase().includes(q)
+          || (a.instructions ?? '').toLowerCase().includes(q);
+    })
+    // Numeric-aware so "Review 2" sorts before "Review 10".
+    .sort((a, b) => {
+      const c = a.name.localeCompare(b.name, undefined, { sensitivity: 'base', numeric: true });
+      return sortDir === 'asc' ? c : -c;
+    });
+
   if (!allowed) return <NoPermissionContent />;
 
   return (
@@ -99,17 +120,53 @@ export default function ApprovalStepsPage() {
         </Card>
       ) : (
         <Card className="overflow-hidden py-0">
+          {/* Both the toolbar and the table go in ONE CardContent. Card is
+              `flex flex-col gap-6`; py-0 drops its padding but not its gap, so
+              two children would put 24px between the filter bar and the first
+              row. */}
+          <CardContent className="p-0">
+            <div className="flex items-center gap-2 border-b px-3 py-2">
+              <div className="relative flex-1 max-w-sm">
+                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <Input
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search approvals by name or instructions…"
+                  className="h-9 pl-8"
+                />
+              </div>
+              {search && (
+                <span className="text-xs text-muted-foreground">{visible.length} of {items.length}</span>
+              )}
+            </div>
           <table className="w-full text-sm">
             <thead className="bg-muted/40 text-xs text-muted-foreground">
               <tr>
-                <th className="text-left font-medium px-4 py-2">Name</th>
+                <th className="text-left font-medium px-4 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+                    className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
+                    title={`Sort ${sortDir === 'asc' ? 'Z→A' : 'A→Z'}`}
+                  >
+                    Name
+                    {sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />}
+                  </button>
+                </th>
                 <th className="text-left font-medium px-4 py-2">Instructions</th>
                 <th className="text-left font-medium px-4 py-2 w-40">Slack Override</th>
                 <th className="w-16" />
               </tr>
             </thead>
             <tbody>
-              {items.map((item) => (
+              {visible.length === 0 && (
+                <tr className="border-t">
+                  <td colSpan={4} className="px-4 py-8 text-center text-sm text-muted-foreground">
+                    Nothing matches &ldquo;{search}&rdquo;.
+                  </td>
+                </tr>
+              )}
+              {visible.map((item) => (
                 <tr
                   key={item.id}
                   className="border-t hover:bg-muted/30 cursor-pointer transition-colors"
@@ -146,6 +203,7 @@ export default function ApprovalStepsPage() {
               ))}
             </tbody>
           </table>
+          </CardContent>
         </Card>
       )}
     </div>

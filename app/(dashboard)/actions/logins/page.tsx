@@ -265,6 +265,12 @@ export default function LoginsPage() {
         </CardContent></Card>
       ) : (
         <Card className="overflow-hidden py-0">
+          {/* CardContent p-0 wraps BOTH the toolbar and the table, which is
+              what the scripts list does and why it looks right. Card is
+              `flex flex-col gap-6`: py-0 removes its padding but not its gap,
+              so two children put 24px of air between the filter bar and the
+              first row. One child, no gap. */}
+          <CardContent className="p-0">
             {/* Same shape as the scripts list: search on the left, count while
                 filtering, filters on the right. */}
             <div className="flex items-center gap-2 border-b px-3 py-2">
@@ -391,6 +397,7 @@ export default function LoginsPage() {
                 })}
               </tbody>
             </table>
+          </CardContent>
         </Card>
       )}
 
