@@ -209,7 +209,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     accessGroupIds: [] as string[],
     // Per-action cross-cutting options (migration 212). Null when nothing
     // is attached — the editor renders empty Apply buttons. When an
-    // operator applies conditional_execution or continue_on_failure, the
+    // operator applies a conditional_execution gate, the
     // ExecutionOptionsEditor updates this object and the form payload
     // sends it on save.
     executionOptions: null as import('@/lib/api/agents').ExecutionOptions | null,
@@ -1265,9 +1265,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   const gapBelow = idx + 1;
 
                   // Amber left-border flags steps carrying execution_options.
-                  const hasExecutionOptions =
-                    !!action.execution_options?.conditional_execution ||
-                    action.execution_options?.continue_on_failure === true;
+                  const hasExecutionOptions = !!action.execution_options?.conditional_execution;
 
                   const stepNum = stepNumbers.get(action.id) ?? idx + 1;
                   const displayName =

@@ -166,6 +166,10 @@ export default function AiStepsPage() {
                   key: 'model',
                   label: 'Model',
                   sortable: true,
+                  // Bounded content — the longest value is a model slug with
+                  // "claude-" already stripped. Sizing it hands the surplus to
+                  // Name and Description, which are the unbounded ones.
+                  thClassName: 'w-28',
                   render: (i) => <span className="text-xs font-mono text-muted-foreground">{i.model?.replace('claude-', '')}</span>,
                 },
                 {
@@ -176,7 +180,15 @@ export default function AiStepsPage() {
                 {
                   key: 'tags',
                   label: 'Tags',
-                  render: (i) => <TagList tags={i.tags} />,
+                  // Same shape as the routines list: the actions column next to
+                  // this one is w-px, so an unsized Tags column let a long tag
+                  // truncate right up against the row menu and read as running
+                  // underneath it. Fixed width plus pr-3 keeps the ellipsis
+                  // clear of the button, and the width comes out of
+                  // Description rather than Name.
+                  thClassName: 'w-64',
+                  tdClassName: 'pr-3',
+                  render: (i) => <TagList tags={i.tags} className="flex-nowrap" />,
                 },
                 {
                   key: 'actions',

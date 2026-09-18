@@ -122,14 +122,11 @@ function SBadge({ status }: { status: string }) {
  *   "Skipped: N cascade-failed, M gated (…)"  — gray, informational.
  *     Mixed cause — both cascade and gate contributed.
  *
- *   "Tolerated failure: <reason>"  — yellow, warning-but-not-fatal.
- *     The step threw, but the action has continue_on_failure=true so
- *     items passed through with cleared failure markers.
- *
- *   "Tolerated N per-item failure(s) (continue_on_failure)" — yellow.
- *     Step succeeded as a unit but some items inside failed; the
- *     continue_on_failure flag cleared their _status='failed' markers
- *     on items going downstream.
+ *   "Tolerated failure: …" / "Tolerated N per-item failure(s) …"  — HISTORICAL.
+ *     Written by the removed continue_on_failure flag, which swallowed a
+ *     step's error and passed its items on as though they had succeeded.
+ *     No new run produces these; they survive on rows from before the
+ *     removal, so the strings are documented here and nowhere else.
  *
  *   "Paused — …"  — yellow, and TEMPORARY.
  *     The script's login_indicator failed and the sign-in it needs is
@@ -476,11 +473,10 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
                 </span>
                 <SBadge status={action.status} />
                 {/* Execution-options breadcrumbs — small chip when the
-                    action_log error_message indicates the step was
-                    skipped or had its failure tolerated by
-                    continue_on_failure. Lets the operator distinguish
+                    action_log error_message says the step was skipped or
+                    only partly ran. Lets the operator distinguish
                     "actually completed" from "completed via gate" at a
-                    glance. Cause-specific chip text reveals whether
+                    glance. Cause-specific chip text reveals whether the
                     skip was conditional or cascade. */}
                 {action.error_message?.startsWith('Conditional gate:') && (
                   <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>

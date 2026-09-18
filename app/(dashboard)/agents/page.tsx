@@ -322,8 +322,21 @@ export default function AgentsPage() {
                   // (rows can carry several tags, so a-z has no meaning).
                   key: 'tags',
                   label: 'Tags',
-                  thClassName: 'w-48',
-                  render: (a) => <TagList tags={a.tags} />,
+                  // Wider than it looks like it needs to be, on purpose. The
+                  // actions column next to it is w-px, so it sits flush
+                  // against the Run button — a tag long enough to fill w-48
+                  // truncated right up against that button and read as
+                  // running underneath it. With table-fixed, whatever this
+                  // column takes comes out of Name, which is the only unsized
+                  // column and the one best able to spare it (it truncates
+                  // with the full name on hover).
+                  thClassName: 'w-64',
+                  // pr-3 keeps the gap honest: the ellipsis of a clipped tag
+                  // ends before the button starts, rather than touching it.
+                  tdClassName: 'pr-3',
+                  // Tags grow leftward into their own column instead of
+                  // wrapping to a second line and heightening every row.
+                  render: (a) => <TagList tags={a.tags} className="flex-nowrap" />,
                 },
                 {
                   key: 'actions',

@@ -490,7 +490,11 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSea
                   // while the name beside it was being truncated. One chip shows,
                   // the rest collapse into a "+N" whose tooltip lists them all.
                   thClassName: 'w-36',
-                  tdClassName: 'w-36',
+                  // pr-3 for the same reason as the other two tag columns: the
+                  // next column is the w-px row menu, so without it a truncated
+                  // chip ends flush against the button. The width itself stays
+                  // deliberately narrow — see the note above.
+                  tdClassName: 'w-36 pr-3',
                   render: (s) => (
                     <CellHint
                       hint={

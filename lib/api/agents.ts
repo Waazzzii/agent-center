@@ -85,7 +85,6 @@ export interface ConditionalExecution {
 
 export interface ExecutionOptions {
   conditional_execution?: ConditionalExecution;
-  continue_on_failure?: boolean;
 }
 
 export interface AgentTrigger {
@@ -284,10 +283,9 @@ export async function duplicateAgent(
         target_agent_id: a.target_agent_id ?? null,
         approval_step_id: a.approval_step_id ?? null,
         notification_slack_channel_id: a.notification_slack_channel_id ?? null,
-        // Per-use cross-cutting config: conditional_execution gate +
-        // continue_on_failure tolerance. Previously dropped on clone,
-        // forcing operators to re-apply per-step "Allow Failure" /
-        // "Conditional" toggles on every duplicate.
+        // Per-use cross-cutting config: the conditional_execution gate.
+        // Previously dropped on clone, forcing operators to re-apply the
+        // per-step "Conditional" toggle on every duplicate.
         execution_options: a.execution_options ?? null,
         ...tuning,
       });

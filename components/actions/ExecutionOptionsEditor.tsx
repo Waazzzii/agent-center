@@ -10,7 +10,6 @@
  *                          is TRUE run the step; items where it's FALSE
  *                          passthrough to the next step unchanged.
  *
- *   continue_on_failure    Treat a step failure as a tolerated warning —
  *                          items passthrough, agent continues.
  *
  * Rendered inline inside the agent editor step list (NOT a modal). Operator
@@ -29,7 +28,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Filter, AlertTriangle, X } from 'lucide-react';
+import { Filter, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type {
   ConditionalExecution,
@@ -74,7 +73,6 @@ const OPERATOR_LABELS: Record<ConditionalOperator, string> = {
 export function ExecutionOptionsEditor({ value, onChange, fieldSuggestions, className }: Props) {
   const opts: ExecutionOptions = value ?? {};
   const hasConditional = !!opts.conditional_execution;
-  const hasContinueOnFailure = opts.continue_on_failure === true;
 
   const applyConditional = () => {
     // Default to a sane starting point: empty field name + 'eq' so the
@@ -106,15 +104,6 @@ export function ExecutionOptionsEditor({ value, onChange, fieldSuggestions, clas
     onChange({ ...opts, conditional_execution: next });
   };
 
-  const toggleContinueOnFailure = () => {
-    if (hasContinueOnFailure) {
-      const { continue_on_failure: _ignored, ...rest } = opts;
-      onChange(rest);
-    } else {
-      onChange({ ...opts, continue_on_failure: true });
-    }
-  };
-
   return (
     <div className={cn('space-y-2', className)}>
       {/* ── Conditional Execution ──────────────────────────────────── */}
@@ -137,23 +126,6 @@ export function ExecutionOptionsEditor({ value, onChange, fieldSuggestions, clas
           fieldSuggestions={fieldSuggestions}
         />
       )}
-
-      {/* ── Continue on Failure ────────────────────────────────────── */}
-      <div>
-        <button
-          type="button"
-          onClick={toggleContinueOnFailure}
-          className={cn(
-            'inline-flex items-center gap-1.5 h-7 px-2.5 rounded-md border text-xs transition-colors',
-            hasContinueOnFailure
-              ? 'border-amber-400 bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400 hover:bg-amber-100'
-              : 'border-dashed border-input hover:bg-muted/40',
-          )}
-        >
-          <AlertTriangle className="h-3 w-3" />
-          {hasContinueOnFailure ? 'Failures allowed (click to disable)' : 'Allow Failure'}
-        </button>
-      </div>
     </div>
   );
 }
@@ -283,14 +255,6 @@ export function ExecutionOptionsSummary({ options }: { options: ExecutionOptions
       <span key="cond" className="inline-flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400">
         <Filter className="h-2.5 w-2.5" />
         Only if {summary}
-      </span>,
-    );
-  }
-  if (options.continue_on_failure) {
-    bits.push(
-      <span key="fail" className="inline-flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
-        <AlertTriangle className="h-2.5 w-2.5" />
-        Failures allowed
       </span>,
     );
   }
