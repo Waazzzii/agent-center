@@ -21,6 +21,7 @@ import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import agentClient from '@/lib/api/agent-client';
 import { isInertLoginRow } from '@/lib/api/agents';
+import { TokenUsage } from '@/components/execution/TokenUsage';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
@@ -67,11 +68,6 @@ function fmtDur(ms: number | null | undefined): string {
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
-function fmtTokens(n: number | null | undefined): string {
-  if (!n) return '—';
-  return n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(1)}K` : `${(n / 1_000_000).toFixed(2)}M`;
-}
-
 const ST: Record<string, { dot: string; cls: string; label: string }> = {
   completed: { dot: 'bg-emerald-500', cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400', label: 'Completed' },
   approved:  { dot: 'bg-emerald-500', cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400', label: 'Approved' },
@@ -94,6 +90,9 @@ const ST: Record<string, { dot: string; cls: string; label: string }> = {
   awaiting_approval: { dot: 'bg-brand animate-pulse', cls: 'border-brand/40 text-brand', label: 'Awaiting' },
   provisioning: { dot: 'bg-warning animate-pulse', cls: 'border-warning/40 text-warning', label: 'Starting' },
   queued: { dot: 'bg-slate-400', cls: 'border-slate-300 text-slate-500', label: 'Queued' },
+  // Synthesised by the tree endpoint for a declared step that never got a
+  // row — the run stopped before reaching it. Not a real action_log.
+  not_run: { dot: 'bg-slate-300 dark:bg-slate-600', cls: 'border-slate-300 text-slate-400 dark:text-slate-500', label: 'Not run' },
 };
 const AT: Record<string, string> = { agent: 'AI Step', login: 'Login', approval: 'Approval', browser_script: 'Script', sub_agent: 'Sub Agents' };
 const ICONS: Record<string, typeof Zap> = { agent: Zap, login: LogIn, approval: PauseCircle, browser_script: Play, sub_agent: GitBranch };
@@ -324,16 +323,32 @@ function Breadcrumb({ crumbs, currentId, onNavigate }: {
 
 function SummaryCards({ node }: { node: FullTreeNode }) {
   const isExec = node.type === 'execution';
-  const children = node.children ?? [];
+  // Same filter the Actions list below uses. Without it the card counted rows
+  // the operator cannot see — a 6-action run with a login read "5/7", and the
+  // missing seventh was nowhere on the page.
+  //
+  // The denominator includes the routine's declared-but-never-reached steps
+  // (status 'not_run', synthesised server-side), so a run that died on step 2
+  // of 6 reads "1/6" against six listed rows rather than "1/2".
+  const children = (node.children ?? []).filter((c) => !isInertLoginRow(c));
 
   // Per-run cost is no longer shown here — dollars live on Billing & Usage
   // (aggregated from Anthropic's Cost API). Here we show token usage only.
-  const tokensIn = isExec
-    ? children.reduce((s, a) => s + (a.tokens_input ?? 0), 0)
-    : node.tokens_input ?? 0;
-  const tokensOut = isExec
-    ? children.reduce((s, a) => s + (a.tokens_output ?? 0), 0)
-    : node.tokens_output ?? 0;
+  // Prompt tokens = fresh input + cache read + cache write.
+  //
+  // `tokens_input` on its own is the UNCACHED remainder. Prompt caching is on,
+  // so nearly the whole prompt is billed as cache_read (or cache_write on the
+  // first call) and this column legitimately reports 3 or 9 against a prompt of
+  // 90,000. The card used to print that number as "in", which read as a bug in
+  // the accounting when it was really the wrong column.
+  const sum = (pick: (n: FullTreeNode) => number) =>
+    isExec ? children.reduce((acc, a) => acc + pick(a), 0) : pick(node);
+  const tokens = {
+    fresh:      sum((n) => n.tokens_input ?? 0),
+    cacheRead:  sum((n) => n.tokens_cache_read ?? 0),
+    cacheWrite: sum((n) => n.tokens_cache_write ?? 0),
+    output:     sum((n) => n.tokens_output ?? 0),
+  };
   const completedCount = isExec
     ? children.filter((a) => a.status === 'completed' || a.status === 'approved').length
     : undefined;
@@ -344,14 +359,19 @@ function SummaryCards({ node }: { node: FullTreeNode }) {
       <SummaryCard label="Duration" value={fmtDur(node.duration_ms)} />
       {isExec && (
         <SummaryCard label="Actions">
+          {/* No bar here — the list below IS the detail, step by step, so a
+              second rendering of the same fraction is noise. The bar lives on
+              the history list, where there is no step list to read. */}
           <span className="text-base font-semibold tabular-nums">{completedCount}<span className="text-muted-foreground font-normal text-xs">/{children.length}</span></span>
-          <div className="flex items-center gap-0.5 mt-1">
-            {children.map((a) => <span key={a.id} className={cn('h-1 w-3 rounded-full', ST[a.status]?.dot ?? 'bg-slate-300')} />)}
-          </div>
         </SummaryCard>
       )}
       {!isExec && node.model && <SummaryCard label="Model" value={node.model.replace('claude-', '')} mono />}
-      <SummaryCard label="Tokens" value={tokensIn + tokensOut > 0 ? `${fmtTokens(tokensIn)} / ${fmtTokens(tokensOut)}` : '—'} />
+      {/* Labelled in/out — "107K / 2.0K" with no legend is two numbers and a
+          guess. TokenUsage's tooltip splits the prompt into cached vs fresh
+          and says where dollars actually live. */}
+      <SummaryCard label="Tokens in / out">
+        <TokenUsage tokens={tokens} />
+      </SummaryCard>
     </div>
   );
 }
@@ -390,26 +410,61 @@ const ACTION_TYPE_STYLES: Record<string, { bg: string; fg: string; border: strin
 };
 const ACTION_TYPE_FALLBACK = { bg: 'bg-muted/60', fg: 'text-muted-foreground', border: 'border-border/50 hover:border-border hover:bg-muted/20' };
 
+/**
+ * The run's steps, with a sub-agent's runs expanded inline beneath it.
+ *
+ * Sub-agents used to open a dialog: click the step, read a list in a modal,
+ * click a run, lose the modal and land somewhere else. Three clicks and a
+ * context switch to see something that is just... the next level of the same
+ * tree. Indented rows say the same thing in place, and the step stays on screen
+ * next to them, so "which step did these come from" needs no memory.
+ *
+ * Expanded by default when anything inside failed — the reason someone opens a
+ * run at all is usually the thing that went wrong, and making them hunt for it
+ * behind a toggle is the same mistake the modal made.
+ */
 function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: (a: FullTreeNode) => void }) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const isOpen = (action: FullTreeNode, kids: FullTreeNode[]) => {
+    if (action.id in collapsed) return !collapsed[action.id];
+    return kids.some((k) => k.status === 'failed' || k.status === 'aborted');
+  };
+
   return (
     <div className="space-y-1">
-      {actions.map((action, i) => {
+      {actions.map((action) => {
         const Icon = action.action_type === 'sub_agent' ? GitBranch : ICONS[action.action_type ?? ''] ?? Zap;
-        const isSub = action.action_type === 'sub_agent';
+        // A declared step the run never reached. It has no action_log behind
+        // it, so there is nothing to drill into and nothing to expand — it is
+        // here purely so the list has the routine's shape.
+        const notRun = action.status === 'not_run';
+        const isSub = action.action_type === 'sub_agent' && !notRun;
         const childExecs = action.children?.filter((c) => c.type === 'execution') ?? [];
         const style = ACTION_TYPE_STYLES[action.action_type ?? ''] ?? ACTION_TYPE_FALLBACK;
 
+        const open = isSub && isOpen(action, childExecs);
+
         return (
+          <div key={action.id}>
           <button
-            key={action.id}
-            onClick={() => onSelect(action)}
+            onClick={() => {
+              if (notRun) return;
+              // A sub-agent step expands in place; everything else drills in.
+              if (isSub) setCollapsed((c) => ({ ...c, [action.id]: open }));
+              else onSelect(action);
+            }}
+            disabled={notRun}
+            aria-expanded={isSub ? open : undefined}
             className={cn(
               'w-full flex items-center gap-3 rounded-lg border p-3 text-left transition-all',
               style.border,
+              // Faded and inert: reads as part of the routine without
+              // inviting a click that would open an empty page.
+              notRun && 'opacity-45 border-dashed cursor-default bg-muted/20',
             )}
           >
-            <div className={cn('p-1.5 rounded-md shrink-0', style.bg)}>
-              <Icon className={cn('h-4 w-4', style.fg)} />
+            <div className={cn('p-1.5 rounded-md shrink-0', notRun ? 'bg-muted' : style.bg)}>
+              <Icon className={cn('h-4 w-4', notRun ? 'text-muted-foreground' : style.fg)} />
             </div>
 
             <div className="flex-1 min-w-0">
@@ -465,127 +520,66 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
               <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
                 <span>{AT[action.action_type ?? ''] ?? action.action_type}</span>
                 <span className="tabular-nums">{fmtDur(action.duration_ms)}</span>
-                {(action.tokens_input ?? 0) > 0 && <span className="tabular-nums">{fmtTokens(action.tokens_input)} / {fmtTokens(action.tokens_output)}</span>}
+                {/* Same correction as the summary card: input alone is the
+                    uncached remainder, so a real AI step read "9 / 1.5K". */}
+                <TokenUsage
+                  variant="inline"
+                  tokens={{
+                    fresh:      action.tokens_input ?? 0,
+                    cacheRead:  action.tokens_cache_read ?? 0,
+                    cacheWrite: action.tokens_cache_write ?? 0,
+                    output:     action.tokens_output ?? 0,
+                  }}
+                />
                 {isSub && childExecs.length > 0 && <span className="text-amber-700 dark:text-amber-400">{childExecs.length} run{childExecs.length !== 1 ? 's' : ''}</span>}
               </div>
             </div>
 
-            <ChevronRight className="h-4 w-4 text-muted-foreground/30 shrink-0" />
+            {isSub
+              ? <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground/50 transition-transform', !open && '-rotate-90')} />
+              : <ChevronRight className="h-4 w-4 text-muted-foreground/30 shrink-0" />}
           </button>
+
+          {/* The sub-agent's runs, indented under the step that spawned them.
+              Failed first, then by item index — the same order the dialog used,
+              kept because a long fan-out is read for its failures. The rail on
+              the left is what carries "these belong to the step above". */}
+          {isSub && open && childExecs.length > 0 && (
+            <div className="ml-6 mt-1 space-y-1 border-l-2 border-amber-200/60 dark:border-amber-800/40 pl-3">
+              {[...childExecs]
+                .sort((a, b) => {
+                  const aFail = a.status === 'failed' || a.status === 'aborted' ? 0 : 1;
+                  const bFail = b.status === 'failed' || b.status === 'aborted' ? 0 : 1;
+                  return aFail !== bFail ? aFail - bFail : (a.item_index ?? 0) - (b.item_index ?? 0);
+                })
+                .map((child) => (
+                  <button
+                    key={child.id}
+                    onClick={() => onSelect(child)}
+                    className="w-full flex items-center gap-2.5 rounded-md border border-transparent px-2.5 py-2 text-left transition-colors hover:border-border hover:bg-muted/30"
+                  >
+                    <Dot status={child.status} />
+                    <span className="text-xs font-medium truncate flex-1 min-w-0">
+                      {child.agent_name ?? child.label}
+                    </span>
+                    {child.item_index !== null && child.item_index !== undefined && (
+                      <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                        item {child.item_index + 1}
+                      </span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
+                      {fmtDur(child.duration_ms)}
+                    </span>
+                    <SBadge status={child.status} />
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 shrink-0" />
+                  </button>
+                ))}
+            </div>
+          )}
+          </div>
         );
       })}
     </div>
-  );
-}
-
-function SubAgentModal({ open, onOpenChange, childNodes }: {
-  open: boolean; onOpenChange: (open: boolean) => void; childNodes: FullTreeNode[];
-}) {
-  const router = useRouter();
-  const execs = childNodes.filter((c) => c.type === 'execution');
-  const [filter, setFilter] = useState<'all' | 'completed' | 'failed'>('all');
-
-  // Sort: failed first, then by item_index
-  const sorted = useMemo(() => {
-    const filtered = filter === 'all' ? execs
-      : filter === 'failed' ? execs.filter((e) => e.status === 'failed' || e.status === 'aborted')
-      : execs.filter((e) => e.status === 'completed' || e.status === 'approved');
-    return [...filtered].sort((a, b) => {
-      // Failed/aborted first
-      const aFail = a.status === 'failed' || a.status === 'aborted' ? 0 : 1;
-      const bFail = b.status === 'failed' || b.status === 'aborted' ? 0 : 1;
-      if (aFail !== bFail) return aFail - bFail;
-      return (a.item_index ?? 0) - (b.item_index ?? 0);
-    });
-  }, [execs, filter]);
-
-  const failedCount = execs.filter((e) => e.status === 'failed' || e.status === 'aborted').length;
-  const completedCount = execs.filter((e) => e.status === 'completed' || e.status === 'approved').length;
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg h-[60vh] flex flex-col">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Bot className="h-4 w-4 text-blue-500" />
-            Sub Agents
-            <span className="text-sm font-normal text-muted-foreground">({execs.length})</span>
-          </DialogTitle>
-        </DialogHeader>
-
-        {/* Status filter chips */}
-        <div className="flex items-center gap-1.5 pb-2 border-b">
-          {([
-            { key: 'all' as const, label: 'All', count: execs.length },
-            { key: 'failed' as const, label: 'Failed', count: failedCount },
-            { key: 'completed' as const, label: 'Completed', count: completedCount },
-          ]).map((f) => (
-            <button
-              key={f.key}
-              onClick={() => setFilter(f.key)}
-              className={cn(
-                'px-2.5 py-1 rounded-md text-xs transition-colors',
-                filter === f.key
-                  ? 'bg-primary text-primary-foreground font-medium'
-                  : 'text-muted-foreground hover:bg-muted',
-              )}
-            >
-              {f.label}
-              {f.count > 0 && <span className="ml-1 opacity-70">({f.count})</span>}
-            </button>
-          ))}
-        </div>
-
-        {/* Scrollable list */}
-        <div className="flex-1 overflow-auto space-y-1 min-h-0">
-          {sorted.length === 0 ? (
-            <p className="text-sm text-muted-foreground italic py-6 text-center">
-              No {filter === 'all' ? '' : filter} runs.
-            </p>
-          ) : sorted.map((child: FullTreeNode, i: number) => {
-            const childActions = child.children ?? [];
-            const done = childActions.filter((a: FullTreeNode) => a.status === 'completed' || a.status === 'approved').length;
-            const isFailed = child.status === 'failed' || child.status === 'aborted';
-
-            return (
-              <button
-                key={child.id}
-                onClick={() => { onOpenChange(false); router.push(`/agent-history/${child.id}`); }}
-                className={cn(
-                  'w-full flex items-center gap-3 rounded-lg border p-2.5 text-left transition-all',
-                  isFailed
-                    ? 'border-red-200/60 dark:border-red-800/40 hover:border-red-300 bg-red-50/20 dark:bg-red-950/10'
-                    : 'border-border/50 hover:border-border hover:bg-muted/20',
-                )}
-              >
-                {/* Number */}
-                <span className="text-xs font-mono text-muted-foreground/50 w-6 text-right shrink-0 tabular-nums">
-                  {child.item_index != null ? `#${child.item_index}` : `${i + 1}`}
-                </span>
-
-                <Dot status={child.status} />
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium truncate">{child.label}</span>
-                    <SBadge status={child.status} />
-                  </div>
-                  <div className="flex items-center gap-2 mt-0.5 text-[10px] text-muted-foreground">
-                    <span className="tabular-nums">{fmtDur(child.duration_ms)}</span>
-                    <span>{done}/{childActions.length} actions</span>
-                    <div className="flex items-center gap-0.5 ml-1">
-                      {childActions.map((a: FullTreeNode) => <span key={a.id} className={cn('h-1 w-2 rounded-full', ST[a.status]?.dot ?? 'bg-slate-300')} />)}
-                    </div>
-                  </div>
-                </div>
-
-                <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 shrink-0" />
-              </button>
-            );
-          })}
-        </div>
-      </DialogContent>
-    </Dialog>
   );
 }
 
@@ -1243,18 +1237,17 @@ export default function ExecutionDetailPage() {
         const initialCrumbs = [...ancestorCrumbs, { label: data.label, node: data }];
 
         // If ?action= query param is set, pre-select that action.
-        // For sub_agent actions: open the modal (handled below — modal
-        // setter is outside the functional updater since it touches
-        // a different piece of state). For others: append to crumbs.
+        //
+        // A sub_agent action stays on the execution view: its runs are listed
+        // inline there, expanded by default when any of them failed, so the
+        // link already lands on what it was pointing at. Drilling into the
+        // action itself would show a step whose whole content is the list we
+        // are already looking at.
         if (initialActionId.current && data.children) {
           const matchingAction = data.children.find((a) => a.id === initialActionId.current);
           if (matchingAction) {
             initialActionId.current = null;
-            if (matchingAction.action_type === 'sub_agent') {
-              // Defer modal open so we don't trigger a setState mid-setter
-              queueMicrotask(() => setSubAgentModalNode(matchingAction));
-              return initialCrumbs;
-            }
+            if (matchingAction.action_type === 'sub_agent') return initialCrumbs;
             return [...initialCrumbs, { label: matchingAction.label, node: matchingAction }];
           }
           initialActionId.current = null;
@@ -1279,16 +1272,12 @@ export default function ExecutionDetailPage() {
     },
   });
 
-  // Sub-agent modal state
-  const [subAgentModalNode, setSubAgentModalNode] = useState<FullTreeNode | null>(null);
-
-  // Navigate INTO a node (push onto breadcrumb)
-  // Sub-agent actions open a modal instead of drilling in
+  // Navigate INTO a node (push onto breadcrumb).
+  //
+  // Sub-agent ACTIONS no longer come through here — ActionList expands them in
+  // place. What arrives from a sub-agent is one of its child EXECUTIONS, which
+  // drills in like anything else.
   const drillInto = useCallback((node: FullTreeNode) => {
-    if (node.action_type === 'sub_agent') {
-      setSubAgentModalNode(node);
-      return;
-    }
     setCrumbs((prev) => [...prev, { label: node.label, node }]);
   }, []);
 
@@ -1391,12 +1380,6 @@ export default function ExecutionDetailPage() {
         <ActionLogs action={current} orgId={selectedOrgId!} executionId={id} />
       )}
 
-      {/* Sub-agent picker modal */}
-      <SubAgentModal
-        open={!!subAgentModalNode}
-        onOpenChange={(open) => { if (!open) setSubAgentModalNode(null); }}
-        childNodes={subAgentModalNode?.children ?? []}
-      />
     </div>
   );
 }

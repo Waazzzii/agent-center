@@ -168,6 +168,7 @@ function VariableChips({
 
 // ─── Main Component ───────────────────────────────────────────
 
+
 export default function AgentDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id: agentId } = use(params);
   const router = useRouter();
@@ -262,9 +263,23 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // Generated webhook key reveal
   const [newRawKey, setNewRawKey] = useState<string | null>(null);
 
-  // Drag-and-drop reorder state
-  const [dragIndex, setDragIndex] = useState<number | null>(null);
-  const [dropIndex, setDropIndex] = useState<number | null>(null);
+  /**
+   * Drag-and-drop reorder state.
+   *
+   * The list reorders LIVE: as the pointer moves, the cards themselves shift
+   * into the order they would land in, and releasing just keeps what is
+   * already on screen. There is no indicator to interpret, which is what the
+   * previous drop-line version kept getting wrong — a line drawn in a 2px gap
+   * is an inference about where the card goes, and the answer to "does that
+   * line mean above or below this card" was never reliably visible.
+   *
+   * `actions` is mutated during the drag for the preview. `dragOriginRef`
+   * holds the order at drag start so a cancelled drag (Escape, or a release
+   * outside the list) puts everything back.
+   */
+  const [dragId, setDragId] = useState<string | null>(null);
+  const dragOriginRef = useRef<AgentAction[] | null>(null);
+  const droppedRef = useRef(false);
 
   // Settings (inline, replaces modal)
   const [agentName, setAgentName] = useState('');
@@ -906,81 +921,82 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   }, [actions, editingAction, browserScripts]);
 
   /**
-   * Drag-and-drop reorder with pair awareness.
+   * Move the dragged step (and its pair partner) to a gap in the CURRENT
+   * list, updating `actions` so the cards visibly shift.
    *
-   * A "drag block" is the slice of actions that moves together:
-   *   • Unpaired card → block of 1
-   *   • Either half of a login↔browser_script pair → block of 2
+   * A "drag block" is the slice that moves together: an unpaired card is a
+   * block of 1, either half of a login+browser_script pair is a block of 2.
+   * The gap is snapped so the block never lands between another pair's two
+   * halves — the chain between them is a real invariant, not a hint.
    *
-   * Drop position is then snapped so we never split another pair —
-   * if the operator drops onto the script-half of a target pair, we
-   * land after that pair instead of between its login and script.
-   *
-   * This way the chain icon between paired cards is also a real
-   * invariant, not just a render-time hint.
+   * @param gap 0 = before the first action, list.length = after the last.
    */
-  const handleDropAction = async (dropIdx: number) => {
-    if (dragIndex === null || dragIndex === dropIdx) return;
+  const previewMoveTo = (gap: number) => {
+    if (!dragId) return;
+    const list = actions;
+    const from = list.findIndex((a) => a.id === dragId);
+    if (from === -1) return;
 
-    // 1. Figure out the drag block — pull the dragged card AND its
-    //    pair partner (if any). Always ordered [login, script] so
-    //    splice/insert math stays simple.
-    const dragged = actions[dragIndex];
-    if (!dragged) return;
-    const dragPair = actionPairs.get(dragged.id);
-    let blockStart: number;
-    let blockLen: number;
-    if (dragPair) {
-      const partnerIdx = actions.findIndex((a) => a.id === dragPair.partnerId);
-      if (partnerIdx === -1) {
-        blockStart = dragIndex;
-        blockLen = 1;
-      } else {
-        blockStart = Math.min(dragIndex, partnerIdx);
+    const pair = actionPairs.get(dragId);
+    let blockStart = from;
+    let blockLen = 1;
+    if (pair) {
+      const partnerIdx = list.findIndex((a) => a.id === pair.partnerId);
+      if (partnerIdx !== -1) {
+        blockStart = Math.min(from, partnerIdx);
         blockLen = 2;
       }
-    } else {
-      blockStart = dragIndex;
-      blockLen = 1;
     }
 
-    // 2. Snap the drop target so we don't split another pair. If the
-    //    target is the script-half of a pair, bump the drop index to
-    //    point AFTER the pair so the inserted block lands cleanly
-    //    below both halves.
-    let targetIdx = dropIdx;
-    const targetAction = actions[targetIdx];
-    if (targetAction) {
-      const targetPair = actionPairs.get(targetAction.id);
-      if (targetPair && targetPair.role === 'script') {
-        // Land after the script half → after the pair as a whole.
-        targetIdx = targetIdx + 1;
-      }
+    let target = gap;
+    const before = list[target - 1];
+    const after  = list[target];
+    if (before && after) {
+      const bp = actionPairs.get(before.id);
+      const ap = actionPairs.get(after.id);
+      if (bp && ap && bp.partnerId === after.id && ap.partnerId === before.id) target += 1;
     }
 
-    // 3. Splice the block out, adjusting the target index for any
-    //    shift caused by the removal.
-    const newActions = [...actions];
-    const moved = newActions.splice(blockStart, blockLen);
-    if (targetIdx > blockStart) targetIdx -= blockLen;
-    newActions.splice(targetIdx, 0, ...moved);
+    // Gap already adjacent to the block on either side — the move is a no-op,
+    // and running it anyway would re-render on every pointer event.
+    if (target >= blockStart && target <= blockStart + blockLen) return;
 
-    // 4. If neither end of the block moved, bail — no-op reorder.
-    if (newActions.every((a, i) => a.id === actions[i]?.id)) {
-      setDragIndex(null);
-      setDropIndex(null);
-      return;
-    }
+    const next = [...list];
+    const moved = next.splice(blockStart, blockLen);
+    if (target > blockStart) target -= blockLen;
+    next.splice(target, 0, ...moved);
+    if (next.every((a, i) => a.id === list[i].id)) return;
+    setActions(next);
+  };
 
-    setActions(newActions);
-    setDragIndex(null);
-    setDropIndex(null);
+  /** Persist whatever order is on screen. Called on release. */
+  const commitDrag = async () => {
+    droppedRef.current = true;
+    const origin = dragOriginRef.current;
+    dragOriginRef.current = null;
+    setDragId(null);
+    if (!origin) return;
+    // Nothing actually moved — skip the round trip.
+    if (actions.every((a, i) => a.id === origin[i]?.id)) return;
     try {
-      await reorderActions(selectedOrgId!, agentId, newActions.map((a) => a.id));
+      await reorderActions(selectedOrgId!, agentId, actions.map((a) => a.id));
     } catch {
       toast.error('Reorder failed');
       await refreshData();
     }
+  };
+
+  /**
+   * Released outside the list, or cancelled with Escape. The browser fires
+   * dragend for both, and it fires AFTER drop — so `droppedRef` is what
+   * separates "landed somewhere" from "let go of it in the void", and the
+   * preview is rolled back only in the second case.
+   */
+  const cancelDrag = () => {
+    if (!droppedRef.current && dragOriginRef.current) setActions(dragOriginRef.current);
+    dragOriginRef.current = null;
+    droppedRef.current = false;
+    setDragId(null);
   };
 
   if (loading || !agent) {
@@ -1238,12 +1254,15 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   if (action.action_type === 'login' && isPaired) return null;
 
                   // Drag: both halves of a login+script pair light up together.
-                  const draggedAction = dragIndex !== null ? actions[dragIndex] : null;
-                  const draggedPartnerId = draggedAction
-                    ? actionPairs.get(draggedAction.id)?.partnerId
-                    : undefined;
-                  const isBeingDragged = dragIndex === idx
-                    || (draggedPartnerId !== undefined && draggedPartnerId === action.id);
+                  const draggedPartnerId = dragId ? actionPairs.get(dragId)?.partnerId : undefined;
+                  const isBeingDragged = dragId === action.id || draggedPartnerId === action.id;
+                  // The gaps this card occupies. A script card swallows its
+                  // paired login (rendered as a chip inside it), so its top
+                  // edge is the LOGIN's gap — without this, aiming above such
+                  // a card asked to land between the login and its script,
+                  // which the pair snap then bounced to the far side.
+                  const gapAbove = pair?.role === 'script' ? idx - 1 : idx;
+                  const gapBelow = idx + 1;
 
                   // Amber left-border flags steps carrying execution_options.
                   const hasExecutionOptions =
@@ -1274,20 +1293,51 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   } as const)[action.action_type];
 
                   return (
-                  <div key={action.id}>
+                  <div
+                    key={action.id}
+                    // The row as a whole accepts the drop, not just the card.
+                    // Between two cards sits a connector arrow with no handler
+                    // of its own; releasing there used to hit nothing and the
+                    // drag was dropped on the floor.
+                    onDragOver={(e) => { if (dragId) e.preventDefault(); }}
+                    onDrop={(e) => { if (!dragId) return; e.preventDefault(); void commitDrag(); }}
+                  >
                     <div className="flex items-stretch gap-2">
                       <Card
                         className={cn(
                           'group relative flex-1 min-w-0 py-0 transition-all duration-150 cursor-pointer',
                           isBeingDragged && 'opacity-40 scale-[0.98]',
-                          dropIndex === idx && !isBeingDragged && 'ring-2 ring-primary ring-offset-1',
                           hasExecutionOptions && 'border-l-4 border-l-amber-400 dark:border-l-amber-500',
                         )}
                         draggable
-                        onDragStart={() => setDragIndex(idx)}
-                        onDragOver={(e) => { e.preventDefault(); setDropIndex(idx); }}
-                        onDragEnd={() => { setDragIndex(null); setDropIndex(null); }}
-                        onDrop={() => handleDropAction(idx)}
+                        onDragStart={(e) => {
+                          dragOriginRef.current = actions;
+                          droppedRef.current = false;
+                          setDragId(action.id);
+                          // Firefox refuses to start a drag without payload,
+                          // and without effectAllowed the cursor shows "no
+                          // drop" over valid targets.
+                          e.dataTransfer.effectAllowed = 'move';
+                          try { e.dataTransfer.setData('text/plain', action.id); } catch { /* older browsers */ }
+                        }}
+                        onDragOver={(e) => {
+                          e.preventDefault();
+                          e.dataTransfer.dropEffect = 'move';
+                          // Which HALF of the card the pointer is over decides
+                          // which side of it the step lands on. The list then
+                          // reorders under the cursor, so what you see during
+                          // the drag is the result.
+                          const r = e.currentTarget.getBoundingClientRect();
+                          previewMoveTo(e.clientY > r.top + r.height / 2 ? gapBelow : gapAbove);
+                        }}
+                        onDragEnd={cancelDrag}
+                        onDrop={(e) => {
+                          // preventDefault is REQUIRED for the drop to fire at
+                          // all in Chrome — its absence is the other half of
+                          // "only works sometimes".
+                          e.preventDefault();
+                          void commitDrag();
+                        }}
                         onClick={() => openEditAction(action)}
                       >
                         {/* Step number + type icon, hanging off the top-left corner. */}
@@ -1362,6 +1412,11 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   </div>
                   );
                 })}
+
+                {/* The gap below the last step. Dropping on the bottom half of
+                    the final card targets actions.length, which no per-card
+                    line can draw. */}
+
 
                 {/* Add Step — compact, centered */}
                 <button
@@ -1864,11 +1919,22 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     <Link href="/actions/browser-scripts" className="inline-flex items-center gap-1 text-xs text-brand hover:underline">
                       <Plus className="h-3 w-3" /> Record a new script
                     </Link>
-                    {actionForm.scriptId && (
-                      <Link href="/actions/browser-scripts" className="text-xs text-muted-foreground hover:underline">
-                        Edit in Browser Skills →
-                      </Link>
-                    )}
+                    {/* Carries the script's NAME as ?q= so the library opens
+                        filtered to it. The list searches name and description,
+                        and an exact name is the narrowest thing we can hand it
+                        — the id is not searchable, and sending one would show
+                        an empty list. */}
+                    {actionForm.scriptId && (() => {
+                      const picked = browserScripts.find((s) => s.id === actionForm.scriptId);
+                      const href = picked
+                        ? `/actions/browser-scripts?q=${encodeURIComponent(picked.name)}`
+                        : '/actions/browser-scripts';
+                      return (
+                        <Link href={href} className="text-xs text-muted-foreground hover:underline">
+                          Edit in Browser Skills →
+                        </Link>
+                      );
+                    })()}
                   </div>
                 </div>
                 {(() => {
@@ -2004,10 +2070,17 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     <Plus className="h-3 w-3" /> Create a new agent
                   </a>
                 </div>
+                {/* Straight to the chosen agent, not the directory. The
+                    reason for clicking is always "let me look at THAT agent",
+                    and the list then asks you to find again what you had
+                    already selected. Falls back to the directory only when
+                    nothing is picked yet, which is the one case where there is
+                    no agent to open. */}
                 <EntityPreviewNotice
                   entityLabel="sub-agent"
-                  editHref="/agents"
+                  editHref={actionForm.targetAgentId ? `/agents/${actionForm.targetAgentId}` : '/agents'}
                   editLabel="Agents"
+                  editText={actionForm.targetAgentId ? 'open it' : undefined}
                   bodyOverride="This action runs another agent's workflow as a sub-agent. Batch size and max concurrent below are configurable per-action; the target agent's own configuration is managed separately."
                 />
                 <InfoBlock>

@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { Button } from '@/components/ui/button';
@@ -16,6 +17,10 @@ export default function RecordPage() {
 
   const [recordModalOpen, setRecordModalOpen] = useState(false);
   const [scriptsRefreshKey, setScriptsRefreshKey] = useState(0);
+  // ?q= seeds the search box, so arriving from "Edit in Browser Skills" on an
+  // agent step lands on that one script instead of the whole library. The list
+  // owns the field from then on — see ScriptsList's initialSearch.
+  const initialSearch = useSearchParams().get('q') ?? '';
 
   if (!permitted) return <NoPermissionContent />;
 
@@ -66,6 +71,7 @@ export default function RecordPage() {
         <ScriptsList
           orgId={selectedOrgId}
           refreshKey={scriptsRefreshKey}
+          initialSearch={initialSearch}
         />
       ) : (
         <Card>

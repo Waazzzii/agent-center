@@ -3731,7 +3731,15 @@ export function RunScriptModal({
                     Surfaced on the list rather than buried in a step's edit
                     modal because the whole problem is that you cannot see, from
                     the list, that it is missing. */}
+                {/* Only once the steps are actually here.
+                    `steps` is [] while the session provisions, and an empty
+                    array satisfies "no step is marked" just as well as a
+                    loaded one does — so the warning used to appear during
+                    every startup and then vanish, on scripts that were
+                    correctly configured all along. It reported the absence of
+                    data as the absence of an indicator. */}
                 {script?.requires_login === true
+                  && (stepRunState?.steps?.length ?? 0) > 0
                   && !(stepRunState?.steps ?? []).some((st) => st?.login_indicator === true) && (
                   <div className="px-3 py-2 flex items-center gap-2 bg-amber-500/10 border-y border-amber-500/30">
                     <KeyRound className="h-3.5 w-3.5 shrink-0 text-amber-500" />

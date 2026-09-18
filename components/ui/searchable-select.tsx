@@ -107,8 +107,16 @@ export function SearchableSelect({
           <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      {/* Width matched to the trigger so the popover can't overflow its column. */}
-      <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+      {/* Width matched to the trigger so the popover can't overflow its column.
+          The var() is not optional: Tailwind v3 read `w-[--foo]` as a variable,
+          v4 does not, so this class was being dropped and the popover fell back
+          to PopoverContent's default w-72 — narrower than its own trigger, and
+          nothing to do with the list. select.tsx in this repo has always used
+          the var() form; this one was written from the older shorthand. */}
+      <PopoverContent
+        className="w-[var(--radix-popover-trigger-width)] min-w-[16rem] p-0"
+        align="start"
+      >
         {showSearch && (
           <div className="flex items-center gap-2 border-b px-2 py-1.5">
             <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
@@ -132,8 +140,16 @@ export function SearchableSelect({
             />
           </div>
         )}
-        {/* Bounded height — the whole point. ~9 rows then scroll. */}
-        <div className="max-h-[280px] overflow-y-auto py-1">
+        {/* Bounded height — the whole point. Prefer ~24rem of rows, but never
+            more than the space Radix says is actually available below the
+            trigger, so a picker near the bottom of a dialog shrinks to fit
+            instead of running off the screen. */}
+        <div
+          className={cn(
+            'overflow-y-auto py-1',
+            'max-h-[min(24rem,var(--radix-popover-content-available-height))]',
+          )}
+        >
           {options.length === 0 ? (
             <p className="px-3 py-2 text-xs text-muted-foreground">{emptyLabel}</p>
           ) : filtered.length === 0 ? (

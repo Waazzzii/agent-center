@@ -18,14 +18,23 @@ export function EntityPreviewNotice({
   entityLabel,
   editHref,
   editLabel,
+  editText,
   bodyOverride,
 }: {
   /** e.g. "AI step", "login profile", "browser script", "sub-agent" */
   entityLabel: string;
   /** Route to the CRUD page for this entity type */
   editHref: string;
-  /** Link text, e.g. "Actions → Logins" */
+  /** Destination name, e.g. "Logins" — rendered as "edit in <editLabel>". */
   editLabel: string;
+  /**
+   * The whole link phrase, when "edit in X" does not read as English.
+   *
+   * A link that goes straight to one entity rather than to its list needs
+   * "open it", not "edit in open it" — which is what came out of bending
+   * editLabel to do this job.
+   */
+  editText?: string;
   /** Optional override for the body sentence before the link. */
   bodyOverride?: string;
 }) {
@@ -35,7 +44,7 @@ export function EntityPreviewNotice({
       <div className="flex-1">
         {bodyOverride ?? `This is a reusable ${entityLabel}. The preview below is read-only.`}{' '}
         <Link href={editHref} className="inline-flex items-center gap-0.5 text-brand hover:underline font-medium">
-          {bodyOverride ? `Edit in ${editLabel}` : `edit in ${editLabel}`}
+          {editText ?? (bodyOverride ? `Edit in ${editLabel}` : `edit in ${editLabel}`)}
           <ExternalLink className="h-3 w-3" />
         </Link>
         .

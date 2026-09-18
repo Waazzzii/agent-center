@@ -15,6 +15,8 @@ import {
 } from '@/lib/api/agents';
 import { tagFilterParams } from '@/lib/api/tags';
 import { FilterPicker } from '@/components/execution/FilterPicker';
+import { ActionProgress } from '@/components/execution/ActionProgress';
+import { TokenUsage } from '@/components/execution/TokenUsage';
 import { useTags } from '@/lib/hooks/use-tags';
 import { TagList } from '@/components/tags/tag-badge';
 import { Button } from '@/components/ui/button';
@@ -210,7 +212,7 @@ function RunsTable({
         <span>Trigger</span>
         <span>Started</span>
         <span className="text-right">Duration</span>
-        <span className="text-right">Tokens</span>
+        <span className="text-right" title="Prompt (including cached) / output. Hover a row for the breakdown.">Tokens in / out</span>
         <span />
       </div>
 
@@ -235,9 +237,16 @@ function RunsTable({
           // Per-run cost no longer surfaced in the history table — billing
           // lives on the Billing & Usage page, aggregated from the Anthropic
           // Cost API. Tokens stay as an in-context usage estimate.
-          const tokensTotal = (run.tokens_input ?? 0) + (run.tokens_output ?? 0);
+          // Cache buckets included: tokens_input alone is the UNCACHED
+          // remainder, so a run that burned 90K of cached prompt used to show
+          // up here as "2.0K". See ExecutionRun.tokens_cache_read.
+          const tokens = {
+            fresh:      run.tokens_input ?? 0,
+            cacheRead:  run.tokens_cache_read ?? 0,
+            cacheWrite: run.tokens_cache_write ?? 0,
+            output:     run.tokens_output ?? 0,
+          };
           const childCount = run.child_count ?? 0;
-          const completedSteps = actions.filter((a) => a.status === 'completed' || a.status === 'approved').length;
 
           return (
             <div key={run.id} className="cursor-pointer hover:bg-muted/30 transition-colors"
@@ -273,23 +282,9 @@ function RunsTable({
                     <span className="hidden lg:inline-flex shrink-0"><TagList tags={run.tags} max={2} /></span>
                   )}
                 </div>
-                {/* Progress */}
-                <div className="flex items-center gap-0.5">
-                  {actions.map((a) => (
-                    <span key={a.id} className={cn(
-                      'h-1.5 rounded-full w-3',
-                      a.status === 'completed' || a.status === 'approved' ? 'bg-success' :
-                      a.status === 'failed' ? 'bg-danger' :
-                      a.status === 'executing' ? 'bg-info animate-pulse' :
-                      a.status === 'awaiting_approval' ? 'bg-warning animate-pulse' :
-                      'bg-muted'
-                    )} title={`${a.action_name ?? a.action_type} · ${a.status}`} />
-                  ))}
-                  {Array.from({ length: Math.max(0, totalActions - actions.length) }).map((_, i) => (
-                    <span key={`p-${i}`} className="h-1.5 w-3 rounded-full bg-muted/50" />
-                  ))}
-                  <span className="text-[9px] text-muted-foreground/50 ml-1 tabular-nums">{completedSteps}/{totalActions}</span>
-                </div>
+                {/* Progress — one proportional bar, not one dot per action:
+                    a 40-step routine used to blow the column out. */}
+                <ActionProgress actions={actions} total={totalActions} />
                 {/* Status */}
                 <StatusBadge status={displayStatus} />
                 {/* Trigger */}
@@ -306,8 +301,13 @@ function RunsTable({
                 {/* Duration */}
                 <span className="text-xs text-muted-foreground tabular-nums text-right">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
                 {/* Tokens */}
-                <span className="text-xs text-muted-foreground tabular-nums text-right">
-                  {tokensTotal > 0 ? (tokensTotal >= 1000 ? `${(tokensTotal / 1000).toFixed(1)}K` : tokensTotal) : '—'}
+                <span
+                  className="text-xs text-muted-foreground text-right"
+                  // Stop the row's click-through to the run: the tooltip is
+                  // the point of hovering here.
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <TokenUsage variant="inline" tokens={tokens} />
                 </span>
                 {/* Actions */}
                 <div className="flex items-center justify-end gap-0.5">

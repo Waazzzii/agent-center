@@ -404,6 +404,14 @@ export interface ExecutionRun {
   /** Aggregates rolled up from action_logs, so the feed doesn't need extra queries. */
   tokens_input?: number;
   tokens_output?: number;
+  /**
+   * Cached prompt tokens. Prompt caching is ON, so `tokens_input` carries only
+   * the UNCACHED remainder — routinely single digits against a prompt of tens
+   * of thousands. Anything showing "input" must add these, or it is reporting
+   * a rounding error as the prompt size.
+   */
+  tokens_cache_read?: number;
+  tokens_cache_write?: number;
   child_count?: number;
   trigger_type: 'webhook' | 'cron' | 'manual' | 'sub_agent';
   trigger_id: string | null;
@@ -438,6 +446,9 @@ export interface ExecutionAction {
   error_message: string | null;
   tokens_input?: number | null;
   tokens_output?: number | null;
+  /** See ExecutionRun.tokens_cache_read — input alone is the uncached remainder. */
+  tokens_cache_read?: number | null;
+  tokens_cache_write?: number | null;
   model?: string | null;
 }
 
@@ -536,16 +547,27 @@ export async function getBrowserRunStatus(runId: string): Promise<BrowserRunStat
  * thing that is no longer true, and sent anyone looking for the sign-in to an
  * empty row.
  *
- * Only the INERT case is hidden. A login row that failed, was aborted, or is
+ * Only the INERT cases are hidden. A login row that failed, was aborted, or is
  * still parked (older runs, from when the login step could pause for HITL) had
- * something happen to it and still shows.
+ * something happen to it and still shows — a failure here is a real config
+ * fault (no login_id, deleted login profile), and burying it would leave
+ * someone with a broken agent and nothing on screen.
+ *
+ * 'skipped' counts as inert, and missing it was a bug. The handler only ever
+ * writes 'completed', so this rule was written against that one value — but
+ * the per-item partition runs BEFORE any handler and stamps 'skipped' on a step
+ * whose items all arrived cascade-failed or gated. A login step after a failed
+ * step therefore surfaced, which is precisely the "a login happened here"
+ * claim this function exists to suppress, in the one run where it is least
+ * true: nothing ran at all.
  *
  * The row is NOT deleted — resolveActiveSessionId reads agent_action_log to
  * bind an AI step with the browser connector to this run's session, and the
  * executor's gating/cascade bookkeeping runs per row. This is a view decision.
  */
 export function isInertLoginRow(row: { action_type?: string | null; status?: string | null }): boolean {
-  return row.action_type === 'login' && row.status === 'completed';
+  if (row.action_type !== 'login') return false;
+  return row.status === 'completed' || row.status === 'skipped';
 }
 
 export async function resumeBrowserRun(runId: string): Promise<void> {
@@ -628,6 +650,9 @@ export interface FullTreeNode {
   action_type?: string;
   tokens_input?: number | null;
   tokens_output?: number | null;
+  /** See ExecutionRun.tokens_cache_read — input alone is the uncached remainder. */
+  tokens_cache_read?: number | null;
+  tokens_cache_write?: number | null;
   model?: string | null;
   /** Resolved input the action received (JSON string when structured). */
   input?: string | null;

@@ -88,9 +88,18 @@ interface ScriptsListProps {
    * would have duplicated ~600 lines to change one array.
    */
   kinds?: ScriptKind[];
+  /**
+   * Seed for the search box, for arriving from somewhere that already knows
+   * which script you want — "Edit in Browser Skills" on an agent step, say.
+   *
+   * Only the INITIAL value: it is seeded once, and typing then owns the field.
+   * Binding it would make the box un-clearable while the URL still carried a
+   * name, which is a filter you cannot get out of.
+   */
+  initialSearch?: string;
 }
 
-export function ScriptsList({ orgId, refreshKey, kinds = ['regular'] }: ScriptsListProps) {
+export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSearch = '' }: ScriptsListProps) {
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
   const [loginTogglePending, setLoginTogglePending] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -109,7 +118,7 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'] }: ScriptsL
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   // Operator-typed filter against script name + description. Empty string =
   // show everything. Trimmed + lowercased once for the indexOf check.
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(initialSearch);
   const [sortKey, setSortKey] = useState<'name' | 'created'>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
