@@ -1,6 +1,5 @@
 'use client';
 
-import Link from 'next/link';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
@@ -91,9 +90,12 @@ export function TokenUsage({
 
             <table className="w-full tabular-nums">
               <tbody>
-                <Row label="Prompt, from cache" value={tokens.cacheRead} hint="billed at ~10% of input" />
-                <Row label="Prompt, written to cache" value={tokens.cacheWrite} hint="first call only, ~125%" />
-                <Row label="Prompt, uncached" value={tokens.fresh} />
+                <Row label="Read from cache" value={tokens.cacheRead}
+                     hint="prompt text reused from a previous call — cheapest" />
+                <Row label="Written to cache" value={tokens.cacheWrite}
+                     hint="the first call that stores it — dearest" />
+                <Row label="Not cached" value={tokens.fresh}
+                     hint="sent fresh, standard rate" />
                 <tr className="border-t border-border/60">
                   <td className="pt-1 font-medium">Total in</td>
                   <td className="pt-1 text-right font-medium">{exact(input)}</td>
@@ -106,16 +108,19 @@ export function TokenUsage({
             </table>
 
             <p className="text-muted-foreground">
-              Almost every prompt is served from cache, so the uncached figure alone is
-              a few tokens and says nothing about the real prompt size.
+              <strong className="font-medium text-foreground">In</strong> is everything the
+              model read: the step&apos;s prompt, its tools and the items it was given.{' '}
+              <strong className="font-medium text-foreground">Out</strong> is what it wrote back.
             </p>
 
             <p className="border-t border-border/60 pt-2 text-muted-foreground">
-              No dollar cost is recorded per run.{' '}
-              <Link href="/billing" className="text-brand hover:underline">
-                Billing &amp; Usage
-              </Link>{' '}
-              has spend, aggregated from Anthropic&apos;s Cost API.
+              The three input lines are the same tokens at three different prices. Text the
+              model has seen before is <strong className="font-medium text-foreground">read
+              from cache</strong> at roughly a tenth of the normal rate; the first call that
+              stores it pays about a quarter more than normal to{' '}
+              <strong className="font-medium text-foreground">write</strong> it. So a big
+              cached number is cheap, and a run whose prompt keeps changing is dearer than
+              its token count suggests.
             </p>
           </div>
         </TooltipContent>

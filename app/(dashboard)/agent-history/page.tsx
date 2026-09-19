@@ -18,7 +18,6 @@ import { FilterPicker } from '@/components/execution/FilterPicker';
 import { ActionProgress } from '@/components/execution/ActionProgress';
 import { TokenUsage } from '@/components/execution/TokenUsage';
 import { useTags } from '@/lib/hooks/use-tags';
-import { TagList } from '@/components/tags/tag-badge';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader } from '@/components/ui/card';
@@ -43,6 +42,8 @@ import {
   Monitor,
   Zap,
   ArrowUpRight,
+  SquareArrowOutUpRight,
+  CircleStop,
   CalendarIcon,
   GitBranch,
   Tag as TagIcon, Bot } from 'lucide-react';
@@ -72,8 +73,16 @@ const TRIGGER_LABELS: Record<string, string> = {
 const STATUS_GROUPS: Record<string, string[]> = {
   active:    ['executing', 'awaiting_approval', 'provisioning'],
   queued:    ['queued'],
-  completed: ['completed', 'failed', 'aborted'],
+  // 'completed' used to mean "finished, however it went" and swept failures in
+  // with successes — so the one number people check to see if anything broke
+  // was the number that hid it. The two are now disjoint.
+  completed: ['completed'],
+  // Aborted sits here rather than with completed: an operator pulled the cord,
+  // so the work did not happen. It is not a success and should not inflate one.
+  failed:    ['failed', 'aborted'],
 };
+
+type StatusGroup = 'active' | 'queued' | 'completed' | 'failed';
 
 const FILTERABLE_STATUSES = ['provisioning', 'executing', 'queued', 'awaiting_approval', 'completed', 'failed', 'aborted'] as const;
 const FILTERABLE_TRIGGERS  = ['webhook', 'cron', 'manual'] as const;
@@ -205,14 +214,18 @@ function RunsTable({
   return (
     <div>
       {/* Column headers */}
-      <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_130px_80px_70px_60px] gap-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 border-b">
+      <div className="hidden md:grid grid-cols-[1fr_140px_80px_130px_80px_118px_72px] gap-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 border-b">
         <span>Agent</span>
-        <span>Progress</span>
+        {/* One column, not two. A run is either in flight — where the bar is
+            the useful thing — or finished, where the outcome is. Showing both
+            at once meant a completed run carried a 100% bar saying nothing. */}
         <span>Status</span>
         <span>Trigger</span>
         <span>Started</span>
         <span className="text-right">Duration</span>
-        <span className="text-right" title="Prompt (including cached) / output. Hover a row for the breakdown.">Tokens in / out</span>
+        {/* whitespace-nowrap: "Tokens in / out" was wrapping to two lines and
+            dragging the header row's height with it. */}
+        <span className="text-right whitespace-nowrap">Tokens in / out</span>
         <span />
       </div>
 
@@ -249,44 +262,28 @@ function RunsTable({
           const childCount = run.child_count ?? 0;
 
           return (
-            <div key={run.id} className="cursor-pointer hover:bg-muted/30 transition-colors"
+            <div key={run.id} className="group/row cursor-pointer hover:bg-muted/30 transition-colors"
                  onClick={() => router.push(`/agent-history/${run.id}`)}>
 
               {/* Desktop: column layout */}
-              <div className="hidden md:grid grid-cols-[1fr_120px_140px_80px_130px_80px_70px_60px] gap-2 items-center px-3 py-2">
+              <div className="hidden md:grid grid-cols-[1fr_140px_80px_130px_80px_118px_72px] gap-2 items-center px-3 py-2">
                 {/* Agent */}
                 <div className="flex items-center gap-2 min-w-0">
                   <StatusGlyph status={displayStatus} />
                   {run.depth > 0 && <GitBranch className="h-3 w-3 text-brand shrink-0" />}
                   <span className={cn('text-sm font-medium truncate', run.depth > 0 && 'text-brand')}>{run.agent_name}</span>
-                  {/* Straight to the routine that produced this run. Clicking the row
-                      opens the EXECUTION, so this needs to be a separate target with
-                      stopPropagation — the two destinations are both wanted and easy
-                      to confuse. Reading a failed run and wanting to see the steps
-                      that produced it is the common next move. */}
-                  {run.agent_id && (
-                    <Link
-                      href={`/agents/${run.agent_id}`}
-                      onClick={(ev) => ev.stopPropagation()}
-                      title="Open this routine"
-                      className="shrink-0 text-muted-foreground/60 hover:text-brand transition-colors"
-                    >
-                      <ArrowUpRight className="h-3.5 w-3.5" />
-                    </Link>
-                  )}
                   {childCount > 0 && (
                     <span className="text-[9px] text-brand shrink-0">{childCount} sub</span>
                   )}
                   {run.has_active_browser && <Monitor className="h-3 w-3 text-info shrink-0" />}
-                  {run.tags && run.tags.length > 0 && (
-                    <span className="hidden lg:inline-flex shrink-0"><TagList tags={run.tags} max={2} /></span>
-                  )}
                 </div>
-                {/* Progress — one proportional bar, not one dot per action:
-                    a 40-step routine used to blow the column out. */}
-                <ActionProgress actions={actions} total={totalActions} />
-                {/* Status */}
-                <StatusBadge status={displayStatus} />
+                {/* Status AND progress, one column. While a run is moving, how
+                    far along it is IS its status; once it stops, the outcome is.
+                    Two columns meant every finished row carried a full bar that
+                    only repeated what the badge already said. */}
+                {isRunning
+                  ? <ActionProgress actions={actions} total={totalActions} />
+                  : <StatusBadge status={displayStatus} />}
                 {/* Trigger */}
                 <TriggerBadge type={run.trigger_type} />
                 {/* Started — full timestamp on hover, compact display in
@@ -302,21 +299,51 @@ function RunsTable({
                 <span className="text-xs text-muted-foreground tabular-nums text-right">{durationMs != null ? formatDuration(durationMs) : '—'}</span>
                 {/* Tokens */}
                 <span
-                  className="text-xs text-muted-foreground text-right"
+                  className="flex justify-end text-xs text-muted-foreground"
                   // Stop the row's click-through to the run: the tooltip is
                   // the point of hovering here.
                   onClick={(e) => e.stopPropagation()}
                 >
                   <TokenUsage variant="inline" tokens={tokens} />
                 </span>
-                {/* Actions */}
-                <div className="flex items-center justify-end gap-0.5">
+                {/* Row actions: open the routine, and stop it if it is running.
+                    One column, both revealed on hover.
+
+                    They were two columns with a 36px gap between them, which
+                    left a visible dead strip to the right of Tokens on every
+                    row. And the stop control was an icon-xs ghost with a 12px
+                    glyph at half opacity — the most consequential thing on the
+                    row, rendered as the least visible. Stopping a live run
+                    should not need aiming. */}
+                <div
+                  className="flex items-center justify-end gap-0.5"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {run.agent_id && (
+                    <Link
+                      href={`/agents/${run.agent_id}`}
+                      title="Open this routine"
+                      className="rounded-md p-1.5 text-muted-foreground/70 opacity-0 transition-all hover:bg-muted hover:text-brand focus-visible:opacity-100 group-hover/row:opacity-100"
+                    >
+                      <SquareArrowOutUpRight className="h-4 w-4" />
+                    </Link>
+                  )}
                   {onAbort && (ABORTABLE_STATUSES as readonly string[]).includes(run.status) && (
-                    <Button variant="ghost" size="icon-xs" className="text-destructive/50 hover:text-destructive"
+                    <button
+                      type="button"
+                      title="Stop this run"
+                      aria-label="Stop this run"
                       disabled={abortingRunId === run.id}
-                      onClick={(e) => { e.stopPropagation(); onAbort(run); }}>
-                      {abortingRunId === run.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <XCircle className="h-3 w-3" />}
-                    </Button>
+                      onClick={() => onAbort(run)}
+                      // Always visible while a run is abortable, unlike the
+                      // link: a stop control you have to discover by hovering
+                      // is no use when something is running away from you.
+                      className="rounded-md p-1.5 text-destructive/80 transition-colors hover:bg-destructive/10 hover:text-destructive disabled:opacity-40"
+                    >
+                      {abortingRunId === run.id
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <CircleStop className="h-4 w-4" />}
+                    </button>
                   )}
                 </div>
               </div>
@@ -380,7 +407,7 @@ function StatusGlyph({ status }: { status: string }) {
 
 const PAGE_SIZE = 15;
 
-function isGroupActive(group: 'active' | 'queued' | 'completed', statuses: string[]): boolean {
+function isGroupActive(group: StatusGroup, statuses: string[]): boolean {
   const gs = STATUS_GROUPS[group];
   return statuses.length === gs.length && gs.every(s => statuses.includes(s));
 }
@@ -404,6 +431,7 @@ export default function AgentExecutionsPage() {
   const [summaryActive, setSummaryActive]       = useState(0);
   const [summaryQueued, setSummaryQueued]       = useState(0);
   const [summaryCompleted, setSummaryCompleted] = useState(0);
+  const [summaryFailed, setSummaryFailed]       = useState(0);
 
   // Multi-select filter state
   const [statusFilters, setStatusFilters]   = useState<string[]>([]);
@@ -466,20 +494,23 @@ export default function AgentExecutionsPage() {
 
   const loadSummary = useCallback(async () => {
     if (!selectedOrgId) return;
-    const [execRes, approvalRes, provisionRes, queuedRes, completedRes] = await Promise.allSettled([
-      getExecutionHistory(selectedOrgId, { status: 'executing',         limit: 1 }),
-      getExecutionHistory(selectedOrgId, { status: 'awaiting_approval', limit: 1 }),
-      getExecutionHistory(selectedOrgId, { status: 'provisioning',      limit: 1 }),
-      getExecutionHistory(selectedOrgId, { status: 'queued',            limit: 1 }),
-      getExecutionHistory(selectedOrgId, { status: 'completed',         limit: 1 }),
-    ]);
-    const active =
-      (execRes.status      === 'fulfilled' ? execRes.value.total      : 0) +
-      (approvalRes.status  === 'fulfilled' ? approvalRes.value.total  : 0) +
-      (provisionRes.status === 'fulfilled' ? provisionRes.value.total : 0);
-    setSummaryActive(active);
+    const [execRes, approvalRes, provisionRes, queuedRes, completedRes, failedRes, abortedRes] =
+      await Promise.allSettled([
+        getExecutionHistory(selectedOrgId, { status: 'executing',         limit: 1 }),
+        getExecutionHistory(selectedOrgId, { status: 'awaiting_approval', limit: 1 }),
+        getExecutionHistory(selectedOrgId, { status: 'provisioning',      limit: 1 }),
+        getExecutionHistory(selectedOrgId, { status: 'queued',            limit: 1 }),
+        getExecutionHistory(selectedOrgId, { status: 'completed',         limit: 1 }),
+        getExecutionHistory(selectedOrgId, { status: 'failed',            limit: 1 }),
+        getExecutionHistory(selectedOrgId, { status: 'aborted',           limit: 1 }),
+      ]);
+    const total = (r: PromiseSettledResult<{ total: number }>) =>
+      r.status === 'fulfilled' ? r.value.total : 0;
+    setSummaryActive(total(execRes) + total(approvalRes) + total(provisionRes));
     if (queuedRes.status    === 'fulfilled') setSummaryQueued(queuedRes.value.total);
     if (completedRes.status === 'fulfilled') setSummaryCompleted(completedRes.value.total);
+    // Mirrors the 'failed' group: aborted counts as "did not succeed".
+    setSummaryFailed(total(failedRes) + total(abortedRes));
   }, [selectedOrgId]);
 
   // ─── Filter helpers ──────────────────────────────────────────
@@ -491,7 +522,7 @@ export default function AgentExecutionsPage() {
     loadHistory(1, { statuses: next, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: toFilter });
   };
 
-  const applyGroupFilter = (group: 'active' | 'queued' | 'completed') => {
+  const applyGroupFilter = (group: StatusGroup) => {
     const statuses = STATUS_GROUPS[group];
     setStatusFilters(statuses);
     setPage(1);
@@ -679,7 +710,7 @@ export default function AgentExecutionsPage() {
       ) : (
         <>
           {/* Summary Cards */}
-          <div className="grid grid-cols-3 gap-4">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <Card
               className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('active', statusFilters) && 'ring-2 ring-info/40 bg-info-soft')}
               onClick={() => applyGroupFilter('active')}
@@ -718,6 +749,20 @@ export default function AgentExecutionsPage() {
                   <span className="text-sm font-medium">Completed</span>
                   <Badge variant="success" className="ml-auto text-xs">
                     {summaryCompleted.toLocaleString()}
+                  </Badge>
+                </div>
+              </CardContent>
+            </Card>
+            <Card
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('failed', statusFilters) && 'ring-2 ring-danger/40 bg-danger-soft')}
+              onClick={() => applyGroupFilter('failed')}
+            >
+              <CardContent className="py-3 px-4">
+                <div className="flex items-center gap-2.5">
+                  <XCircle className="h-4 w-4 text-danger shrink-0" />
+                  <span className="text-sm font-medium">Failed</span>
+                  <Badge variant="danger" className="ml-auto text-xs">
+                    {summaryFailed.toLocaleString()}
                   </Badge>
                 </div>
               </CardContent>
