@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
-import { useRouter, useSearchParams } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
@@ -412,11 +412,99 @@ function isGroupActive(group: StatusGroup, statuses: string[]): boolean {
   return statuses.length === gs.length && gs.every(s => statuses.includes(s));
 }
 
+/**
+ * Filter persistence.
+ *
+ * Two stores, deliberately, because they answer different questions:
+ *
+ *   URL     — survives a reload and makes a filtered view linkable. This is
+ *             the one that matters day to day: the page reloads while you are
+ *             watching a filtered subset and the view has to come back the
+ *             same, not silently widen to everything.
+ *   storage — survives LEAVING the page. Clicking Executions in the nav goes
+ *             to a bare /agent-history with no query, so the URL alone cannot
+ *             carry a view across navigation.
+ *
+ * The URL wins when it has anything, so a shared link always shows what the
+ * sender saw rather than the recipient's last view. Storage is per-org: agent
+ * ids are org-scoped and restoring one across a switch filters to nothing.
+ *
+ * `page` is deliberately NOT persisted. Coming back to page 7 of a list that
+ * now has two pages is worse than coming back to the top.
+ */
+interface PersistedFilters {
+  statuses: string[];
+  trigger: string;
+  agentId: string;
+  from: string;
+  to: string;
+  tags: string[];
+}
+
+const EMPTY_FILTERS: PersistedFilters = {
+  statuses: [], trigger: '', agentId: '', from: '', to: '', tags: [],
+};
+
+const filterStorageKey = (orgId: string) => `agent-history:filters:${orgId}`;
+
+function filtersFromParams(sp: URLSearchParams): PersistedFilters | null {
+  const list = (k: string) => (sp.get(k) ?? '').split(',').filter(Boolean);
+  const f: PersistedFilters = {
+    statuses: list('status'),
+    trigger:  sp.get('trigger') ?? '',
+    // agent_id is the long-standing deep-link param; keep the name.
+    agentId:  sp.get('agent_id') ?? '',
+    from:     sp.get('from') ?? '',
+    to:       sp.get('to') ?? '',
+    tags:     list('tags'),
+  };
+  const any = f.statuses.length || f.trigger || f.agentId || f.from || f.to || f.tags.length;
+  return any ? f : null;
+}
+
+function filtersToQuery(f: PersistedFilters): string {
+  const sp = new URLSearchParams();
+  if (f.statuses.length) sp.set('status', f.statuses.join(','));
+  if (f.trigger)         sp.set('trigger', f.trigger);
+  if (f.agentId)         sp.set('agent_id', f.agentId);
+  if (f.from)            sp.set('from', f.from);
+  if (f.to)              sp.set('to', f.to);
+  if (f.tags.length)     sp.set('tags', f.tags.join(','));
+  const q = sp.toString();
+  return q ? `?${q}` : '';
+}
+
+function readStoredFilters(orgId: string): PersistedFilters | null {
+  // Storage can throw (private mode, blocked site data) and can hold anything
+  // a previous version wrote, so treat every field as untrusted.
+  try {
+    const raw = window.localStorage.getItem(filterStorageKey(orgId));
+    if (!raw) return null;
+    const p = JSON.parse(raw) as Partial<PersistedFilters>;
+    return {
+      statuses: Array.isArray(p.statuses) ? p.statuses.filter((x) => typeof x === 'string') : [],
+      trigger:  typeof p.trigger === 'string' ? p.trigger : '',
+      agentId:  typeof p.agentId === 'string' ? p.agentId : '',
+      from:     typeof p.from === 'string' ? p.from : '',
+      to:       typeof p.to === 'string' ? p.to : '',
+      tags:     Array.isArray(p.tags) ? p.tags.filter((x) => typeof x === 'string') : [],
+    };
+  } catch { return null; }
+}
+
+function writeStoredFilters(orgId: string, f: PersistedFilters): void {
+  try {
+    const any = f.statuses.length || f.trigger || f.agentId || f.from || f.to || f.tags.length;
+    if (any) window.localStorage.setItem(filterStorageKey(orgId), JSON.stringify(f));
+    else     window.localStorage.removeItem(filterStorageKey(orgId));
+  } catch { /* storage unavailable — the URL still carries the view */ }
+}
+
 export default function AgentExecutionsPage() {
   const { selectedOrgId } = useAdminViewStore();
   const { confirm } = useConfirmDialog();
   const permitted = useRequirePermission('agent_center_user');
-  const searchParams = useSearchParams();
+  const router = useRouter();
 
   const [agents, setAgents] = useState<Agent[]>([]);
   const [runs, setRuns] = useState<ExecutionRun[]>([]);
@@ -445,7 +533,8 @@ export default function AgentExecutionsPage() {
 
   // Inline date input state
 
-  const initialAgentId = useRef(searchParams.get('agent_id'));
+  // Restored once per org by the effect below; see PersistedFilters.
+  const restoredForOrg = useRef<string | null>(null);
 
   const hasFilters = statusFilters.length > 0 || !!triggerFilter || !!agentFilter || !!fromFilter || !!toFilter || tagFilters.length > 0;
 
@@ -603,13 +692,52 @@ export default function AgentExecutionsPage() {
     getAgents(selectedOrgId).then((d) => setAgents(d.agents)).catch(() => {});
   }, [selectedOrgId]);
 
+  // Restore the view, THEN load with it — one load, not a default load
+  // followed by a corrective one, which would flash the unfiltered list.
   useEffect(() => {
     if (!selectedOrgId) return;
+    if (restoredForOrg.current === selectedOrgId) return;
+    restoredForOrg.current = selectedOrgId;
+
+    const restored =
+      filtersFromParams(new URLSearchParams(window.location.search)) ??
+      readStoredFilters(selectedOrgId) ??
+      EMPTY_FILTERS;
+
+    setStatusFilters(restored.statuses);
+    setTriggerFilter(restored.trigger);
+    setAgentFilter(restored.agentId);
+    setFromFilter(restored.from);
+    setToFilter(restored.to);
+    setTagFilters(restored.tags);
     setPage(1);
-    loadHistory(1);
+    loadHistory(1, {
+      statuses: restored.statuses,
+      trigger:  restored.trigger,
+      agentId:  restored.agentId,
+      from:     restored.from,
+      to:       restored.to,
+      tags:     restored.tags,
+    });
     loadSummary();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId]);
+
+  // Mirror the live filters into the URL and into storage. replace(), not
+  // push(): every tweak of a filter is not a place you want the back button
+  // to walk through.
+  useEffect(() => {
+    if (!selectedOrgId || restoredForOrg.current !== selectedOrgId) return;
+    const current: PersistedFilters = {
+      statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter,
+      from: fromFilter, to: toFilter, tags: tagFilters,
+    };
+    const query = filtersToQuery(current);
+    if (query !== window.location.search) {
+      router.replace(`${window.location.pathname}${query}`, { scroll: false });
+    }
+    writeStoredFilters(selectedOrgId, current);
+  }, [selectedOrgId, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter, tagFilters, router]);
 
   // ─── Realtime: refresh on any execution status change in this org ──
   // Debounce bursts of events (sibling auto-resume fires many at once)
@@ -630,19 +758,6 @@ export default function AgentExecutionsPage() {
     intervalMs: 10_000,
     onChange: scheduleRefresh,
   });
-
-  // Seed agent filter from URL param once agents list is loaded
-  useEffect(() => {
-    if (!initialAgentId.current || agents.length === 0) return;
-    const id = initialAgentId.current;
-    initialAgentId.current = null;
-    const found = agents.find(a => a.id === id);
-    if (!found) return;
-    setAgentFilter(id);
-    setPage(1);
-    loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: id, from: fromFilter, to: toFilter });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agents]);
 
   // ─── Abort ───────────────────────────────────────────────────
 
