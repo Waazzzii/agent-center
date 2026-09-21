@@ -500,6 +500,9 @@ export async function getExecutionHistory(
     tag_match?: 'any' | 'all';
     page?: number;
     limit?: number;
+    /** Server-side; the backend whitelists the column. */
+    sort_by?: string;
+    sort_dir?: 'asc' | 'desc';
   }
 ): Promise<ExecutionHistoryResponse> {
   const res = await agentClient.get<ExecutionHistoryResponse>(

@@ -16,11 +16,12 @@ import {
 import { tagFilterParams } from '@/lib/api/tags';
 import { FilterPicker } from '@/components/execution/FilterPicker';
 import { ActionProgress } from '@/components/execution/ActionProgress';
+import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
 import { TokenUsage } from '@/components/execution/TokenUsage';
 import { useTags } from '@/lib/hooks/use-tags';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Card, CardContent, CardHeader } from '@/components/ui/card';
+import { Card, CardContent } from '@/components/ui/card';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
@@ -28,6 +29,9 @@ import {
   RefreshCw,
   ChevronRight,
   ChevronLeft,
+  ArrowUp,
+  ArrowDown,
+  ArrowUpDown,
   Webhook,
   Clock,
   Play,
@@ -44,7 +48,6 @@ import {
   ArrowUpRight,
   SquareArrowOutUpRight,
   CircleStop,
-  CalendarIcon,
   GitBranch,
   Tag as TagIcon, Bot } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -204,28 +207,63 @@ function RunsTable({
   onOpenBrowser,
   onAbort,
   abortingRunId,
+  sortBy,
+  sortDir,
+  onSort,
 }: {
   runs: ExecutionRun[];
   onOpenBrowser: (run: ExecutionRun) => void;
   onAbort?: (run: ExecutionRun) => void;
   abortingRunId?: string | null;
+  sortBy: SortKey;
+  sortDir: SortDir;
+  onSort: (key: SortKey) => void;
 }) {
   const router = useRouter();
+
+  /**
+   * One column header, styled to match ResponsiveTable's <th> — the same
+   * h-10, text-sm, font-medium, foreground colour and arrow affordances the
+   * Routines table uses. This feed is a CSS grid rather than a <table>
+   * (rows carry progress bars and inline actions a <td> grid cannot lay
+   * out), so the styling is matched by hand; the class list is copied
+   * deliberately rather than approximated.
+   */
+  const Th = ({ col, label, align = 'left' }: { col?: SortKey; label: string; align?: 'left' | 'right' }) => {
+    if (!col) return <span />;
+    const active = sortBy === col;
+    return (
+      <button
+        type="button"
+        onClick={() => onSort(col)}
+        title={`Sort by ${label.toLowerCase()}`}
+        className={cn(
+          'flex items-center gap-1 select-none hover:text-foreground/80 transition-colors',
+          align === 'right' && 'justify-end',
+        )}
+      >
+        <span className="truncate">{label}</span>
+        {active
+          ? (sortDir === 'asc' ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" />)
+          : <ArrowUpDown className="h-3 w-3 shrink-0 opacity-40" />}
+      </button>
+    );
+  };
   return (
     <div>
       {/* Column headers */}
-      <div className="hidden md:grid grid-cols-[1fr_140px_80px_130px_80px_118px_72px] gap-2 px-3 py-1.5 text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 border-b">
-        <span>Agent</span>
+      <div className="hidden md:grid grid-cols-[1fr_140px_80px_130px_80px_118px_72px] items-center gap-2 h-10 px-3 text-sm font-medium text-foreground border-b">
+        <Th col="agent" label="Agent" />
         {/* One column, not two. A run is either in flight — where the bar is
             the useful thing — or finished, where the outcome is. Showing both
             at once meant a completed run carried a 100% bar saying nothing. */}
-        <span>Status</span>
-        <span>Trigger</span>
-        <span>Started</span>
-        <span className="text-right">Duration</span>
-        {/* whitespace-nowrap: "Tokens in / out" was wrapping to two lines and
-            dragging the header row's height with it. */}
-        <span className="text-right whitespace-nowrap">Tokens in / out</span>
+        <Th col="status" label="Status" />
+        <Th col="trigger" label="Trigger" />
+        <Th col="started" label="Started" />
+        <Th col="duration" label="Duration" align="right" />
+        {/* Sorts on the TOTAL of both directions plus both cache buckets,
+            which is the figure the cell renders. */}
+        <Th col="tokens" label="Tokens" align="right" />
         <span />
       </div>
 
@@ -413,6 +451,90 @@ function isGroupActive(group: StatusGroup, statuses: string[]): boolean {
 }
 
 /**
+ * Sortable columns. Keys must match the backend whitelist in
+ * execution-history.service.js — an unknown key there falls back to the
+ * default rather than erroring, so a mismatch shows up as "sorting does
+ * nothing", not as a crash.
+ *
+ * Sorting is SERVER-side. Reordering the fifteen rows already on screen
+ * would say "oldest first" while showing the newest page, which is worse
+ * than not offering it.
+ */
+type SortKey = 'agent' | 'status' | 'trigger' | 'started' | 'duration' | 'tokens';
+type SortDir = 'asc' | 'desc';
+
+const SORT_KEYS: SortKey[] = ['agent', 'status', 'trigger', 'started', 'duration', 'tokens'];
+const isSortKey = (v: string): v is SortKey => (SORT_KEYS as string[]).includes(v);
+
+const DEFAULT_SORT: SortKey = 'started';
+const DEFAULT_SORT_DIR: SortDir = 'desc';
+
+/**
+ * Which way a column sorts when first clicked.
+ *
+ * Text reads naturally A→Z, but time and magnitude do not: the useful first
+ * look at "Started" or "Tokens" is the largest/newest, not the smallest.
+ * This is the same default every console makes and it is worth the table.
+ */
+const FIRST_CLICK_DIR: Record<SortKey, SortDir> = {
+  agent: 'asc', status: 'asc', trigger: 'asc',
+  started: 'desc', duration: 'desc', tokens: 'desc',
+};
+
+/** N days ago as a plain yyyy-mm-dd, which is what from/to hold. */
+function daysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
+}
+
+/**
+ * Time range, Cloud-Console style: its own control, separate from the
+ * filters, and the ONLY way to set the window.
+ *
+ * The state behind it is just `fromFilter` / `toFilter`. There is no stored
+ * preset and no 'custom' mode — picking "Last 30 days" sets a from-date and
+ * nothing else, exactly as if it had been typed. The first cut of this kept
+ * a `rangePreset` alongside the dates, and every consequence of that second
+ * source of truth had to be papered over: pills that hid themselves, a
+ * "Clear all" that skipped the range, a From filter that read blank while a
+ * from-date was in force. All of it invisible on screen, which is what made
+ * it surprising.
+ *
+ * The button's label is DERIVED from the dates each render, so it cannot
+ * disagree with them. When they happen to match a preset it says so;
+ * otherwise it shows the window it actually has.
+ *
+ * The honest cost of dropping the stored preset: these are absolute dates,
+ * so the window does not follow you forward. Come back next week and the
+ * button reads a date rather than "Last 30 days". It is on screen either way.
+ */
+const TIME_PRESETS = [
+  { label: 'Last hour',     days: 0 },
+  { label: 'Last 24 hours', days: 1 },
+  { label: 'Last 7 days',   days: 7 },
+  { label: 'Last 30 days',  days: 30 },
+  { label: 'Last 90 days',  days: 90 },
+];
+
+// A first visit starts 30 days back rather than on all of history, which
+// grows without bound. Applied only when NOTHING is stored for the org —
+// once a view exists, even an empty one, it is the user's.
+const DEFAULT_FROM_DAYS = 30;
+
+/** What the button says. A pure function of the dates — never a stored mode. */
+function timeRangeLabel(from: string, to: string): string {
+  if (!from && !to) return 'Any time';
+  if (from && !to) {
+    const preset = TIME_PRESETS.find((p) => p.days > 0 && daysAgo(p.days) === from);
+    if (preset) return preset.label;
+    return `Since ${formatShortDate(from)}`;
+  }
+  if (!from && to) return `Up to ${formatShortDate(to)}`;
+  return `${formatShortDate(from)} – ${formatShortDate(to)}`;
+}
+
+/**
  * Filter persistence.
  *
  * Two stores, deliberately, because they answer different questions:
@@ -439,10 +561,13 @@ interface PersistedFilters {
   from: string;
   to: string;
   tags: string[];
+  sortBy: SortKey;
+  sortDir: SortDir;
 }
 
 const EMPTY_FILTERS: PersistedFilters = {
   statuses: [], trigger: '', agentId: '', from: '', to: '', tags: [],
+  sortBy: DEFAULT_SORT, sortDir: DEFAULT_SORT_DIR,
 };
 
 const filterStorageKey = (orgId: string) => `agent-history:filters:${orgId}`;
@@ -457,8 +582,11 @@ function filtersFromParams(sp: URLSearchParams): PersistedFilters | null {
     from:     sp.get('from') ?? '',
     to:       sp.get('to') ?? '',
     tags:     list('tags'),
+    sortBy:   isSortKey(sp.get('sort') ?? '') ? (sp.get('sort') as SortKey) : DEFAULT_SORT,
+    sortDir:  sp.get('dir') === 'asc' ? 'asc' : DEFAULT_SORT_DIR,
   };
-  const any = f.statuses.length || f.trigger || f.agentId || f.from || f.to || f.tags.length;
+  const any = f.statuses.length || f.trigger || f.agentId || f.from || f.to
+    || f.tags.length || sp.get('sort');
   return any ? f : null;
 }
 
@@ -470,6 +598,11 @@ function filtersToQuery(f: PersistedFilters): string {
   if (f.from)            sp.set('from', f.from);
   if (f.to)              sp.set('to', f.to);
   if (f.tags.length)     sp.set('tags', f.tags.join(','));
+  // Only pinned when it differs from the default, so a plain link stays plain.
+  if (f.sortBy !== DEFAULT_SORT || f.sortDir !== DEFAULT_SORT_DIR) {
+    sp.set('sort', f.sortBy);
+    sp.set('dir', f.sortDir);
+  }
   const q = sp.toString();
   return q ? `?${q}` : '';
 }
@@ -488,15 +621,19 @@ function readStoredFilters(orgId: string): PersistedFilters | null {
       from:     typeof p.from === 'string' ? p.from : '',
       to:       typeof p.to === 'string' ? p.to : '',
       tags:     Array.isArray(p.tags) ? p.tags.filter((x) => typeof x === 'string') : [],
+      sortBy:   typeof p.sortBy === 'string' && isSortKey(p.sortBy) ? p.sortBy : DEFAULT_SORT,
+      sortDir:  p.sortDir === 'asc' ? 'asc' : DEFAULT_SORT_DIR,
     };
   } catch { return null; }
 }
 
 function writeStoredFilters(orgId: string, f: PersistedFilters): void {
+  // Always writes, including an all-empty view. The KEY's absence is the
+  // signal that this org has never been looked at, which is what gates the
+  // 30-day default — widening to "Any time" has to stick, not get re-seeded
+  // on the next load.
   try {
-    const any = f.statuses.length || f.trigger || f.agentId || f.from || f.to || f.tags.length;
-    if (any) window.localStorage.setItem(filterStorageKey(orgId), JSON.stringify(f));
-    else     window.localStorage.removeItem(filterStorageKey(orgId));
+    window.localStorage.setItem(filterStorageKey(orgId), JSON.stringify(f));
   } catch { /* storage unavailable — the URL still carries the view */ }
 }
 
@@ -528,15 +665,33 @@ export default function AgentExecutionsPage() {
   const [fromFilter, setFromFilter]         = useState<string>('');
   const [toFilter, setToFilter]             = useState<string>('');
   const [tagFilters, setTagFilters]         = useState<string[]>([]);
+  const [sortBy, setSortBy]                 = useState<SortKey>(DEFAULT_SORT);
+  const [sortDir, setSortDir]               = useState<SortDir>(DEFAULT_SORT_DIR);
 
   const { tags } = useTags(selectedOrgId);
 
   // Inline date input state
 
-  // Restored once per org by the effect below; see PersistedFilters.
-  const restoredForOrg = useRef<string | null>(null);
+  // Two guards, and they are not redundant.
+  //
+  //   restoreStartedFor — a REF, set synchronously, so the restore runs once
+  //     per org even if the effect is invoked twice (StrictMode, remounts).
+  //   restoredOrg — STATE, set at the end of the restore, so the mirror
+  //     effect below can tell whether the restored values have actually
+  //     landed in state.
+  //
+  // A ref cannot do the second job. Effects run in declaration order within
+  // one commit, so the mirror ran immediately after the restore with the ref
+  // already set but the state still holding defaults — and replaced the URL
+  // with the defaults, wiping the params it had just read. A shared link
+  // applied its filters and then dropped them from the address bar.
+  const restoreStartedFor = useRef<string | null>(null);
+  const [restoredOrg, setRestoredOrg] = useState<string | null>(null);
 
-  const hasFilters = statusFilters.length > 0 || !!triggerFilter || !!agentFilter || !!fromFilter || !!toFilter || tagFilters.length > 0;
+  // The time range is its own control, not a filter, so it is not counted
+  // here and "Clear all" does not touch it — the same split the Cloud
+  // Console makes between a query and the window it runs over.
+  const hasFilters = statusFilters.length > 0 || !!triggerFilter || !!agentFilter || tagFilters.length > 0;
 
   // ─── Load functions ─────────────────────────────────────────
 
@@ -549,6 +704,8 @@ export default function AgentExecutionsPage() {
       from?: string;
       to?: string;
       tags?: string[];
+      sortBy?: SortKey;
+      sortDir?: SortDir;
       silent?: boolean;
     }
   ) => {
@@ -560,6 +717,8 @@ export default function AgentExecutionsPage() {
     const from     = opts?.from      !== undefined ? opts.from      : fromFilter;
     const to       = opts?.to        !== undefined ? opts.to        : toFilter;
     const tagIds   = opts?.tags      !== undefined ? opts.tags      : tagFilters;
+    const sBy      = opts?.sortBy    !== undefined ? opts.sortBy    : sortBy;
+    const sDir     = opts?.sortDir   !== undefined ? opts.sortDir   : sortDir;
 
     try {
       if (!silent) setLoading(true);
@@ -570,6 +729,8 @@ export default function AgentExecutionsPage() {
       if (from)                 params.from         = new Date(from + 'T00:00:00').toISOString();
       if (to) { const d = new Date(to + 'T00:00:00'); d.setHours(23, 59, 59, 999); params.to = d.toISOString(); }
       Object.assign(params, tagFilterParams(tagIds));
+      params.sort_by  = sBy;
+      params.sort_dir = sDir;
       const data = await getExecutionHistory(selectedOrgId, params);
       setRuns(data.items ?? []);
       setTotal(data.total);
@@ -579,19 +740,34 @@ export default function AgentExecutionsPage() {
     } finally {
       if (!silent) setLoading(false);
     }
-  }, [selectedOrgId, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter, tagFilters]);
+  }, [selectedOrgId, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter, tagFilters, sortBy, sortDir]);
 
-  const loadSummary = useCallback(async () => {
+  /**
+   * Counts for the four cards.
+   *
+   * SCOPED TO THE SAME DATE WINDOW as the table, because each card is a
+   * filter button: clicking "Completed" applies that status to the list, and
+   * a card that counted all of history would hand you a list whose total
+   * disagreed with the number you just clicked. The window is passed
+   * explicitly rather than read off state so the restore effect can count the
+   * range it is about to apply, before setState has landed.
+   */
+  const loadSummary = useCallback(async (range?: { from: string; to: string }) => {
     if (!selectedOrgId) return;
+    const from = range?.from !== undefined ? range.from : fromFilter;
+    const to   = range?.to   !== undefined ? range.to   : toFilter;
+    const win: Record<string, string> = {};
+    if (from) win.from = new Date(from + 'T00:00:00').toISOString();
+    if (to)   { const d = new Date(to + 'T00:00:00'); d.setHours(23, 59, 59, 999); win.to = d.toISOString(); }
     const [execRes, approvalRes, provisionRes, queuedRes, completedRes, failedRes, abortedRes] =
       await Promise.allSettled([
-        getExecutionHistory(selectedOrgId, { status: 'executing',         limit: 1 }),
-        getExecutionHistory(selectedOrgId, { status: 'awaiting_approval', limit: 1 }),
-        getExecutionHistory(selectedOrgId, { status: 'provisioning',      limit: 1 }),
-        getExecutionHistory(selectedOrgId, { status: 'queued',            limit: 1 }),
-        getExecutionHistory(selectedOrgId, { status: 'completed',         limit: 1 }),
-        getExecutionHistory(selectedOrgId, { status: 'failed',            limit: 1 }),
-        getExecutionHistory(selectedOrgId, { status: 'aborted',           limit: 1 }),
+        getExecutionHistory(selectedOrgId, { ...win, status: 'executing',         limit: 1 }),
+        getExecutionHistory(selectedOrgId, { ...win, status: 'awaiting_approval', limit: 1 }),
+        getExecutionHistory(selectedOrgId, { ...win, status: 'provisioning',      limit: 1 }),
+        getExecutionHistory(selectedOrgId, { ...win, status: 'queued',            limit: 1 }),
+        getExecutionHistory(selectedOrgId, { ...win, status: 'completed',         limit: 1 }),
+        getExecutionHistory(selectedOrgId, { ...win, status: 'failed',            limit: 1 }),
+        getExecutionHistory(selectedOrgId, { ...win, status: 'aborted',           limit: 1 }),
       ]);
     const total = (r: PromiseSettledResult<{ total: number }>) =>
       r.status === 'fulfilled' ? r.value.total : 0;
@@ -600,7 +776,7 @@ export default function AgentExecutionsPage() {
     if (completedRes.status === 'fulfilled') setSummaryCompleted(completedRes.value.total);
     // Mirrors the 'failed' group: aborted counts as "did not succeed".
     setSummaryFailed(total(failedRes) + total(abortedRes));
-  }, [selectedOrgId]);
+  }, [selectedOrgId, fromFilter, toFilter]);
 
   // ─── Filter helpers ──────────────────────────────────────────
 
@@ -652,27 +828,54 @@ export default function AgentExecutionsPage() {
     // Ordering guard, kept from the old date buttons: a From after the To
     // silently returns nothing, which reads as "no runs" rather than as a
     // bad range. Refuse instead of querying.
-    if (key === 'from') {
-      if (value && toFilter && value > toFilter) { toast.error('From date cannot be after To date'); return; }
-      next.from = value; setFromFilter(value);
-    }
-    if (key === 'to') {
-      if (value && fromFilter && value < fromFilter) { toast.error('To date cannot be before From date'); return; }
-      next.to = value; setToFilter(value);
-    }
     setPage(1);
     loadHistory(1, next);
   };
 
+  /**
+   * Click a column header.
+   *
+   * First click on a new column uses that column's natural direction; a
+   * second click on the SAME column flips it. Sorting does not touch the
+   * cards — it reorders the window, it does not change what is in it.
+   */
+  const toggleSort = (key: SortKey) => {
+    const dir: SortDir = key === sortBy
+      ? (sortDir === 'asc' ? 'desc' : 'asc')
+      : FIRST_CLICK_DIR[key];
+    setSortBy(key);
+    setSortDir(dir);
+    setPage(1);
+    loadHistory(1, { sortBy: key, sortDir: dir });
+  };
+
+  /**
+   * Set the window. Both dates at once, because they are one control.
+   *
+   * '' on either side means unbounded, so { from: '', to: '' } is "any time".
+   */
+  const applyTimeRange = (from: string, to: string) => {
+    if (from && to && from > to) { toast.error('Start date cannot be after end date'); return; }
+    setFromFilter(from);
+    setToFilter(to);
+    setPage(1);
+    loadHistory(1, {
+      statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter,
+      from, to, tags: tagFilters,
+    });
+    // The cards count inside the window, so moving it has to recount them.
+    loadSummary({ from, to });
+  };
+
+  // Clears the FILTERS. The time range is a separate control and is left
+  // exactly where it is.
   const clearFilters = () => {
     setStatusFilters([]);
     setTriggerFilter('');
     setAgentFilter('');
-    setFromFilter('');
-    setToFilter('');
     setTagFilters([]);
     setPage(1);
-    loadHistory(1, { statuses: [], trigger: '', agentId: '', from: '', to: '', tags: [] });
+    loadHistory(1, { statuses: [], trigger: '', agentId: '', from: fromFilter, to: toFilter, tags: [] });
   };
 
   const goToPage = (pg: number) => {
@@ -696,13 +899,16 @@ export default function AgentExecutionsPage() {
   // followed by a corrective one, which would flash the unfiltered list.
   useEffect(() => {
     if (!selectedOrgId) return;
-    if (restoredForOrg.current === selectedOrgId) return;
-    restoredForOrg.current = selectedOrgId;
+    if (restoreStartedFor.current === selectedOrgId) return;
+    restoreStartedFor.current = selectedOrgId;
 
+    // No URL params and nothing stored = first look at this org, so start
+    // 30 days back. A stored view, even an entirely empty one, is a choice
+    // and is used as-is.
     const restored =
       filtersFromParams(new URLSearchParams(window.location.search)) ??
       readStoredFilters(selectedOrgId) ??
-      EMPTY_FILTERS;
+      { ...EMPTY_FILTERS, from: daysAgo(DEFAULT_FROM_DAYS) };
 
     setStatusFilters(restored.statuses);
     setTriggerFilter(restored.trigger);
@@ -710,8 +916,12 @@ export default function AgentExecutionsPage() {
     setFromFilter(restored.from);
     setToFilter(restored.to);
     setTagFilters(restored.tags);
+    setSortBy(restored.sortBy);
+    setSortDir(restored.sortDir);
     setPage(1);
     loadHistory(1, {
+      sortBy:   restored.sortBy,
+      sortDir:  restored.sortDir,
       statuses: restored.statuses,
       trigger:  restored.trigger,
       agentId:  restored.agentId,
@@ -719,7 +929,10 @@ export default function AgentExecutionsPage() {
       to:       restored.to,
       tags:     restored.tags,
     });
-    loadSummary();
+    loadSummary({ from: restored.from, to: restored.to });
+    // Batched with the setters above, so the commit that sees this flag also
+    // sees every restored value.
+    setRestoredOrg(selectedOrgId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId]);
 
@@ -727,30 +940,62 @@ export default function AgentExecutionsPage() {
   // push(): every tweak of a filter is not a place you want the back button
   // to walk through.
   useEffect(() => {
-    if (!selectedOrgId || restoredForOrg.current !== selectedOrgId) return;
+    // Also bails mid org-switch, when restoredOrg still names the PREVIOUS
+    // org — otherwise the outgoing org's filters get written under the
+    // incoming org's storage key.
+    if (!selectedOrgId || restoredOrg !== selectedOrgId) return;
     const current: PersistedFilters = {
       statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter,
-      from: fromFilter, to: toFilter, tags: tagFilters,
+      from: fromFilter, to: toFilter, tags: tagFilters, sortBy, sortDir,
     };
     const query = filtersToQuery(current);
     if (query !== window.location.search) {
       router.replace(`${window.location.pathname}${query}`, { scroll: false });
     }
     writeStoredFilters(selectedOrgId, current);
-  }, [selectedOrgId, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter, tagFilters, router]);
+  }, [selectedOrgId, restoredOrg, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter, tagFilters, sortBy, sortDir, router]);
 
   // ─── Realtime: refresh on any execution status change in this org ──
   // Debounce bursts of events (sibling auto-resume fires many at once)
   // so we issue a single refresh instead of one per event.
   const refreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  /**
+   * Latest loaders, for the poll to call.
+   *
+   * scheduleRefresh has to keep a STABLE identity — it is the onChange of a
+   * 10s poll, and rebuilding it on every filter change would restart the
+   * subscription. But loadHistory/loadSummary are useCallbacks over the
+   * filter state, so a scheduleRefresh frozen on [page] closed over the
+   * loaders as they were when the page number last changed.
+   *
+   * The result was a poll that quietly UNDID filtering: pick a filter, and ten
+   * seconds later the silent refresh reloaded the list with the values from
+   * before. Rare enough to miss while the only date inputs were two optional
+   * boxes nobody set; unmissable now that the range always has a value.
+   *
+   * A ref gives the stable identity and the current loaders at the same time.
+   * Written in an effect, not during render, to keep render pure.
+   */
+  const latestLoaders = useRef({ loadHistory, loadSummary, page });
+  useEffect(() => {
+    latestLoaders.current = { loadHistory, loadSummary, page };
+  }, [loadHistory, loadSummary, page]);
+
   const scheduleRefresh = useCallback(() => {
     if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
     refreshTimerRef.current = setTimeout(() => {
-      loadHistory(page, { silent: true });
-      loadSummary();
+      const l = latestLoaders.current;
+      l.loadHistory(l.page, { silent: true });
+      l.loadSummary();
     }, 200);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [page]);
+  }, []);
+
+  // Nothing should outlive the page — a pending silent reload firing after
+  // unmount sets state on a component that is gone.
+  useEffect(() => () => {
+    if (refreshTimerRef.current) clearTimeout(refreshTimerRef.current);
+  }, []);
   // Versioned polling (10s — history list, near-realtime is fine).
   useTopicVersions({
     topics: selectedOrgId ? [`org:${selectedOrgId}:executions`] : [],
@@ -799,16 +1044,18 @@ export default function AgentExecutionsPage() {
           <p className="text-sm text-muted-foreground mt-0.5">Live and historical agent runs</p>
         </div>
         <div className="flex items-center gap-2">
-          {totalPages > 1 && (
-            <div className="flex items-center gap-1 text-xs text-muted-foreground">
-              <span className="tabular-nums">{(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}</span>
-              <Button variant="outline" size="icon-sm" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
-                <ChevronLeft className="h-3.5 w-3.5" />
-              </Button>
-              <Button variant="outline" size="icon-sm" disabled={page >= totalPages} onClick={() => goToPage(page + 1)}>
-                <ChevronRight className="h-3.5 w-3.5" />
-              </Button>
-            </div>
+          {/* Top right, away from the filter bar: this sets the window the
+              page is drawn from, which is a different question from which
+              runs within it you want to see. */}
+          {selectedOrgId && (
+            <TimeRangePicker
+              from={fromFilter}
+              to={toFilter}
+              presets={TIME_PRESETS}
+              label={timeRangeLabel(fromFilter, toFilter)}
+              onApply={applyTimeRange}
+              disabled={loading}
+            />
           )}
           <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading || !selectedOrgId}>
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
@@ -827,10 +1074,10 @@ export default function AgentExecutionsPage() {
           {/* Summary Cards */}
           <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('active', statusFilters) && 'ring-2 ring-info/40 bg-info-soft')}
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40 py-0', isGroupActive('active', statusFilters) && 'ring-2 ring-info/40 bg-info-soft')}
               onClick={() => applyGroupFilter('active')}
             >
-              <CardContent className="py-3 px-4">
+              <CardContent className="py-2.5 px-4">
                 <div className="flex items-center gap-2.5">
                   <Zap className="h-4 w-4 text-info shrink-0" />
                   <span className="text-sm font-medium">Active Runs</span>
@@ -841,10 +1088,10 @@ export default function AgentExecutionsPage() {
               </CardContent>
             </Card>
             <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('queued', statusFilters) && 'ring-2 ring-warning/40 bg-warning-soft')}
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40 py-0', isGroupActive('queued', statusFilters) && 'ring-2 ring-warning/40 bg-warning-soft')}
               onClick={() => applyGroupFilter('queued')}
             >
-              <CardContent className="py-3 px-4">
+              <CardContent className="py-2.5 px-4">
                 <div className="flex items-center gap-2.5">
                   <Clock className="h-4 w-4 text-warning shrink-0" />
                   <span className="text-sm font-medium">Queued</span>
@@ -855,10 +1102,10 @@ export default function AgentExecutionsPage() {
               </CardContent>
             </Card>
             <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('completed', statusFilters) && 'ring-2 ring-success/40 bg-success-soft')}
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40 py-0', isGroupActive('completed', statusFilters) && 'ring-2 ring-success/40 bg-success-soft')}
               onClick={() => applyGroupFilter('completed')}
             >
-              <CardContent className="py-3 px-4">
+              <CardContent className="py-2.5 px-4">
                 <div className="flex items-center gap-2.5">
                   <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
                   <span className="text-sm font-medium">Completed</span>
@@ -869,10 +1116,10 @@ export default function AgentExecutionsPage() {
               </CardContent>
             </Card>
             <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40', isGroupActive('failed', statusFilters) && 'ring-2 ring-danger/40 bg-danger-soft')}
+              className={cn('cursor-pointer transition-colors hover:bg-muted/40 py-0', isGroupActive('failed', statusFilters) && 'ring-2 ring-danger/40 bg-danger-soft')}
               onClick={() => applyGroupFilter('failed')}
             >
-              <CardContent className="py-3 px-4">
+              <CardContent className="py-2.5 px-4">
                 <div className="flex items-center gap-2.5">
                   <XCircle className="h-4 w-4 text-danger shrink-0" />
                   <span className="text-sm font-medium">Failed</span>
@@ -885,13 +1132,18 @@ export default function AgentExecutionsPage() {
           </div>
 
           {/* Runs Table Card */}
-          <Card>
-            <CardHeader className="pb-3 border-b">
-              {/* One control, two steps: which field, then which value.
-                  See FilterPicker — six side-by-side dropdowns wrapped onto a
-                  second line on a narrow window, and the agent menu had no
-                  search, which is the one list that actually gets long. */}
-              <div className="flex flex-wrap items-center gap-2">
+          {/* py-0 gap-0: Card's own py-6 plus its gap-6 between header and
+              content put 48px of nothing between the filter bar and the
+              column headers. CardHeader is gone for the same reason — its
+              [.border-b]:pb-6 forces 24px under a 28px row and cannot be
+              overridden by a plain pb-* in the class list. A plain div with
+              the padding written on it says what it does. */}
+          <Card className="py-0 gap-0">
+            {/* One control, two steps: which field, then which value.
+                See FilterPicker — six side-by-side dropdowns wrapped onto a
+                second line on a narrow window, and the agent menu had no
+                search, which is the one list that actually gets long. */}
+            <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
 
                 <FilterPicker
                   align="start"
@@ -924,10 +1176,69 @@ export default function AgentExecutionsPage() {
                       options: tags.map((t) => ({ value: t.id, label: t.name })),
                       emptyHint: 'no tags',
                     },
-                    { key: 'from', label: 'From date', icon: CalendarIcon, current: fromFilter || null },
-                    { key: 'to',   label: 'To date',   icon: CalendarIcon, current: toFilter   || null },
                   ]}
                 />
+
+                {/* Pills sit in the row, not under it. As their own line they
+                      doubled the bar's height the moment anything was
+                      filtered — and the bar is above the table on every
+                      screen, so that cost is paid constantly. */}
+                {hasFilters && (
+                  <>
+                    {statusFilters.map(s => (
+                      <span key={`s-${s}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                        {STATUS_LABELS[s] ?? s}
+                        <button
+                          onClick={() => toggleStatus(s, false)}
+                          className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    ))}
+                    {triggerFilter && (
+                      <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                        {TRIGGER_LABELS[triggerFilter] ?? triggerFilter}
+                        <button
+                          onClick={() => {
+                            setTriggerFilter('');
+                            setPage(1);
+                            loadHistory(1, { statuses: statusFilters, trigger: '', agentId: agentFilter, from: fromFilter, to: toFilter });
+                          }}
+                          className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    )}
+                    {agentFilter && (
+                      <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                        {agents.find(a => a.id === agentFilter)?.name ?? agentFilter}
+                        <button
+                          onClick={() => {
+                            setAgentFilter('');
+                            setPage(1);
+                            loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: '', from: fromFilter, to: toFilter });
+                          }}
+                          className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    )}
+                    {tagFilters.map((id) => (
+                      <span key={`t-${id}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                        {tags.find((t) => t.id === id)?.name ?? 'tag'}
+                        <button
+                          onClick={() => toggleTag(id, false)}
+                          className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                        >
+                          <X className="h-2.5 w-2.5" />
+                        </button>
+                      </span>
+                    ))}
+                  </>
+                  )}
 
                 {/* Clear all */}
                 {hasFilters && (
@@ -935,96 +1246,25 @@ export default function AgentExecutionsPage() {
                     Clear all
                   </Button>
                 )}
-              </div>
 
-              {/* Active filter pills */}
-              {hasFilters && (
-                <div className="flex flex-wrap items-center gap-1.5 pt-2">
-                  {statusFilters.map(s => (
-                    <span key={`s-${s}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                      {STATUS_LABELS[s] ?? s}
-                      <button
-                        onClick={() => toggleStatus(s, false)}
-                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                      >
-                        <X className="h-2.5 w-2.5" />
-                      </button>
+                {/* Pagination belongs to the table, not the page: it counts
+                    the rows below it and moves with the filters beside it.
+                    In the page header it read as a property of the screen,
+                    and sat a long way from the thing it pages. */}
+                {totalPages > 1 && (
+                  <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+                    <span className="tabular-nums">
+                      {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
                     </span>
-                  ))}
-                  {triggerFilter && (
-                    <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                      {TRIGGER_LABELS[triggerFilter] ?? triggerFilter}
-                      <button
-                        onClick={() => {
-                          setTriggerFilter('');
-                          setPage(1);
-                          loadHistory(1, { statuses: statusFilters, trigger: '', agentId: agentFilter, from: fromFilter, to: toFilter });
-                        }}
-                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                      >
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    </span>
-                  )}
-                  {agentFilter && (
-                    <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                      {agents.find(a => a.id === agentFilter)?.name ?? agentFilter}
-                      <button
-                        onClick={() => {
-                          setAgentFilter('');
-                          setPage(1);
-                          loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: '', from: fromFilter, to: toFilter });
-                        }}
-                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                      >
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    </span>
-                  )}
-                  {fromFilter && (
-                    <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                      From: {formatShortDate(fromFilter)}
-                      <button
-                        onClick={() => {
-                          setFromFilter('');
-                          setPage(1);
-                          loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: '', to: toFilter });
-                        }}
-                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                      >
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    </span>
-                  )}
-                  {toFilter && (
-                    <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                      To: {formatShortDate(toFilter)}
-                      <button
-                        onClick={() => {
-                          setToFilter('');
-                          setPage(1);
-                          loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: agentFilter, from: fromFilter, to: '' });
-                        }}
-                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                      >
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    </span>
-                  )}
-                  {tagFilters.map((id) => (
-                    <span key={`t-${id}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                      {tags.find((t) => t.id === id)?.name ?? 'tag'}
-                      <button
-                        onClick={() => toggleTag(id, false)}
-                        className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                      >
-                        <X className="h-2.5 w-2.5" />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
-            </CardHeader>
+                    <Button variant="outline" size="icon-sm" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button variant="outline" size="icon-sm" disabled={page >= totalPages} onClick={() => goToPage(page + 1)}>
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                )}
+            </div>
 
             <CardContent className="p-0">
               {loading ? (
@@ -1034,7 +1274,13 @@ export default function AgentExecutionsPage() {
               ) : runs.length === 0 ? (
                 <div className="py-16 text-center text-muted-foreground">
                   <History className="mx-auto h-10 w-10 mb-3 opacity-20" />
-                  <p className="text-sm">No runs found{hasFilters ? ' matching the current filters' : ''}.</p>
+                  {/* Naming the window matters more than naming the filters:
+                      an empty list is far more often a range that excludes
+                      everything than a filter that does. */}
+                  <p className="text-sm">
+                    No runs{hasFilters ? ' matching the current filters' : ''}
+                    {fromFilter || toFilter ? ` in ${timeRangeLabel(fromFilter, toFilter).toLowerCase()}` : ''}.
+                  </p>
                 </div>
               ) : (
                 <>
@@ -1043,6 +1289,9 @@ export default function AgentExecutionsPage() {
                     onOpenBrowser={(run) => setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name })}
                     onAbort={handleAbort}
                     abortingRunId={abortingRunId}
+                    sortBy={sortBy}
+                    sortDir={sortDir}
+                    onSort={toggleSort}
                   />
                 </>
               )}
