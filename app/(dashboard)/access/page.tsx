@@ -1,9 +1,19 @@
 'use client';
 
 /**
- * Access Groups — manage who can interact with HITL steps.
+ * Authorization — the groups of people allowed to act on agents.
  *
- * Clean table layout:
+ * NOT called "Access", which said nothing about what was being granted and
+ * read as a sibling of the platform's own access_groups table (which holds
+ * PERMISSIONS and is a different system entirely, despite the shared word).
+ * What these groups actually grant is authority over an agent's human
+ * touchpoints: answering its decisions, completing its logins, and being the
+ * people it @mentions when it needs someone.
+ *
+ * The route stays /access. Renaming it would break every saved link for a
+ * word change, and nothing user-facing shows the path.
+ *
+ * Layout:
  *   - Group list with member count
  *   - Click group → dialog to manage members
  *   - Create/delete via top actions
@@ -21,6 +31,7 @@ import {
   removeAgentGroupMember,
   getAgentOrgUsers,
   getGroupUsage,
+  setDefaultAgentGroup,
   type AgentAccessGroup,
   type AgentAccessGroupMember,
   type AgentOrgUser,
@@ -165,6 +176,54 @@ export default function AccessPage() {
            (u.last_name?.toLowerCase().includes(q));
   });
 
+  /**
+   * Make this group the org default, or clear it.
+   *
+   * At most one per org, so setting a new one clears the old — done server
+   * side in a single call rather than clear-then-set from here, which would
+   * leave the org with no default if the second request failed.
+   */
+  const toggleDefault = async (group: AgentAccessGroup) => {
+    if (!selectedOrgId) return;
+    const current = groups.find((g) => g.is_default);
+
+    // Confirmed both ways, because both directions change who can act on
+    // EVERY agent in the org from a single click, and neither is visible
+    // from the agent itself — the per-agent list stays empty while the
+    // default quietly governs all of them.
+    const ok = await confirm(
+      group.is_default
+        ? {
+            title: 'Stop this group covering every agent?',
+            description:
+              `"${group.name}" will no longer apply to agents automatically. Agents that do not ` +
+              `list it will fall back to being open to anyone with Agent Center access, unless ` +
+              `another group is attached to them directly.`,
+            confirmText: 'Clear default',
+            variant: 'destructive',
+          }
+        : {
+            title: 'Make this the default group?',
+            description:
+              `Everyone in "${group.name}" (${group.member_count} member` +
+              `${group.member_count === 1 ? '' : 's'}) will be able to act on EVERY agent in this ` +
+              `organization — answering decisions, completing logins, and being notified.` +
+              (current ? ` This replaces "${current.name}" as the default.` : '') +
+              ` Agents can still add further groups on top.`,
+            confirmText: 'Make default',
+          },
+    );
+    if (!ok) return;
+
+    try {
+      await setDefaultAgentGroup(selectedOrgId, group.id, !group.is_default);
+      toast.success(group.is_default ? 'Default cleared' : `"${group.name}" is now the default`);
+      await loadGroups();
+    } catch (err) {
+      toast.error((err as Error).message || 'Could not change the default group');
+    }
+  };
+
   const openUsage = async (group: AgentAccessGroup, type: 'logins' | 'approvals') => {
     if (!selectedOrgId) return;
     setUsageGroup(group);
@@ -186,10 +245,11 @@ export default function AccessPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <ShieldCheck className="h-5 w-5 text-brand" /> Access
+            <ShieldCheck className="h-5 w-5 text-brand" /> Authorization
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Manage groups of users who can interact with login and approval steps.
+            Who is allowed to act on your agents — answer their decisions, complete their logins,
+            and get notified when one needs a person.
           </p>
         </div>
       </div>
@@ -229,6 +289,7 @@ export default function AccessPage() {
                   <th className="text-right font-medium px-4 py-2.5 w-24">Members</th>
                   <th className="text-right font-medium px-4 py-2.5 w-24">Logins</th>
                   <th className="text-right font-medium px-4 py-2.5 w-24">Approvals</th>
+                  <th className="text-right font-medium px-4 py-2.5 w-28">Default</th>
                   <th className="text-right font-medium px-4 py-2.5 w-28">Created</th>
                   <th className="w-16" />
                 </tr>
@@ -241,6 +302,13 @@ export default function AccessPage() {
                       <div className="flex items-center gap-2">
                         <Users className="h-4 w-4 text-muted-foreground shrink-0" />
                         <span className="font-medium">{group.name}</span>
+                        {/* The default covers every agent without being
+                            attached to any, so it needs saying here — the
+                            per-agent lists would otherwise look empty while
+                            this group quietly governs all of them. */}
+                        {group.is_default && (
+                          <Badge variant="brand" className="text-[10px]">Default — all agents</Badge>
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-right tabular-nums">
@@ -255,6 +323,17 @@ export default function AccessPage() {
                       {(group.approval_count ?? 0) > 0 ? (
                         <button onClick={() => openUsage(group, 'approvals')} className="text-xs tabular-nums text-brand hover:underline">{group.approval_count}</button>
                       ) : <span className="text-xs text-muted-foreground/40">0</span>}
+                    </td>
+                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                      <button
+                        onClick={() => toggleDefault(group)}
+                        title={group.is_default
+                          ? 'Stop this group covering every agent'
+                          : 'Make this the default group for every agent'}
+                        className="text-xs text-brand hover:underline"
+                      >
+                        {group.is_default ? 'Clear default' : 'Make default'}
+                      </button>
                     </td>
                     <td className="px-4 py-3 text-right text-muted-foreground text-xs">
                       {new Date(group.created_at).toLocaleDateString()}

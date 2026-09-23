@@ -28,7 +28,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { toast } from 'sonner';
 import {
   Loader2, Zap, LogIn, Play, GitBranch, PauseCircle,
-  AlertCircle, Copy, Hash, Bot, History, ChevronRight, ChevronLeft,
+  AlertCircle, Copy, Hash, Bot, History, ChevronRight, ChevronLeft, Gavel, MessageSquare,
   ImageIcon, ExternalLink, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -36,6 +36,7 @@ import { getActionBatchItems, getFullExecutionTree, type FullTreeNode } from '@/
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { LogViewer } from '@/components/execution/LogViewer';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { TriggerBadge } from '@/components/execution/TriggerBadge';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -315,19 +316,261 @@ function Breadcrumb({ crumbs, currentId, onNavigate }: {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// Zones — the run detail mirrors the agent editor
+// ═══════════════════════════════════════════════════════════════
+//
+// agent_action_log holds two different kinds of thing: STEPS the routine
+// declares, and EVENTS that happened as a consequence. Rendering both as one
+// flat "Actions" list made a two-step agent read as seven actions, because
+// five on-completion rules each wrote their own row — and the count card
+// agreed with the list rather than with the routine.
+//
+// So the run is split the way the editor already splits it: steps, then the
+// On completion bookend. A row that produced its own separate record shows
+// that record NESTED underneath it, never as a sibling:
+//
+//   sub_agent step  → its child runs      (already nested by the tree builder)
+//   browser_script  → the login it ran as (its own log, drillable)
+//   on completion   → the desk each rule raised
+//
+// One rule, three cases, and the step count finally means steps.
+
+/** An outcome row's payload, as outcome-dispatch.service.js writes it. */
+interface OutcomeInfo {
+  deskId: string | null;
+  ruleName: string | null;
+  type: 'notify' | 'decision' | null;
+  decisions: number;
+  reason: string | null;
+}
+
+function readOutcome(node: FullTreeNode): OutcomeInfo {
+  let o: Record<string, any> = {};
+  try {
+    o = typeof node.output === 'string' ? JSON.parse(node.output) : (node.output ?? {});
+  } catch {
+    // A row whose output never parsed still belongs in the zone — it says a
+    // rule fired, which is the part that matters.
+  }
+  return {
+    deskId: o.decision_desk_id ?? null,
+    ruleName: o.outcome_name ?? null,
+    type: o.outcome_type ?? null,
+    decisions: Number(o.decisions ?? 0),
+    // Written when rules existed and none matched. The only thing separating
+    // a correct silence from a misspelled field name.
+    reason: o.reason ?? null,
+  };
+}
+
+interface RunZones {
+  steps: FullTreeNode[];
+  outcomes: FullTreeNode[];
+  /** Logins nested under the step they authenticated, keyed by that step's id. */
+  loginsFor: Map<string, FullTreeNode[]>;
+}
+
+function runZones(children: FullTreeNode[] | undefined): RunZones {
+  const rows = children ?? [];
+  const outcomes = rows.filter((r) => r.action_type === 'outcome');
+  const rest = rows.filter((r) => r.action_type !== 'outcome');
+
+  // A login sits at its own order_index immediately before the browser_script
+  // it signs in for. Nesting it there answers "which identity did this run
+  // as" without spending a top-level row on plumbing.
+  //
+  // It used to be dropped outright when it succeeded (isInertLoginRow), so a
+  // successful sign-in left no trace at all — fine until you need to know
+  // which account touched the account.
+  const loginsFor = new Map<string, FullTreeNode[]>();
+  const nested = new Set<string>();
+  for (let i = 0; i < rest.length; i++) {
+    if (rest[i].action_type !== 'login') continue;
+    const host = rest.slice(i + 1).find((r) => r.action_type === 'browser_script');
+    // No following browser_script — the login IS the last thing that
+    // happened, usually because the run died on it. It stays a step of its
+    // own rather than being hidden under something that never ran.
+    if (!host) continue;
+    nested.add(rest[i].id);
+    loginsFor.set(host.id, [...(loginsFor.get(host.id) ?? []), rest[i]]);
+  }
+
+  return { steps: rest.filter((r) => !nested.has(r.id)), outcomes, loginsFor };
+}
+
+// ═══════════════════════════════════════════════════════════════
+// Trigger — what set the run off, and what it was handed
+// ═══════════════════════════════════════════════════════════════
+//
+// The first zone, because it is the first question about any run that went
+// wrong: what was it actually given? Nothing else on this page answers it —
+// each step's log records what that STEP produced, so the earliest thing
+// visible was already one transformation away from the input.
+//
+// The payload is shown verbatim, runtime keys and all. Every other view here
+// strips _input_id and friends as noise, but this one is the record of what
+// arrived, and quietly editing it would defeat the point of having it.
+
+function TriggerZone({ node }: { node: FullTreeNode }) {
+  const [open, setOpen] = useState(false);
+  const payload = node.trigger_input;
+  const hasPayload = payload !== null && payload !== undefined;
+  const items = Array.isArray(payload) ? payload.length : null;
+
+  return (
+    <div>
+      <h2 className="text-sm font-semibold mb-3">Trigger</h2>
+      <Card>
+        <CardContent className="py-3 space-y-3">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <TriggerBadge type={node.trigger_type ?? 'internal'} />
+            {(node.triggered_by_name || node.triggered_by) && (
+              <span className="text-muted-foreground">by {node.triggered_by_name ?? node.triggered_by}</span>
+            )}
+            {items !== null && (
+              <span className="text-xs text-muted-foreground">
+                · {items} item{items === 1 ? '' : 's'}
+              </span>
+            )}
+            {node.item_index !== null && node.item_index !== undefined && (
+              <span className="text-xs text-muted-foreground">· item #{node.item_index + 1} of its parent</span>
+            )}
+          </div>
+
+          {hasPayload ? (
+            <div>
+              <button
+                onClick={() => setOpen((v) => !v)}
+                aria-expanded={open}
+                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
+              >
+                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', !open && '-rotate-90')} />
+                Incoming payload
+              </button>
+              {open && (
+                <pre className="mt-2 max-h-80 overflow-auto rounded-md bg-muted/40 px-3 py-2 text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed">
+                  {JSON.stringify(payload, null, 2)}
+                </pre>
+              )}
+            </div>
+          ) : (
+            // Not the same as an empty payload. Runs predating this recording,
+            // and resumed runs that reuse an existing log, legitimately have
+            // nothing here — saying so beats rendering "null" as though the
+            // agent was handed nothing.
+            <p className="text-xs text-muted-foreground">
+              No payload recorded for this run.
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
+// On completion — the bookend, not a step
+// ═══════════════════════════════════════════════════════════════
+
+function OutcomeZone({ rows }: { rows: FullTreeNode[] }) {
+  const parsed = rows.map((r) => ({ row: r, info: readOutcome(r) }));
+  const notifies = parsed.filter((p) => p.info.type === 'notify').length;
+  const decisions = parsed.reduce((n, p) => n + p.info.decisions, 0);
+
+  const summary = [
+    notifies ? `${notifies} notification${notifies === 1 ? '' : 's'}` : null,
+    decisions ? `${decisions} decision${decisions === 1 ? '' : 's'}` : null,
+  ].filter(Boolean).join(' · ');
+
+  return (
+    <div>
+      <div className="flex items-baseline gap-2 mb-3">
+        <h2 className="text-sm font-semibold">On completion</h2>
+        {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
+      </div>
+
+      <div className="space-y-1">
+        {parsed.map(({ row, info }) => {
+          const isDecision = info.type === 'decision';
+          // A rule that matched nothing writes one row for the whole run and
+          // has no desk. It is the only evidence that the rules ran at all,
+          // so it is shown rather than filtered.
+          const nothing = !info.type;
+          // Gavel for a decision, MessageSquare for a notification —
+          // deliberately NOT GitBranch or Bot, which already mean sub-agent
+          // and execution in this very list. A decision rendered with the
+          // sub-agent icon sitting directly under a real sub-agent step is
+          // unreadable, and Gavel is what Decisions, the desk screen and the
+          // nav have always used.
+          const Icon = nothing ? AlertCircle : isDecision ? Gavel : MessageSquare;
+
+          const body = (
+            <>
+              <div className={cn('p-1.5 rounded-md shrink-0',
+                nothing ? 'bg-muted'
+                  : isDecision ? 'bg-amber-100 dark:bg-amber-900/30'
+                  : 'bg-blue-100 dark:bg-blue-900/30')}>
+                <Icon className={cn('h-4 w-4',
+                  nothing ? 'text-muted-foreground'
+                    : isDecision ? 'text-amber-700 dark:text-amber-400'
+                    : 'text-blue-700 dark:text-blue-400')} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2">
+                  <Dot status={row.status} />
+                  <span className="text-sm font-medium truncate">
+                    {info.ruleName ?? row.label}
+                  </span>
+                  <Badge variant="outline" className="text-[10px] h-5 px-1.5">
+                    {nothing ? 'No match' : isDecision ? 'Decision' : 'Notification'}
+                  </Badge>
+                </div>
+                <div className="mt-1 text-xs text-muted-foreground truncate">
+                  {info.reason
+                    ? info.reason
+                    : isDecision
+                      ? `${info.decisions} item${info.decisions === 1 ? '' : 's'} to answer`
+                      : 'Posted to Slack'}
+                </div>
+              </div>
+              {info.deskId && <ChevronRight className="h-4 w-4 text-muted-foreground/30 shrink-0" />}
+            </>
+          );
+
+          const cls = 'w-full flex items-center gap-3 rounded-lg border p-3 text-left transition-all';
+
+          // Links to the DESK, not to an action detail page. The desk is where
+          // the decision actually gets answered, and for a notification it is
+          // the record of what was posted — either way it is the thing the
+          // operator is reaching for when they click this row.
+          return info.deskId ? (
+            <Link key={row.id} href={`/decisions/${info.deskId}`} className={cn(cls, 'hover:bg-muted/30')}>
+              {body}
+            </Link>
+          ) : (
+            <div key={row.id} className={cn(cls, 'opacity-70')}>{body}</div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════
 // Summary Cards — identical format for agents AND actions
 // ═══════════════════════════════════════════════════════════════
 
 function SummaryCards({ node }: { node: FullTreeNode }) {
   const isExec = node.type === 'execution';
-  // Same filter the Actions list below uses. Without it the card counted rows
-  // the operator cannot see — a 6-action run with a login read "5/7", and the
-  // missing seventh was nowhere on the page.
+  // STEPS ONLY — the same list rendered below, so the card and the page agree.
+  // On-completion rows are excluded because they are not steps: five rules
+  // firing made a two-step routine report "7/7", which is a true count of
+  // table rows and a false one of everything the operator recognises.
   //
   // The denominator includes the routine's declared-but-never-reached steps
   // (status 'not_run', synthesised server-side), so a run that died on step 2
   // of 6 reads "1/6" against six listed rows rather than "1/2".
-  const children = (node.children ?? []).filter((c) => !isInertLoginRow(c));
+  const children = isExec ? runZones(node.children).steps : (node.children ?? []);
 
   // Per-run cost is no longer shown here — dollars live on Billing & Usage
   // (aggregated from Anthropic's Cost API). Here we show token usage only.
@@ -355,7 +598,7 @@ function SummaryCards({ node }: { node: FullTreeNode }) {
       <SummaryCard label="Status"><SBadge status={node.status} /></SummaryCard>
       <SummaryCard label="Duration" value={fmtDur(node.duration_ms)} />
       {isExec && (
-        <SummaryCard label="Actions">
+        <SummaryCard label="Steps">
           {/* No bar here — the list below IS the detail, step by step, so a
               second rendering of the same fraction is noise. The bar lives on
               the history list, where there is no step list to read. */}
@@ -420,7 +663,11 @@ const ACTION_TYPE_FALLBACK = { bg: 'bg-muted/60', fg: 'text-muted-foreground', b
  * run at all is usually the thing that went wrong, and making them hunt for it
  * behind a toggle is the same mistake the modal made.
  */
-function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: (a: FullTreeNode) => void }) {
+function ActionList({ actions, onSelect, loginsFor }: {
+  actions: FullTreeNode[];
+  onSelect: (a: FullTreeNode) => void;
+  loginsFor?: Map<string, FullTreeNode[]>;
+}) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const isOpen = (action: FullTreeNode, kids: FullTreeNode[]) => {
     if (action.id in collapsed) return !collapsed[action.id];
@@ -437,6 +684,7 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
         const notRun = action.status === 'not_run';
         const isSub = action.action_type === 'sub_agent' && !notRun;
         const childExecs = action.children?.filter((c) => c.type === 'execution') ?? [];
+        const logins = loginsFor?.get(action.id) ?? [];
         const style = ACTION_TYPE_STYLES[action.action_type ?? ''] ?? ACTION_TYPE_FALLBACK;
 
         const open = isSub && isOpen(action, childExecs);
@@ -570,6 +818,31 @@ function ActionList({ actions, onSelect }: { actions: FullTreeNode[]; onSelect: 
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 shrink-0" />
                   </button>
                 ))}
+            </div>
+          )}
+
+          {/* The identity this step ran as.
+              Always visible rather than behind a disclosure: there is at most
+              one or two, and the question it answers — which account touched
+              the remote system — is one you want answered without clicking.
+              Its own log is drillable, because a login records one. */}
+          {logins.length > 0 && (
+            <div className="ml-6 mt-1 space-y-1 border-l-2 border-sky-200/60 dark:border-sky-800/40 pl-3">
+              {logins.map((lg) => (
+                <button
+                  key={lg.id}
+                  onClick={() => onSelect(lg)}
+                  className="w-full flex items-center gap-2.5 rounded-md border border-transparent px-2.5 py-2 text-left transition-colors hover:border-border hover:bg-muted/30"
+                >
+                  <Dot status={lg.status} />
+                  <LogIn className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
+                  <span className="text-xs font-medium truncate flex-1 min-w-0">{lg.label}</span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">signed in as</span>
+                  <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{fmtDur(lg.duration_ms)}</span>
+                  <SBadge status={lg.status} />
+                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 shrink-0" />
+                </button>
+              ))}
             </div>
           )}
           </div>
@@ -1292,7 +1565,8 @@ export default function ExecutionDetailPage() {
   // Inert login rows are filtered out — see isInertLoginRow. Computed once so
   // the empty state agrees with the list: an agent whose only step is a login
   // should read "No actions recorded", not render an empty Actions heading.
-  const visibleActions = (current?.children ?? []).filter((c) => !isInertLoginRow(c));
+  const zones = runZones(current?.children);
+  const visibleActions = zones.steps;
   const isSubAgent = isAction && current?.action_type === 'sub_agent';
 
   if (loading) {
@@ -1355,15 +1629,24 @@ export default function ExecutionDetailPage() {
 
       {/* ── Content ────────────────────────────────────────────── */}
       {/* Agent → show action list */}
+      {/* Trigger → Steps → On completion: the same three zones the editor
+          shows, in the same order, so the run reads as the routine you
+          authored. The middle one used to be headed "Actions" over a list
+          that also held on-completion rows and hid logins; it now names one
+          thing. */}
+      {isExecution && <TriggerZone node={current} />}
+
       {isExecution && visibleActions.length > 0 && (
         <div>
-          <h2 className="text-sm font-semibold mb-3">Actions</h2>
-          <ActionList actions={visibleActions} onSelect={drillInto} />
+          <h2 className="text-sm font-semibold mb-3">Steps</h2>
+          <ActionList actions={visibleActions} onSelect={drillInto} loginsFor={zones.loginsFor} />
         </div>
       )}
       {isExecution && visibleActions.length === 0 && (
-        <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">No actions recorded.</CardContent></Card>
+        <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">No steps recorded.</CardContent></Card>
       )}
+
+      {isExecution && zones.outcomes.length > 0 && <OutcomeZone rows={zones.outcomes} />}
 
       {/* Regular action → input/output/logs/screenshot (sub_agent actions open
           modal instead, don't drill here).

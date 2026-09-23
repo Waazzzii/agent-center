@@ -226,7 +226,7 @@ export default function LoginsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <LogIn className="h-5 w-5 text-brand" /> Logins
+            <LogIn className="h-5 w-5 text-brand" /> Login Scripts
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             Reusable login profiles.  One session per login, shared across every agent that uses it.

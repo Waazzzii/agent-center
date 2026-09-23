@@ -16,6 +16,15 @@ export interface Tag {
   updated_at: string;
   /** Total assignments across all entity types — only present on list(). */
   usage_count?: number;
+  /**
+   * Per-type breakdown, only present on list(). A tag spans entity types, so
+   * the total alone cannot tell you whether deleting it detaches ten agents
+   * or ten AI steps — and that is exactly what the confirm prompt has to say.
+   */
+  agent_count?: number;
+  ai_step_count?: number;
+  script_count?: number;
+  login_count?: number;
 }
 
 export interface TagInput {

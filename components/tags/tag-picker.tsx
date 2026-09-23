@@ -80,7 +80,9 @@ export function TagPicker({ tags, selected, onChange, onCreate, disabled, placeh
     <div className="relative">
       <div
         className={cn(
-          'flex min-h-[38px] flex-wrap items-center gap-1 rounded-md border border-input px-2 py-1.5 text-sm',
+          // Matches <Input> (34px, px-3) and MultiSelectTags — see the note
+          // there. min-h so it still grows when the tags wrap.
+          'flex min-h-[34px] flex-wrap items-center gap-1 rounded-md border border-input px-3 py-1 text-sm',
           open && 'border-brand ring-1 ring-brand/20',
           disabled && 'cursor-not-allowed opacity-50',
         )}

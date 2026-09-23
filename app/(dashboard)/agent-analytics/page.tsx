@@ -31,7 +31,7 @@ import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { toast } from 'sonner';
 import {
   Activity, Clock, AlertTriangle, Zap, Server, Monitor, Cpu,
-  RefreshCw, Loader2, ChevronRight,
+  RefreshCw, Loader2, ChevronRight, BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -59,14 +59,6 @@ function fmtTokens(n: number): string {
   if (n < 1_000_000_0) return `${(n / 1_000_000).toFixed(2)}M`;
   return `${(n / 1_000_000).toFixed(1)}M`;
 }
-
-function fmtUSD(n: number): string {
-  if (n === 0) return '$0';
-  if (n < 0.01) return '< $0.01';
-  if (n < 100) return `$${n.toFixed(2)}`;
-  return `$${n.toFixed(0)}`;
-}
-
 
 function fmtRelative(iso: string): string {
   const ms = Date.now() - new Date(iso).getTime();
@@ -154,9 +146,13 @@ export default function AnalyticsPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Activity className="h-5 w-5 text-brand" /> Analytics</h1>
+          {/* "Usage", matching the nav — and the nav's BarChart3, not the
+              Activity pulse, which now belongs to the Activity GROUP this page
+              sits inside. A page whose heading disagrees with the link you
+              clicked to reach it makes you check you went to the right place. */}
+          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><BarChart3 className="h-5 w-5 text-brand" /> Usage</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Agent performance, token-usage estimates, and reliability trends. For invoiced amounts, see Billing & Usage.
+            Agent performance, token usage, and reliability trends.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -192,6 +188,14 @@ export default function AnalyticsPage() {
 
           {/* Stat cards */}
           <SummaryCards data={data} />
+
+          {/* Token usage. Deliberately NO dollars: what an org is invoiced
+              depends on plan and markup, and a number that looks like money
+              but is not gets quoted back at you. These are the raw counts the
+              runs actually recorded, which is the question this page answers.
+              Kept as a second row rather than a tab — four cards is not
+              enough content to justify making someone click for it. */}
+          <TokenCards data={data} />
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
             <div className="lg:col-span-2">
@@ -494,6 +498,57 @@ function SummaryCards({ data }: { data: ExecutionAnalytics }) {
         value={active.toLocaleString()}
         sub={active > 0 ? 'Running' : ''}
         live={active > 0}
+      />
+    </div>
+  );
+}
+
+/**
+ * Token usage for the selected range.
+ *
+ * Input and output are split because they are not interchangeable — output is
+ * the expensive half, and a run whose output dwarfs its input is usually a
+ * prompt worth looking at. Cache read and write are summed: the split matters
+ * to whoever tunes the prompts, not to whoever is reading this page, and a
+ * fifth card would push the row to two lines on a laptop.
+ */
+function TokenCards({ data }: { data: ExecutionAnalytics }) {
+  const tIn    = toNum(data.tokens?.tokens_input);
+  const tOut   = toNum(data.tokens?.tokens_output);
+  const cache  = toNum(data.tokens?.tokens_cache_read) + toNum(data.tokens?.tokens_cache_write);
+  const steps  = toNum(data.tokens?.ai_steps);
+  const total  = tIn + tOut + cache;
+
+  // Prompt caching is on, so tokens_input is only the UNCACHED remainder.
+  // Reporting "input" without that share makes a well-cached agent look like
+  // it is barely reading anything.
+  const cachedPct = tIn + cache > 0 ? Math.round((cache / (tIn + cache)) * 100) : 0;
+
+  return (
+    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <SummaryCard
+        icon={<Zap className="h-4 w-4 text-sky-500" />}
+        label="Tokens In"
+        value={fmtTokens(tIn)}
+        sub="uncached prompt"
+      />
+      <SummaryCard
+        icon={<Zap className="h-4 w-4 text-brand" />}
+        label="Tokens Out"
+        value={fmtTokens(tOut)}
+        sub="generated"
+      />
+      <SummaryCard
+        icon={<Cpu className="h-4 w-4 text-amber-500" />}
+        label="Cached"
+        value={fmtTokens(cache)}
+        sub={cache > 0 ? `${cachedPct}% of prompt` : 'read + write'}
+      />
+      <SummaryCard
+        icon={<Activity className="h-4 w-4 text-violet-500" />}
+        label="AI Steps"
+        value={steps.toLocaleString()}
+        sub={total > 0 ? `${fmtTokens(total)} tokens total` : ''}
       />
     </div>
   );

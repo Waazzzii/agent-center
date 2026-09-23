@@ -142,7 +142,12 @@ export function MultiSelectTags({ options, selected, onChange, placeholder = 'Se
         onClick={() => !disabled && setOpen((p) => !p)}
         onKeyDown={(e) => { if (!disabled && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); setOpen((p) => !p); } }}
         className={cn(
-          'w-full min-h-[32px] flex items-center flex-wrap gap-1 rounded-md border px-2 py-1 text-left text-sm transition-colors cursor-pointer',
+          // 34px + px-3 to match <Input>, which is the house form-control
+          // height. This and TagPicker used to sit at 32 and 38, so a panel
+          // with a text field, a tag picker and this in it had three
+          // different control heights stacked down one column. min-h, not h,
+          // because both grow when the chips wrap to a second row.
+          'w-full min-h-[34px] flex items-center flex-wrap gap-1 rounded-md border px-3 py-1 text-left text-sm transition-colors cursor-pointer',
           open ? 'border-brand ring-1 ring-brand/20' : 'border-input hover:border-foreground/30',
           disabled && 'opacity-50 cursor-not-allowed',
         )}

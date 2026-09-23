@@ -16,15 +16,18 @@ import {
   Bot,
   CheckCircle,
   History,
+  Gavel,
   BarChart3,
   ShieldCheck,
   Video,
-  LayoutGrid,
   Wand2,
   LogIn,
   MessageSquare,
   Sparkles,
   Receipt,
+  Cog,
+  Tags as TagsIcon,
+  Activity as ActivityIcon,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -35,21 +38,40 @@ import { useBranding } from '@/components/branding/BrandingProvider';
 // Icons resolved at render time so the recursive renderer doesn't need a
 // pre-transformed tree. Keyed by href; groupers (no href) keyed by label.
 const ICON_BY_HREF: Record<string, React.ElementType> = {
-  '/agents':                  LayoutGrid,
+  '/agents':                  Bot,
   '/agent-history':           History,
   '/actions/ai-steps':        Sparkles,
   '/skills':                  Wand2,
   '/actions/browser-scripts': Video,
   '/actions/logins':          LogIn,
   '/actions/approvals':       CheckCircle,
+  '/decisions':               Gavel,
   '/interactions':            MessageSquare,
   '/agent-analytics':         BarChart3,
   '/billing':                 Receipt,
   '/access':                  ShieldCheck,
+  '/tags':                    TagsIcon,
 };
 const ICON_BY_LABEL: Record<string, React.ElementType> = {
-  'Agents': Bot,
+  // A pulse, not a clock. Activity shared History with its own Executions
+  // child, so the group and the row under it were the same glyph — which
+  // makes the indent the only thing telling them apart, and reads as a
+  // duplicate rather than a hierarchy.
+  'Activity': ActivityIcon,
+  'Settings': Cog,
 };
+
+/**
+ * Branches that start open. These are navKey() values — Agents keys on its
+ * href now that it is a real link, not on `group:Agents`.
+ *
+ * The auto-expand below only opens a branch when the CURRENT route is inside
+ * it, which never fires from the pages outside Agents — so without this the
+ * building blocks stayed hidden exactly when they were least discoverable.
+ *
+ * A manual collapse still wins: manuallyClosed is consulted first.
+ */
+const DEFAULT_EXPANDED = ['/agents'];
 const iconFor = (item: NavItem): React.ElementType =>
   ICON_BY_HREF[item.href] ?? ICON_BY_LABEL[item.label] ?? Bot;
 
@@ -59,7 +81,7 @@ export function ViewModeSidebar() {
   const { selectedOrgId } = useAdminViewStore();
   const { hasLogo, logoVersion } = useBranding();
   const { sidebarOpen, toggleSidebar, theme, toggleTheme } = useUIStore();
-  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set());
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(() => new Set(DEFAULT_EXPANDED));
   const manuallyClosed = useRef<Set<string>>(new Set());
 
   // Stable key for nav items.  Most items use their href; grouper items
@@ -125,7 +147,7 @@ export function ViewModeSidebar() {
 
   const closeMobile = () => { if (sidebarOpen) toggleSidebar(); };
 
-  // Recursive renderer — supports the 3 levels (Agents → AI Steps → Skills).
+  // Recursive renderer — supports the 3 levels (Agents → Browser Scripts → Login Scripts).
   // depth 0 = top-level; nested levels indent under a left guide rail.
   const renderItem = (item: NavItem, depth: number): React.ReactNode => {
     if (item.heading) {
@@ -150,7 +172,7 @@ export function ViewModeSidebar() {
 
     let row: React.ReactNode;
     if (!item.href) {
-      // Pure grouper (Agents) — click toggles expansion.
+      // Pure grouper (Activity) — no page of its own, so click toggles expansion.
       row = (
         <button
           className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-left text-sm font-medium text-sidebar-foreground transition-colors hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
@@ -162,7 +184,7 @@ export function ViewModeSidebar() {
         </button>
       );
     } else if (hasChildren) {
-      // A page that also has children (AI Steps, Browser Scripts): link + chevron.
+      // A page that also has children (Agents, Browser Scripts): link + chevron.
       row = (
         <div
           className={cn(

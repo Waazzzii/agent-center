@@ -1,7 +1,12 @@
 /**
  * Agent-backend access groups API.
- * Separate from the wazzi-backend access_groups (access-groups.ts) —
- * these control who gets notified for HITL steps on agents.
+ *
+ * Separate from the wazzi-backend access_groups (access-groups.ts), which
+ * hold PERMISSIONS. These say who may act on an agent — answer its
+ * decisions, complete its logins, and be @mentioned when it needs someone.
+ *
+ * Granted at the AGENT, not per action. One group can be the org DEFAULT,
+ * which covers every agent without being attached to any of them.
  */
 import agentClient from './agent-client';
 
@@ -12,6 +17,9 @@ export interface AgentAccessGroup {
   created_at: string;
   login_count?: number;
   approval_count?: number;
+  agent_count?: number;
+  /** Applies to every agent in the org without being attached. Max one. */
+  is_default?: boolean;
   member_count: number;
 }
 
@@ -116,3 +124,30 @@ export async function getAssignedAccessGroups(orgId: string, agentId: string) {
 }
 export async function assignAccessGroupToAgent(_orgId: string, _agentId: string, _groupId: string) {}
 export async function unassignAccessGroupFromAgent(_orgId: string, _agentId: string, _groupId: string) {}
+
+// ── Agent-level access ────────────────────────────────────────────────────────
+
+/** Groups attached to this agent. Excludes the org default, which always applies. */
+export async function getAgentGroups(orgId: string, agentId: string) {
+  const res = await agentClient.get<AgentAccessGroup[]>(
+    `/api/admin/${orgId}/agents/${agentId}/access-groups`,
+  );
+  return res.data;
+}
+
+export async function setAgentGroups(orgId: string, agentId: string, groupIds: string[]) {
+  const res = await agentClient.put<AgentAccessGroup[]>(
+    `/api/admin/${orgId}/agents/${agentId}/access-groups`,
+    { group_ids: groupIds },
+  );
+  return res.data;
+}
+
+/** Mark one group as the org default, or clear it. At most one per org. */
+export async function setDefaultAgentGroup(orgId: string, groupId: string, isDefault: boolean) {
+  const res = await agentClient.put<AgentAccessGroup>(
+    `/api/admin/${orgId}/access-groups/${groupId}/default`,
+    { is_default: isDefault },
+  );
+  return res.data;
+}

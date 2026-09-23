@@ -10,10 +10,12 @@ import {
   getExecutionHistory,
   abortBrowserRun,
   isInertLoginRow,
+  isOutcomeRow,
   type Agent,
   type ExecutionRun,
 } from '@/lib/api/agents';
 import { tagFilterParams } from '@/lib/api/tags';
+import { TriggerBadge } from '@/components/execution/TriggerBadge';
 import { FilterPicker } from '@/components/execution/FilterPicker';
 import { ActionProgress } from '@/components/execution/ActionProgress';
 import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
@@ -34,7 +36,6 @@ import {
   ArrowUpDown,
   Webhook,
   Clock,
-  Play,
   CheckCircle2,
   XCircle,
   PauseCircle,
@@ -71,6 +72,12 @@ const TRIGGER_LABELS: Record<string, string> = {
   webhook: 'Webhook',
   cron:    'Cron',
   manual:  'Manual',
+  // Not a configurable trigger — a run started by a human answering a
+  // decision. It only ever appears on an execution, never in the Trigger
+  // card, which is why agent_triggers has no matching type.
+  decision: 'Decision',
+  sub_agent: 'Sub-agent',
+  internal:  'Internal',
 };
 
 const STATUS_GROUPS: Record<string, string[]> = {
@@ -88,7 +95,7 @@ const STATUS_GROUPS: Record<string, string[]> = {
 type StatusGroup = 'active' | 'queued' | 'completed' | 'failed';
 
 const FILTERABLE_STATUSES = ['provisioning', 'executing', 'queued', 'awaiting_approval', 'completed', 'failed', 'aborted'] as const;
-const FILTERABLE_TRIGGERS  = ['webhook', 'cron', 'manual'] as const;
+const FILTERABLE_TRIGGERS  = ['webhook', 'cron', 'manual', 'decision', 'sub_agent', 'internal'] as const;
 const ABORTABLE_STATUSES   = ['executing', 'awaiting_approval', 'provisioning', 'queued'] as const;
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -180,20 +187,6 @@ function StatusBadge({ status }: { status: string }) {
   return <Badge variant="neutral">{status}</Badge>;
 }
 
-function TriggerBadge({ type }: { type: string }) {
-  const map: Record<string, { icon: React.ReactNode; label: string; variant: 'brand' | 'info' | 'neutral' }> = {
-    webhook: { icon: <Webhook className="h-3 w-3" />, label: 'Webhook', variant: 'brand' },
-    cron:    { icon: <Clock className="h-3 w-3" />,   label: 'Cron',    variant: 'info' },
-    manual:  { icon: <Play className="h-3 w-3" />,    label: 'Manual',  variant: 'neutral' },
-  };
-  const def = map[type] ?? { icon: null, label: type, variant: 'neutral' as const };
-  return (
-    <Badge variant={def.variant} className="gap-1 text-xs">
-      {def.icon}{def.label}
-    </Badge>
-  );
-}
-
 // ─── Runs Table ───────────────────────────────────────────────
 
 /**
@@ -252,7 +245,7 @@ function RunsTable({
   return (
     <div>
       {/* Column headers */}
-      <div className="hidden md:grid grid-cols-[1fr_140px_80px_130px_80px_118px_72px] items-center gap-2 h-10 px-3 text-sm font-medium text-foreground border-b">
+      <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_72px] items-center gap-2 h-10 px-3 text-sm font-medium text-foreground border-b">
         <Th col="agent" label="Agent" />
         {/* One column, not two. A run is either in flight — where the bar is
             the useful thing — or finished, where the outcome is. Showing both
@@ -270,11 +263,16 @@ function RunsTable({
       {/* Rows */}
       <div className="divide-y divide-border/40">
         {runs.map((run) => {
-          // Inert login rows are hidden here too, or the dot strip and the
-          // n/total counter would disagree with the detail view they open.
-          // The denominator drops by the same count: total_actions counts the
-          // agent's definition, which still contains the login action.
-          const allActions = run.action_logs ?? [];
+          // STEPS ONLY, matching the run detail's Steps zone — the dot strip
+          // and the n/total counter open that view and must not contradict it.
+          //
+          // On-completion rows are dropped because total_actions counts the
+          // agent's DECLARED actions, which never included them: a two-step
+          // agent with five rules rendered seven dots over a denominator of
+          // two. Inert logins are dropped for the older reason — the
+          // denominator does contain the login action, so the numerator would
+          // otherwise be short.
+          const allActions = (run.action_logs ?? []).filter((a) => !isOutcomeRow(a));
           const actions = allActions.filter((a) => !isInertLoginRow(a));
           const hiddenLogins = allActions.length - actions.length;
           const totalActions = Math.max(0, (run.total_actions ?? allActions.length) - hiddenLogins);
@@ -304,7 +302,7 @@ function RunsTable({
                  onClick={() => router.push(`/agent-history/${run.id}`)}>
 
               {/* Desktop: column layout */}
-              <div className="hidden md:grid grid-cols-[1fr_140px_80px_130px_80px_118px_72px] gap-2 items-center px-3 py-2">
+              <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_72px] gap-2 items-center px-3 py-2">
                 {/* Agent */}
                 <div className="flex items-center gap-2 min-w-0">
                   <StatusGlyph status={displayStatus} />
@@ -322,8 +320,13 @@ function RunsTable({
                 {isRunning
                   ? <ActionProgress actions={actions} total={totalActions} />
                   : <StatusBadge status={displayStatus} />}
-                {/* Trigger */}
-                <TriggerBadge type={run.trigger_type} />
+                {/* Trigger. Wrapped in min-w-0 so the badge can never widen
+                    the track again — a grid item defaults to min-width:auto,
+                    which is why a longer label (Sub-agent, Decision) spilled
+                    into Started rather than being constrained by the column. */}
+                <div className="min-w-0 overflow-hidden">
+                  <TriggerBadge type={run.trigger_type} />
+                </div>
                 {/* Started — full timestamp on hover, compact display in
                     the column (year omitted for this year's runs so the
                     column stays narrow). */}
@@ -465,6 +468,11 @@ type SortDir = 'asc' | 'desc';
 
 const SORT_KEYS: SortKey[] = ['agent', 'status', 'trigger', 'started', 'duration', 'tokens'];
 const isSortKey = (v: string): v is SortKey => (SORT_KEYS as string[]).includes(v);
+
+const SORT_LABELS: Record<SortKey, string> = {
+  agent: 'Agent', status: 'Status', trigger: 'Trigger',
+  started: 'Started', duration: 'Duration', tokens: 'Tokens',
+};
 
 const DEFAULT_SORT: SortKey = 'started';
 const DEFAULT_SORT_DIR: SortDir = 'desc';
@@ -688,10 +696,36 @@ export default function AgentExecutionsPage() {
   const restoreStartedFor = useRef<string | null>(null);
   const [restoredOrg, setRestoredOrg] = useState<string | null>(null);
 
+  /**
+   * A deep link APPLIES its filters but must not overwrite the saved view.
+   *
+   * The clock icon on an agent page links to ?agent_id=… — a drill-down, not
+   * a new default. The code this replaced understood that: agent_id came in
+   * through a one-shot ref that was consumed and nulled, so looking at one
+   * agent's runs never changed what Executions meant afterwards. Folding it
+   * into general persistence quietly broke that — drill in once and every
+   * later visit was still filtered to that agent, which reads as "my runs
+   * disappeared".
+   *
+   * So: restoring from the URL suppresses exactly one storage write. The
+   * moment the user changes anything themselves, it persists again.
+   */
+  const skipNextPersist = useRef(false);
+
   // The time range is its own control, not a filter, so it is not counted
   // here and "Clear all" does not touch it — the same split the Cloud
   // Console makes between a query and the window it runs over.
-  const hasFilters = statusFilters.length > 0 || !!triggerFilter || !!agentFilter || tagFilters.length > 0;
+  //
+  // Sort IS counted, though changing a filter never resets it — those stay
+  // independent, as they are in every other console. What gets counted is
+  // whether a non-default sort is ACTIVE, so it appears as a removable chip
+  // beside the filter pills. Sorting by duration puts the longest runs on
+  // top, which buries anything recent; with only a small arrow on one column
+  // header to say so, the list reads as "my runs are missing" rather than
+  // "you are sorted by duration".
+  const sortIsDefault = sortBy === DEFAULT_SORT && sortDir === DEFAULT_SORT_DIR;
+  const hasFilters = statusFilters.length > 0 || !!triggerFilter || !!agentFilter
+    || tagFilters.length > 0 || !sortIsDefault;
 
   // ─── Load functions ─────────────────────────────────────────
 
@@ -874,8 +908,13 @@ export default function AgentExecutionsPage() {
     setTriggerFilter('');
     setAgentFilter('');
     setTagFilters([]);
+    setSortBy(DEFAULT_SORT);
+    setSortDir(DEFAULT_SORT_DIR);
     setPage(1);
-    loadHistory(1, { statuses: [], trigger: '', agentId: '', from: fromFilter, to: toFilter, tags: [] });
+    loadHistory(1, {
+      statuses: [], trigger: '', agentId: '', from: fromFilter, to: toFilter, tags: [],
+      sortBy: DEFAULT_SORT, sortDir: DEFAULT_SORT_DIR,
+    });
   };
 
   const goToPage = (pg: number) => {
@@ -905,8 +944,11 @@ export default function AgentExecutionsPage() {
     // No URL params and nothing stored = first look at this org, so start
     // 30 days back. A stored view, even an entirely empty one, is a choice
     // and is used as-is.
+    const fromUrl = filtersFromParams(new URLSearchParams(window.location.search));
+    skipNextPersist.current = !!fromUrl;
+
     const restored =
-      filtersFromParams(new URLSearchParams(window.location.search)) ??
+      fromUrl ??
       readStoredFilters(selectedOrgId) ??
       { ...EMPTY_FILTERS, from: daysAgo(DEFAULT_FROM_DAYS) };
 
@@ -952,7 +994,13 @@ export default function AgentExecutionsPage() {
     if (query !== window.location.search) {
       router.replace(`${window.location.pathname}${query}`, { scroll: false });
     }
-    writeStoredFilters(selectedOrgId, current);
+    if (skipNextPersist.current) {
+      // Came from a link. Leave the saved view alone; the next real change
+      // by the user falls through to the write below.
+      skipNextPersist.current = false;
+    } else {
+      writeStoredFilters(selectedOrgId, current);
+    }
   }, [selectedOrgId, restoredOrg, statusFilters, triggerFilter, agentFilter, fromFilter, toFilter, tagFilters, sortBy, sortDir, router]);
 
   // ─── Realtime: refresh on any execution status change in this org ──
@@ -1239,6 +1287,27 @@ export default function AgentExecutionsPage() {
                     ))}
                   </>
                   )}
+
+                {/* Active sort, stated rather than implied. */}
+                {!sortIsDefault && (
+                  <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
+                    Sorted: {SORT_LABELS[sortBy] ?? sortBy}
+                    {sortDir === 'asc'
+                      ? <ArrowUp className="h-2.5 w-2.5" />
+                      : <ArrowDown className="h-2.5 w-2.5" />}
+                    <button
+                      onClick={() => {
+                        setSortBy(DEFAULT_SORT);
+                        setSortDir(DEFAULT_SORT_DIR);
+                        setPage(1);
+                        loadHistory(1, { sortBy: DEFAULT_SORT, sortDir: DEFAULT_SORT_DIR });
+                      }}
+                      className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
+                    >
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  </span>
+                )}
 
                 {/* Clear all */}
                 {hasFilters && (

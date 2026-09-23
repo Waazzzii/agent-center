@@ -7,7 +7,6 @@ export interface Agent {
   name: string;
   description?: string | null;
   is_active: boolean;
-  requires_browser: boolean;
   /** ID of the persisted browser session (cookies/storage) for this agent. Null until a browser run completes. */
   browser_session_id?: string | null;
   /** Owning agent-kit client (one per agent). When set, the agent is runnable
@@ -198,7 +197,7 @@ export async function createAgent(orgId: string, data: { name: string; descripti
   return res.data;
 }
 
-export async function updateAgent(orgId: string, agentId: string, data: { name?: string; description?: string; is_active?: boolean; requires_browser?: boolean; tag_ids?: string[] }) {
+export async function updateAgent(orgId: string, agentId: string, data: { name?: string; description?: string; is_active?: boolean; tag_ids?: string[] }) {
   const res = await agentClient.patch<Agent>(`/api/admin/${orgId}/agents/${agentId}`, data);
   return res.data;
 }
@@ -222,7 +221,7 @@ export async function deleteAgent(orgId: string, agentId: string) {
  * Duplicate an agent and all its actions. Client-side composition over the
  * existing create/update/createAction endpoints — no new backend route
  * needed. The duplicate:
- *   • copies name (with "(copy)" suffix), description, requires_browser
+ *   • copies name (with "(copy)" suffix) and description
  *   • is created INACTIVE so it doesn't fire while the operator reviews
  *   • clones every action, preserving order_index, FK references
  *     (ai_step_id, login_id, script_id, target_agent_id, approval_step_id)
@@ -249,12 +248,9 @@ export async function duplicateAgent(
     name: newName,
     description: source.description ?? undefined,
   });
-  // is_active + requires_browser are only settable via PATCH after create.
+  // is_active is only settable via PATCH after create.
   // Always create as inactive — operator activates after reviewing.
-  await updateAgent(orgId, newAgent.id, {
-    is_active: false,
-    requires_browser: source.requires_browser,
-  });
+  await updateAgent(orgId, newAgent.id, { is_active: false });
   // Replay actions in order_index order so the dup's action sequence
   // matches the source visually.
   if (sourceActions.length > 0) {
@@ -394,7 +390,6 @@ export interface ExecutionRun {
   agent_id: string;
   organization_id: string;
   agent_name: string;
-  agent_requires_browser: boolean;
   /** True only when a browser slot is currently allocated in the worker pool
    *  for this run.  Per-action browser model: runs flip between having a
    *  browser and not, so this is checked live at list time. */
@@ -487,6 +482,272 @@ export interface ExecutionHistoryResponse {
   pages: number;
 }
 
+// ─── On-completion rules & decisions ──────────────────────────────────
+//
+// An outcome rule is the bookend to a trigger: a trigger is how work comes
+// in, a rule is what happens when the run is done. It never blocks a run —
+// the run fires its rules, records that they fired, and completes. See
+// agent-backend/AGENT_OUTCOMES_PLAN.md.
+//
+// An agent has a LIST of rules. Every rule is evaluated against every
+// finished item independently and EVERY MATCH FIRES, in parallel. There is no
+// precedence and no fallback: matching nothing is a valid, common result.
+
+export type OutcomeType = 'none' | 'notify' | 'decision';
+export type OptionStyle = 'default' | 'primary' | 'danger';
+
+/**
+ * One button on a decision.
+ *
+ * @deprecated The buttons are fixed now (Approve / Deny / Review). This
+ * survives only to type the legacy `config.options` on rules saved before
+ * that, which are read and never written.
+ */
+export interface OutcomeOption {
+  key: string;
+  label: string;
+  style?: OptionStyle;
+  then?: { type: 'none' } | { type: 'run_agent'; target_agent_id: string };
+}
+
+export interface OutcomeConfig {
+  channel_id?: string;
+  recipient_user_ids?: string[];
+  message_template?: string;
+  /** Fields allowed into the Slack message. The review screen shows everything. */
+  field_allowlist?: string[];
+  expires_after_hours?: number;
+  /**
+   * What Approve starts. The ONLY configurable part of a decision — the
+   * buttons themselves are fixed (Approve / Deny / Review).
+   */
+  on_approve?: { target_agent_id: string } | null;
+  /**
+   * @deprecated Author-defined options. Reads only, for outcomes saved before
+   * the buttons were fixed; the backend rejects it on write. Nothing new
+   * should set it.
+   */
+  options?: OutcomeOption[];
+}
+
+export interface AgentOutcome {
+  id: string;
+  agent_id: string;
+  /**
+   * What this rule is, e.g. "Tucson". Shown on the decisions it raises —
+   * without it, two rules firing on one run produce two identical-looking
+   * asks. Falls back to the channel id.
+   */
+  name: string | null;
+  /** Display and posting order. Does NOT decide whether a rule fires. */
+  sort_order: number;
+  /**
+   * DERIVED from config.on_approve, never set directly: a rule that starts an
+   * agent is a decision, one that does not is a notification. Read-only here.
+   */
+  outcome_type: OutcomeType;
+  /** {field, operator, value} — which finished items this rule acts on. {} = all. */
+  conditional_execution: Record<string, unknown>;
+  config: OutcomeConfig;
+  is_active: boolean;
+  updated_at?: string;
+}
+
+/** What the editor sends. outcome_type is the server's to decide. */
+export type OutcomeRuleInput = {
+  name?: string | null;
+  sort_order?: number;
+  conditional_execution?: Record<string, unknown>;
+  config: OutcomeConfig;
+  is_active?: boolean;
+};
+
+export type DecisionStatus = 'pending' | 'decided' | 'expired' | 'not_actioned';
+
+export interface Decision {
+  id: string;
+  desk_id: string;
+  item_index: number | null;
+  status: DecisionStatus;
+  chosen_option: string | null;
+  decided_at: string | null;
+  note: string | null;
+  created_at: string;
+  launch_error: string | null;
+  /** Rendered from the outcome's message_template at raise time. */
+  message_text: string | null;
+  source_output: unknown;
+  proposed_input: unknown;
+  final_input: unknown;
+  was_edited?: boolean;
+  source_agent_id: string;
+  source_agent_name: string;
+  /**
+   * The rule that raised this. Null when the rule was deleted, or for
+   * decisions raised before rules existed — one run can match several rules,
+   * and this is the only thing distinguishing their rows.
+   */
+  outcome_id?: string | null;
+  outcome_name?: string | null;
+  execution_log_id: string;
+  expires_at: string | null;
+  desk_status?: string;
+  resulting_execution_id: string | null;
+  target_agent_id: string | null;
+  target_agent_name: string | null;
+  target_run_status: string | null;
+  decided_by_first_name?: string | null;
+  decided_by_last_name?: string | null;
+  /**
+   * @deprecated No longer sent. Label and colour are derived from
+   * `chosen_option` itself — see lib/decision-wording — now that the option
+   * set is fixed. Kept so any reader still referencing them type-checks.
+   */
+  chosen_option_label?: string | null;
+  chosen_option_style?: OptionStyle | null;
+}
+
+export interface DecisionDesk {
+  id: string;
+  agent_id: string;
+  agent_name: string;
+  execution_log_id: string;
+  status: 'open' | 'closed' | 'expired';
+  expires_at: string | null;
+  /**
+   * The rule that raised this desk. Null when the rule was deleted, or for
+   * desks raised before rules existed — the desk still opens and its
+   * decisions are still answerable either way.
+   */
+  outcome_id: string | null;
+  outcome_name: string | null;
+  outcome_config: OutcomeConfig | null;
+  outcome_type: OutcomeType | null;
+}
+
+export async function getAgentOutcomes(orgId: string, agentId: string) {
+  const res = await agentClient.get<AgentOutcome[]>(`/api/admin/${orgId}/agents/${agentId}/outcomes`);
+  return res.data;
+}
+
+export async function createAgentOutcome(orgId: string, agentId: string, data: OutcomeRuleInput) {
+  const res = await agentClient.post<AgentOutcome>(
+    `/api/admin/${orgId}/agents/${agentId}/outcomes`, data,
+  );
+  return res.data;
+}
+
+/**
+ * Update ONE rule. The id is required and not inferable — an agent has many
+ * rules, so a save without it would add a second one that also fires.
+ */
+export async function updateAgentOutcome(
+  orgId: string, agentId: string, outcomeId: string, data: OutcomeRuleInput,
+) {
+  const res = await agentClient.put<AgentOutcome>(
+    `/api/admin/${orgId}/agents/${agentId}/outcomes/${outcomeId}`, data,
+  );
+  return res.data;
+}
+
+export async function deleteAgentOutcome(orgId: string, agentId: string, outcomeId: string) {
+  const res = await agentClient.delete<{ removed: boolean }>(
+    `/api/admin/${orgId}/agents/${agentId}/outcomes/${outcomeId}`,
+  );
+  return res.data;
+}
+
+export interface DecisionListResponse {
+  items: Decision[];
+  total: number;
+  /**
+   * Per-status totals for the shortcut cards, computed with the SAME filters
+   * as the list minus status — so a count reflects the range and agents you
+   * are looking at, not the whole org.
+   */
+  counts?: Partial<Record<DecisionStatus, number>>;
+  page: number;
+  limit: number;
+  pages: number;
+}
+
+export async function getDecisions(
+  orgId: string,
+  params?: {
+    status?: string | string[];
+    source_agent_id?: string;
+    target_agent_id?: string;
+    decided_by?: string;
+    chosen_option?: string;
+    from?: string;
+    to?: string;
+    page?: number;
+    limit?: number;
+    sort_by?: string;
+    sort_dir?: 'asc' | 'desc';
+  },
+) {
+  const res = await agentClient.get<DecisionListResponse>(`/api/admin/${orgId}/decisions`, {
+    params,
+    paramsSerializer: { indexes: null },
+  });
+  return res.data;
+}
+
+export async function getDecisionDesk(orgId: string, deskId: string) {
+  const res = await agentClient.get<{ desk: DecisionDesk; decisions: Decision[] }>(
+    `/api/admin/${orgId}/decision-desks/${deskId}`,
+  );
+  return res.data;
+}
+
+/**
+ * Answer a decision. FINAL — it records, launches whatever the chosen option
+ * runs, and closes the desk once nothing is left pending.
+ *
+ * Editing the payload happens before answering, not after. A 409 means
+ * somebody answered first; the response carries their decision.
+ */
+export interface AnsweredDecision extends Decision {
+  launched?: { target_agent_id: string; execution_id: string; items: number } | null;
+  /** Decisions still pending on the same desk. */
+  remaining?: number;
+}
+
+export async function resolveDecision(
+  orgId: string,
+  decisionId: string,
+  data: { chosen_option: string; final_input?: unknown; note?: string },
+) {
+  const res = await agentClient.post<AnsweredDecision>(`/api/admin/${orgId}/decisions/${decisionId}/resolve`, data);
+  return res.data;
+}
+
+/**
+ * Answer every pending decision on a desk the same way — Approve All / Deny
+ * All, and the bulk action on the review screen.
+ *
+ * Each item still records its own decision and starts its own follow-on run;
+ * the bulk is in the clicking, never in the record. Only pending items are
+ * touched, so this is safe to retry.
+ */
+export async function answerDecisionDesk(
+  orgId: string,
+  deskId: string,
+  data: { chosen_option: string; note?: string },
+) {
+  const res = await agentClient.post<{
+    ok: true; answered: number; launched: number; failed: number;
+    remaining: number; summary: string;
+  }>(`/api/admin/${orgId}/decision-desks/${deskId}/answer`, data);
+  return res.data;
+}
+
+export async function dismissDecisionDesk(orgId: string, deskId: string) {
+  const res = await agentClient.post<{ ok: true }>(`/api/admin/${orgId}/decision-desks/${deskId}/dismiss`);
+  return res.data;
+}
+
 export async function getExecutionHistory(
   orgId: string,
   params?: {
@@ -571,6 +832,22 @@ export function isInertLoginRow(row: { action_type?: string | null; status?: str
   return row.status === 'completed' || row.status === 'skipped';
 }
 
+/**
+ * An on-completion row, not a step.
+ *
+ * agent_action_log holds both: the steps a routine declares, and the events
+ * that happened because it finished. One rule writes one row, so an agent with
+ * five rules adds five rows that no step count should include — a two-step
+ * routine reported "7" against a declared total of 2, which is a true count of
+ * rows and a false count of anything anyone recognises.
+ *
+ * Shared because the history list and the run detail each derive their own
+ * count, and the whole reason this is a function is that they drifted.
+ */
+export function isOutcomeRow(row: { action_type?: string | null }): boolean {
+  return row.action_type === 'outcome';
+}
+
 export async function resumeBrowserRun(runId: string): Promise<void> {
   await agentClient.post(`/agent/run/${runId}/resume`);
 }
@@ -647,6 +924,19 @@ export interface FullTreeNode {
   item_index?: number | null;
   depth?: number;
   error_message?: string | null;
+  /** What set this run off — webhook | cron | manual | decision | sub_agent. */
+  trigger_type?: string | null;
+  trigger_id?: string | null;
+  /**
+   * THE EXACT PAYLOAD THE RUN WAS HANDED, and the only record of it — a step's
+   * log shows what that step produced, never what arrived. Null for runs
+   * started before this was recorded.
+   */
+  trigger_input?: unknown;
+  /** Resolved name of whoever started it, when a platform user did. */
+  triggered_by_name?: string | null;
+  /** Raw handle — e.g. "mcp:someone@example.com". Not always a user id. */
+  triggered_by?: string | null;
   // Action-specific
   action_type?: string;
   tokens_input?: number | null;

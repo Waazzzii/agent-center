@@ -17,7 +17,7 @@ export default function RecordPage() {
 
   const [recordModalOpen, setRecordModalOpen] = useState(false);
   const [scriptsRefreshKey, setScriptsRefreshKey] = useState(0);
-  // ?q= seeds the search box, so arriving from "Edit in Browser Skills" on an
+  // ?q= seeds the search box, so arriving from "Edit in Browser Scripts" on an
   // agent step lands on that one script instead of the whole library. The list
   // owns the field from then on — see ScriptsList's initialSearch.
   const initialSearch = useSearchParams().get('q') ?? '';
@@ -39,7 +39,7 @@ export default function RecordPage() {
 
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Video className="h-5 w-5 text-brand" /> Browser Skills</h1>
+        <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Video className="h-5 w-5 text-brand" /> Browser Scripts</h1>
         <p className="text-sm text-muted-foreground mt-0.5">Record browser interactions and save them as reusable scripts</p>
       </div>
 

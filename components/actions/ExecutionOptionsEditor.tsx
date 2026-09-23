@@ -259,5 +259,8 @@ export function ExecutionOptionsSummary({ options }: { options: ExecutionOptions
     );
   }
   if (bits.length === 0) return null;
-  return <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 mt-0.5">{bits}</div>;
+  // No top margin: this sits INLINE at the end of a step's name row, not on
+  // a line of its own. A card that grew a row the moment you gated a step
+  // made one conditional step taller than every other card in the flow.
+  return <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">{bits}</div>;
 }

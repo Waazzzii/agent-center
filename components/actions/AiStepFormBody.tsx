@@ -187,14 +187,27 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
                 <Plus className="h-3.5 w-3.5 mr-0.5" /> Add output
               </Button>
             </div>
-            <p className="text-[11px] text-muted-foreground">
-              Declare the JSON keys this step should return.  The executor appends a JSON
-              instruction to the prompt automatically and parses the response into the
-              execution context — you don&apos;t need to write &quot;respond with JSON&quot; yourself.
-              When no keys are declared, the executor still nudges the model toward a
-              <code className="mx-1 rounded bg-muted px-1 py-0.5 text-[10px]">{`[{ "result": "..." }]`}</code>
-              shape but skips strict validation.
-            </p>
+            {/* One line, then the rest on demand. This was a four-line
+                paragraph explaining machinery that is true of every AI step
+                and changes for none of them — reference you read once and
+                then scroll past forever, sitting between the Outputs label
+                and the outputs themselves. */}
+            <details className="group/outdoc">
+              <summary className="cursor-pointer list-none text-[11px] text-muted-foreground marker:content-none hover:text-foreground">
+                Declare the JSON keys this step returns.
+                <span className="ml-1 underline decoration-dotted underline-offset-2 group-open/outdoc:hidden">
+                  How this works
+                </span>
+              </summary>
+              <p className="mt-1.5 text-[11px] text-muted-foreground">
+                The executor appends a JSON instruction to the prompt automatically and parses
+                the response into the execution context — you don&apos;t need to write
+                &quot;respond with JSON&quot; yourself. When no keys are declared, it still
+                nudges the model toward a
+                <code className="mx-1 rounded bg-muted px-1 py-0.5 text-[10px]">{`[{ "result": "..." }]`}</code>
+                shape but skips strict validation.
+              </p>
+            </details>
             {form.outputs.length === 0 ? (
               <p className="text-xs text-muted-foreground italic">No declared outputs — response captured as free-form text (default JSON nudge still applies).</p>
             ) : (
@@ -238,15 +251,21 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
 
             {/* Live preview of the auto-appended JSON instruction. Renders
                 in both modes (declared schema vs. soft default) so the user
-                always sees exactly what gets sent. */}
-            <div className="space-y-1 pt-1">
-              <Label className="text-[11px] text-muted-foreground">
-                Auto-appended to prompt at runtime
-              </Label>
-              <pre className="text-[11px] font-mono whitespace-pre-wrap bg-background/60 rounded-md border border-dashed p-2 text-muted-foreground">
+                can always see exactly what gets sent — but COLLAPSED, because
+                it is a dozen lines of generated boilerplate that pushed Model
+                and Connectors below the fold on every single step. Still one
+                click away for the times you are debugging what the model
+                actually received. */}
+            <details className="pt-1">
+              <summary className="cursor-pointer list-none text-[11px] text-muted-foreground marker:content-none hover:text-foreground">
+                <span className="underline decoration-dotted underline-offset-2">
+                  Show what gets appended to the prompt at runtime
+                </span>
+              </summary>
+              <pre className="mt-1.5 text-[11px] font-mono whitespace-pre-wrap bg-background/60 rounded-md border border-dashed p-2 text-muted-foreground">
                 {buildOutputInstructionBlock(form.outputs).trimStart()}
               </pre>
-            </div>
+            </details>
           </div>
         </>
       )}

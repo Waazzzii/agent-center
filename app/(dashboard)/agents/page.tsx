@@ -1,11 +1,11 @@
 'use client';
 
 import { useEffect, useMemo, useState, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { getAgents, deleteAgent, duplicateAgent, runAgent, updateAgent, type Agent } from '@/lib/api/agents';
-import { listClients } from '@/lib/api/clients';
+import { listClients, clientDisplayName } from '@/lib/api/clients';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -39,7 +39,9 @@ export default function AgentsPage() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [duplicatingId, setDuplicatingId] = useState<string | null>(null);
   const [tagDialogAgent, setTagDialogAgent] = useState<Agent | null>(null);
-  // client_id → name, for the Client column.
+  // client_id → the PRODUCT name it was provisioned for, for the Product
+  // column. Falls back to the client's own name for rows created by hand
+  // before provisioning was automatic.
   const [clientsById, setClientsById] = useState<Record<string, string>>({});
 
   // Search + sort live entirely client-side. The list is small enough
@@ -51,20 +53,31 @@ export default function AgentsPage() {
 
   // Tag filtering is server-side (refetch on change) so it stays consistent
   // with the executions feed + MCP. Search/sort remain client-side.
+  //
+  // Seeded from ?tag_ids= so the Tags page's "View N agents" lands on the
+  // filtered list rather than the whole one. Read ONCE, as the initial state
+  // rather than a synced effect: the filter chips are the source of truth
+  // after arrival, and mirroring them back to the URL would make clearing the
+  // filter fight the link that set it.
+  const searchParams = useSearchParams();
   const { tags } = useTags(selectedOrgId);
-  const [tagFilter, setTagFilter] = useState<string[]>([]);
-  const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
+  const [tagFilter, setTagFilter] = useState<string[]>(
+    () => (searchParams.get('tag_ids') ?? '').split(',').filter(Boolean),
+  );
+  const [tagMatch, setTagMatch] = useState<'any' | 'all'>(
+    () => (searchParams.get('tag_match') === 'all' ? 'all' : 'any'),
+  );
 
   useEffect(() => {
     if (selectedOrgId) loadAgents();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrgId, tagFilter, tagMatch]);
 
-  // Client names for the Client column (id → name).
+  // Product names for the Product column (client id → product name).
   useEffect(() => {
     if (!selectedOrgId) return;
     listClients(selectedOrgId)
-      .then((cs) => setClientsById(Object.fromEntries(cs.map((c) => [c.id, c.name]))))
+      .then((cs) => setClientsById(Object.fromEntries(cs.map((c) => [c.id, clientDisplayName(c)]))))
       .catch(() => { /* column falls back to a dash */ });
   }, [selectedOrgId]);
 
@@ -305,14 +318,16 @@ export default function AgentsPage() {
                   render: (a) => new Date(a.created_at).toLocaleDateString(),
                 },
                 {
+                  // Still agents.client_id underneath; "Client" was the
+                  // storage talking. Matches the agent editor's Product field.
                   key: 'client',
-                  label: 'Client',
+                  label: 'Product',
                   thClassName: 'w-40',
                   render: (a) => a.client_id
                     ? (
                       <Badge variant="outline" className="gap-1 border-brand/40 text-brand">
                         <Sparkles className="h-3 w-3" />
-                        <span className="max-w-[120px] truncate">{clientsById[a.client_id] ?? 'Client'}</span>
+                        <span className="max-w-[120px] truncate">{clientsById[a.client_id] ?? 'Product'}</span>
                       </Badge>
                     )
                     : <span className="text-muted-foreground">—</span>,

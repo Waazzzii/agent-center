@@ -13,45 +13,90 @@ export interface NavItem {
 }
 
 /**
- * Main org nav. Agents is the workspace: the routines themselves, their run
- * history, and the SKILLS a routine's steps are assembled from.
+ * Main org nav.
  *
- * "Skills" is a flat group of step types — AI, Browser, Logins, Approvals —
- * rather than the previous nesting (Logins under Browser Scripts, the old
- * skill library under AI Steps). Those nestings implied a dependency that
- * isn't real: a login is not a property of browser scripts, it's another kind
- * of thing a step can be. One level, four siblings, reads as a palette.
+ * Three ideas, in the order you need them:
  *
- * LABELS ONLY. Routes, permissions, tables and behaviour are unchanged —
- * "Routines" still lives at /agents, "AI" at /actions/ai-steps. Icons are
- * keyed by href in ViewModeSidebar, so renames here don't disturb them.
+ *   AGENTS     — the agents themselves, and the reusable steps they are
+ *                built from. Agents is BOTH the link and the group: it goes
+ *                straight to the list, and the things underneath it are the
+ *                parts an agent is assembled out of. It used to be an inert
+ *                grouper over a "Routines" child, which meant a click on the
+ *                most-used word in the product did nothing but open a list
+ *                containing one real destination.
+ *   DECISIONS  — the human inbox. Deliberately TOP LEVEL, not filed under
+ *                history: a pending decision is the one thing here that is
+ *                waiting on a person, and burying it under a group called
+ *                "history" would be exactly wrong. It replaced the old
+ *                "Action Required" page, which is gone.
+ *   ACTIVITY   — what already happened: runs, and what they cost.
+ *   SETTINGS   — the org-wide vocabularies agents draw on: who may act on
+ *                them (Authorization) and how they are labelled (Tags).
+ *                Grouped because neither is a place you go to do work; they
+ *                are where you go when something an agent REFERENCES needs
+ *                changing, which is rare enough that two more top-level rows
+ *                would have cost more attention than they earned.
  *
- * The old skill library (/skills — the entities you attached to AI steps) is
- * deliberately absent. With AI steps now being the reusable unit themselves,
- * a second layer of attachable "skills" was a distinction without a
- * difference. The page still exists at its URL; it's just no longer somewhere
- * the nav will take you.
+ * The child labels carry their own noun ("AI Steps", not "AI") because the
+ * "Skills" caption that used to supply it is gone. A one-word label only
+ * reads correctly under a heading; without one it is a category with no
+ * object. The caption was also the only non-clickable row in the tree.
+ *
+ * LOGINS NEST UNDER BROWSER SCRIPTS. An earlier version deliberately
+ * flattened them, on the reasoning that a login is not a property of browser
+ * scripts but another kind of step. True in the abstract; in practice a login
+ * only ever exists to let a browser script reach a site behind auth, and
+ * nothing else in the product uses one.
+ *
+ * APPROVALS IS GONE. The reusable approval-step library belonged to the
+ * blocking HITL action, which outcomes replaced. The page still exists at
+ * its URL until the old action type is removed; the nav just stops offering
+ * a route to a thing you should no longer build.
+ *
+ * CLIENTS IS GONE for the same reason. A kit client is now provisioned when
+ * its product is enabled for the org and deactivated when it is turned off,
+ * so there is nothing left to manage by hand — the agent editor asks which
+ * PRODUCTS an agent is available in, which is the question an operator
+ * actually has. /clients still resolves while the old rows are migrated.
+ *
+ * Routes and permissions are unchanged — the agent list still lives at
+ * /agents, "Usage" at /agent-analytics. Icons are keyed by href in
+ * ViewModeSidebar.
  */
 export const orgMainNavItems: NavItem[] = [
   {
     label: 'Agents',
-    href: '', // grouper — "Routines" below is the actual list page
+    href: '/agents',
     permissionKeys: ['agent_center_user'],
     children: [
-      { label: 'Routines',   href: '/agents',        permissionKeys: ['agent_center_user'] },
-      { label: 'Executions', href: '/agent-history', permissionKeys: ['agent_center_user'] },
-      { label: 'Skills', href: '', heading: true },
-      { label: 'AI',        href: '/actions/ai-steps',        permissionKeys: ['agent_center_user'] },
-      { label: 'Browser',   href: '/actions/browser-scripts', permissionKeys: ['agent_center_user'] },
-      { label: 'Logins',    href: '/actions/logins',          permissionKeys: ['agent_center_user'] },
-      { label: 'Approvals', href: '/actions/approvals',       permissionKeys: ['agent_center_user'] },
+      { label: 'AI Steps', href: '/actions/ai-steps', permissionKeys: ['agent_center_user'] },
+      {
+        label: 'Browser Scripts', href: '/actions/browser-scripts', permissionKeys: ['agent_center_user'],
+        children: [
+          { label: 'Login Scripts', href: '/actions/logins', permissionKeys: ['agent_center_user'] },
+        ],
+      },
     ],
   },
-  { label: 'Action Required', href: '/interactions',    permissionKeys: ['agent_center_user'] },
-  { label: 'Analytics',       href: '/agent-analytics', permissionKeys: ['agent_center_user'] },
-  { label: 'Billing & Usage', href: '/billing',         permissionKeys: ['agent_center_user'] },
-  { label: 'Clients',         href: '/clients',         permissionKeys: ['agent_center_user'] },
-  { label: 'Access',          href: '/access',          permissionKeys: ['agent_center_user'] },
+  { label: 'Decisions', href: '/decisions', permissionKeys: ['agent_center_user'] },
+  {
+    label: 'Activity',
+    href: '',
+    permissionKeys: ['agent_center_user'],
+    children: [
+      { label: 'Executions', href: '/agent-history',    permissionKeys: ['agent_center_user'] },
+      { label: 'Usage',      href: '/agent-analytics',  permissionKeys: ['agent_center_user'] },
+    ],
+  },
+  {
+    label: 'Settings',
+    href: '',
+    permissionKeys: ['agent_center_user'],
+    children: [
+      { label: 'Authorization', href: '/access', permissionKeys: ['agent_center_user'] },
+      { label: 'Tags',          href: '/tags',   permissionKeys: ['agent_center_user'] },
+    ],
+  },
 ];
 
 /** Settings nav — no settings in the Agent Center */

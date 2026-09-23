@@ -31,21 +31,36 @@ export function LoginChip({ orgId, login, onChanged, onDetach, readOnly }: {
         onClick={(e) => { e.stopPropagation(); if (!readOnly) setOpen(true); }}
         title={`Login: ${login.name} — click to edit`}
         className={cn(
-          'group relative inline-flex min-w-0 shrink-0 grow-0 basis-1/3 items-center gap-1 self-stretch rounded-[var(--r-xl)] border bg-card pl-3 pr-1 shadow-[var(--shadow-sm)] transition-colors',
+          'group relative inline-flex min-w-0 shrink-0 grow-0 basis-1/3 items-center gap-1 self-stretch rounded-[var(--r-xl)] border bg-card py-2.5 pl-4 pr-2 shadow-[var(--shadow-sm)] transition-colors',
           !readOnly && 'cursor-pointer hover:bg-muted/40',
         )}
       >
-        {/* Type indicator hanging off the top-left corner, like the step icons. */}
-        <span className="absolute -top-2.5 -left-2.5 z-10 grid h-5 w-5 place-items-center rounded-md bg-sky-100 text-sky-700 ring-2 ring-background dark:bg-sky-900/30 dark:text-sky-400">
-          <LogIn className="h-3 w-3" />
+        {/* Built like a step card: type label over name, icon INSIDE on the
+            label row. It used to be a single line of text with the icon
+            hanging off the corner, so the one thing sitting beside a step
+            card was the one thing shaped unlike it — and nothing on it said
+            what it was, only what it was called. The corner badge also had to
+            ring itself against the background to stay legible, which is a
+            hack the in-card version does not need.
+
+            "Login Script" matches the nav, where these live. */}
+        <span className="min-w-0 flex-1">
+          <span className="mb-1 flex items-center gap-2">
+            <span className="grid h-4 w-4 shrink-0 place-items-center rounded bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400">
+              <LogIn className="h-3 w-3" />
+            </span>
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+              Login Script
+            </span>
+          </span>
+          <span className="block truncate text-sm font-medium">{login.name}</span>
         </span>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{login.name}</span>
         {onDetach && !readOnly && (
           <button
             type="button"
             title="Detach login from this step"
             onClick={(e) => { e.stopPropagation(); onDetach(); }}
-            className="grid h-5 w-5 shrink-0 place-items-center rounded text-destructive opacity-0 transition-opacity hover:bg-destructive/10 group-hover:opacity-100"
+            className="grid h-5 w-5 shrink-0 place-items-center self-center rounded text-destructive opacity-0 transition-opacity hover:bg-destructive/10 group-hover:opacity-100"
           >
             <Trash2 className="h-4 w-4" />
           </button>

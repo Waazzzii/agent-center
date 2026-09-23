@@ -12,11 +12,12 @@ import {
   getValidSubAgents,
   type Agent, type AgentDetail, type AgentAction, type AgentTrigger, type AgentWebhookKey,
 } from '@/lib/api/agents';
-import { listClients, type Client } from '@/lib/api/clients';
+import { listClients, clientDisplayName, type Client } from '@/lib/api/clients';
 import { getConnectors } from '@/lib/api/connectors';
 import { getSkills, type Skill } from '@/lib/api/skills';
 import { listScripts, type BrowserScript } from '@/lib/api/scripts';
 import { listAiSteps, createAiStep, updateAiStep, type AiStep } from '@/lib/api/ai-steps';
+import { useAiModels } from '@/lib/hooks/use-ai-models';
 import { listApprovalSteps, createApprovalStep, updateApprovalStep, type ApprovalStep } from '@/lib/api/approval-steps';
 import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
 import { LoginFormBody, type LoginFormData } from '@/components/actions/LoginFormBody';
@@ -28,9 +29,11 @@ import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { BrowserScriptPreview } from '@/components/actions/BrowserScriptPreview';
 import { SubAgentPreview } from '@/components/actions/SubAgentPreview';
+import { PanelTabs } from '@/components/agents/PanelTabs';
 import { ApprovalPreview } from '@/components/actions/ApprovalPreview';
 import { InfoBlock } from '@/components/actions/InfoBlock';
 import { ExecutionOptionsEditor, ExecutionOptionsSummary } from '@/components/actions/ExecutionOptionsEditor';
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { SlackChannelInput } from '@/components/notifications/SlackChannelInput';
 import {
   getAgentAccessGroups,
@@ -54,13 +57,52 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
-  Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X, Monitor,
+  Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X,
   LogIn, GitBranch, Settings, CircleDot, AlertTriangle, Globe, Users, Link as LinkIcon,
-  Bot, Sparkles,
+  Bot, ChevronRight, Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { OutcomeCard } from '@/components/agents/OutcomeCard';
+import { ConfigRow, ConfigSlideOut } from '@/components/agents/ConfigSlideOut';
+import { AgentAccessGroups } from '@/components/agents/AgentAccessGroups';
 
 // ─── Cron description helper ──────────────────────────────────
+
+/**
+ * The "no product" option's value.
+ *
+ * A sentinel rather than '', because Radix reserves the empty string for the
+ * placeholder and throws if a SelectItem uses it. Mapped back to null on the
+ * way out, so agents.client_id still stores NULL for unassigned.
+ */
+const NO_PRODUCT = '__none__';
+
+/**
+ * The link between two things in the flow.
+ *
+ * ONE COMPONENT, because there were three: the trigger joined the steps with a
+ * line plus a 14px arrow, the steps joined each other with a bare 16px arrow at
+ * half opacity, and the outcome got a third variant. Read top to bottom the
+ * rail visibly changed weight twice on the way down, which made the flow look
+ * like three stacked lists rather than one sequence.
+ *
+ * Just the chip. It was drawn on a hairline rail at first, but the line only
+ * ever spanned the gap between two cards — it could not run behind them — so
+ * what it actually produced was a stack of disconnected stubs that looked like
+ * a rail failing to join up. The chip alone says "and then" without promising
+ * a continuous track that the layout cannot draw.
+ *
+ * Fixed height, so every gap in the flow is identical.
+ */
+function FlowConnector() {
+  return (
+    <div className="flex justify-center py-2" aria-hidden="true">
+      <div className="flex h-5 w-5 items-center justify-center rounded-full border border-border bg-background text-muted-foreground">
+        <ArrowDown className="h-3 w-3" />
+      </div>
+    </div>
+  );
+}
 
 const DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -181,6 +223,40 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   const [agent, setAgent] = useState<AgentDetail | null>(null);
   const [clients, setClients] = useState<Client[]>([]);
+  /**
+   * What the Product picker offers.
+   *
+   * Only ACTIVE clients: a product that has been turned off leaves its client
+   * deactivated so the assignment survives a re-enable, but offering it as a
+   * fresh choice would let someone assign an agent to a product the org does
+   * not have. The currently-assigned one is always kept, so a disabled
+   * product still shows what it is rather than silently reading "None".
+   */
+  /**
+   * The agents that run this one as a sub-agent step.
+   *
+   * Belongs with the TRIGGER, because that is what it is: another way this
+   * agent starts. The Trigger bar said "Runs only when someone starts it" on
+   * agents that three other agents call on a schedule — placement here is a
+   * correctness fix, not decoration.
+   *
+   * Read-only, and rendered as a separate line rather than as a trigger row:
+   * the relationship is owned by the CALLING agent's step list, so there is
+   * nothing to edit from this side. The links go there.
+   */
+  const calledBy = useMemo(
+    // SORTED BY NAME. The backend returns these in whatever order the join
+    // produced, which at ten callers reads as no order at all — you cannot
+    // tell "not in the list" from "further down the list" while scanning it.
+    // localeCompare so it matches how the agents table sorts.
+    () => [...(agent?.used_as_sub_agent_by ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
+    [agent?.used_as_sub_agent_by],
+  );
+
+  const products = useMemo(
+    () => clients.filter((c) => c.is_active || c.id === agent?.client_id),
+    [clients, agent?.client_id],
+  );
   const [savingClient, setSavingClient] = useState(false);
   const [actions, setActions] = useState<AgentAction[]>([]);
   const [triggers, setTriggers] = useState<AgentTrigger[]>([]);
@@ -215,6 +291,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     executionOptions: null as import('@/lib/api/agents').ExecutionOptions | null,
   });
   const [aiSteps, setAiSteps] = useState<AiStep[]>([]);
+  // For the model name on AI-step cards. The catalog carries a display label
+  // ("Claude Sonnet 5") for what the row stores as an id ("claude-sonnet-5").
+  const { models: aiModels } = useAiModels(selectedOrgId);
   const [logins, setLogins] = useState<Login[]>([]);
   const [approvalSteps, setApprovalSteps] = useState<ApprovalStep[]>([]);
   const [validSubAgents, setValidSubAgents] = useState<Agent[]>([]);
@@ -248,6 +327,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
   // Trigger dialog
   const [triggerDialogOpen, setTriggerDialogOpen] = useState(false);
+  /** The Trigger detail panel. The flow shows a summary row; this holds the rest. */
+  const [triggerPanelOpen, setTriggerPanelOpen] = useState(false);
   const [triggerForm, setTriggerForm] = useState({ trigger_type: 'webhook' as string, cron_expr: '0 9 * * *', description: '' });
   /*
    * Set while EDITING an existing trigger; null while creating one.
@@ -285,7 +366,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [agentName, setAgentName] = useState('');
   const [agentDesc, setAgentDesc] = useState('');
   const [agentActive, setAgentActive] = useState(true);
-  const [agentRequiresBrowser, setAgentRequiresBrowser] = useState(false);
   const [agentTagIds, setAgentTagIds] = useState<string[]>([]);
   const { tags: allTags, createTag } = useTags(selectedOrgId);
   const [settingsDirty, setSettingsDirty] = useState(false);
@@ -296,7 +376,18 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // Settings modal replaces the old Settings tab so the agent editor
   // is one focused workflow view. Opened from the gear icon in the
   // header action cluster.
-  const [settingsOpen, setSettingsOpen] = useState(false);
+  /**
+   * Workflow | Settings.
+   *
+   * Settings used to hide behind a gear in the header's icon cluster, beside
+   * Run and History. Those two ACT on the agent; settings EDITS it, so it was
+   * the odd one out in a toolbar — and a gear is the least specific icon in
+   * the set, which made the most-configurable surface the hardest to find.
+   * A named tab costs one row and says what it is.
+   */
+  const [activeTab, setActiveTab] = useState<'workflow' | 'settings'>('workflow');
+  const [calledByOpen, setCalledByOpen] = useState(false);
+  const [calledBySearch, setCalledBySearch] = useState('');
 
   // Access groups (used in action dialogs for approval group assignment)
   const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
@@ -335,11 +426,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setAgentName(agentData.name);
       setAgentDesc(agentData.description ?? '');
       setAgentActive(agentData.is_active);
-      setAgentRequiresBrowser(agentData.requires_browser ?? false);
       setAgentTagIds((agentData.tags ?? []).map((t) => t.id));
       setSettingsDirty(false);
       setActions((actionsData ?? []).sort((a, b) => a.order_index - b.order_index));
-      // Clients for the assignment picker (non-blocking).
+      // Kit clients, which the picker presents as products (non-blocking).
       void listClients(selectedOrgId).then(setClients).catch(() => {});
       const triggers = agentData.triggers ?? [];
       setTriggers(triggers);
@@ -683,6 +773,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   // The action's login_id is the binding the runtime actually uses, so the
   // display now follows the same fact the executor does — and it keeps
   // working once the legacy column is cleared.
+  // Only the AI-step form has modes (new vs existing), so only its header
+  // carries a tab rail — every other action type opens straight onto fields.
+  const isAiStepAction = actionForm.action_type === 'agent';
+
   const actionPairs = useMemo(() => {
     const m = new Map<string, { partnerId: string; role: 'login' | 'script' }>();
     for (let i = 0; i < actions.length - 1; i++) {
@@ -831,7 +925,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return false;
     try {
       setSavingSettings(true);
-      const updated = await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined, is_active: agentActive, requires_browser: agentRequiresBrowser, tag_ids: agentTagIds });
+      const updated = await updateAgent(selectedOrgId, agentId, { name: agentName.trim(), description: agentDesc.trim() || undefined, is_active: agentActive, tag_ids: agentTagIds });
       toast.success('Agent updated');
       setSettingsDirty(false);
       // Update the UI in place (no full-screen reload). The form already holds
@@ -1008,6 +1102,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   }
 
   return (
+    // delayDuration 300: step descriptions are something you point at to
+    // check, not something that should fire while the pointer crosses the
+    // flow on its way somewhere else.
+    <TooltipProvider delayDuration={300}>
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       {/* Header — no Back button. The sidebar is always present and
           browser-back covers the "return to list" case. */}
@@ -1019,47 +1117,19 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               {agent.name}
             </h1>
             <Badge variant={agent.is_active ? 'default' : 'secondary'}>{agent.is_active ? 'Active' : 'Inactive'}</Badge>
-            {agent.requires_browser && (
-              <Badge variant="outline" className="gap-1 border-info/40 text-info">
-                <Monitor className="h-3 w-3" />Browser
-              </Badge>
-            )}
-            {agent.client_id && (
-              <Badge variant="outline" className="gap-1 border-brand/40 text-brand" title="This agent is assigned to a client and is client-gated">
-                <Sparkles className="h-3 w-3" />
-                {clients.find((c) => c.id === agent.client_id)?.name ?? 'Client'}
-              </Badge>
-            )}
+            {/* No product badge here. It is set in Settings and shown in the
+                agents table; repeating it beside the name spent the most
+                prominent spot on the page on something you change once and
+                then never think about. */}
           </div>
           {agent.description && <p className="text-sm text-muted-foreground mt-0.5">{agent.description}</p>}
 
-          {/* Routine bindings — surfaces every centers.ssc_routines row this
-              agent is currently assigned to. Verified state shown inline so
-              admins know whether the SSC runtime gate is open. */}
-          {agent.routine_bindings && agent.routine_bindings.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
-              <span className="font-medium">Bound to:</span>
-              {agent.routine_bindings.map((b) => (
-                <Badge
-                  key={b.id}
-                  variant="outline"
-                  className={
-                    b.agent_verified_at
-                      ? 'gap-1 border-emerald-200 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/30 dark:text-emerald-300'
-                      : 'gap-1 border-amber-200 bg-amber-50 text-amber-700 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-300'
-                  }
-                  title={
-                    b.agent_verified_at
-                      ? `Verified ${new Date(b.agent_verified_at).toLocaleDateString()} — domain: ${b.domain_type}`
-                      : `Not yet verified — Submissions Center won't fire this routine`
-                  }
-                >
-                  {b.name}
-                  <span className="opacity-60">· {b.domain_type}</span>
-                </Badge>
-              ))}
-            </div>
-          )}
+          {/* "Bound to" was here: the centers.ssc_routines rows this agent is
+              assigned to. Removed — it is a Submissions Center concept, and
+              the Agent Center is not where you reason about it. It also sat in
+              the most prominent spot on the page for something most agents in
+              most orgs will never have. The bindings and their verified state
+              still live in Submissions Center, which owns them. */}
         </div>
 
         {/* Action cluster — three icon buttons with hover-title
@@ -1091,35 +1161,156 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           <Button
             variant="ghost"
             size="icon"
-            className="h-9 w-9 rounded-none"
+            className="h-9 w-9 rounded-none rounded-r-md"
             onClick={() => router.push(`/agent-history?agent_id=${agentId}`)}
             title="View execution history"
           >
             <History className="h-4 w-4 text-muted-foreground" />
           </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 rounded-none rounded-r-md"
-            onClick={() => setSettingsOpen(true)}
-            title="Agent settings"
-          >
-            <Settings className="h-4 w-4 text-muted-foreground" />
-          </Button>
         </div>
       </div>
 
-      {/* ── Workflow (no longer behind a tab — settings moved to a
-          modal triggered by the gear icon in the header cluster). */}
-      <div className="mt-2">
+      {/* ── Workflow | Settings ──────────────────────────────────────
+          A segmented control in a panel header, not underlined tabs on the
+          page background. Bare tabs left the content floating with nothing
+          holding it: the flow is a centred 720px column inside a 1200px page,
+          so without a frame it read as an island with a rule above it. The
+          panel gives the column an edge to sit in, and putting the control in
+          its header makes the relationship obvious — this switch changes what
+          is in THIS box.
+
+          Segmented rather than underlined because there are exactly two
+          mutually exclusive views. An underline scales to six tabs; a pill
+          pair says "one or the other" at a glance and takes less room. */}
+      {/* A GRADIENT, NOT A CARD.
+          The card version had a hard bottom edge that closed the flow off
+          mid-page, and a Card is `flex flex-col gap-6` — overriding py-0
+          without gap-0 left a 24px band between the header and the body
+          showing bg-card through, which is the stray colour. Rather than
+          patch the gap, the frame goes: a tint at the top that fades to
+          nothing, so the panel has a clear beginning and simply dissolves
+          into the page instead of drawing a box around a flow of unknown
+          length. Tabs sit INSIDE the tint, where it is strongest, so they
+          still read as attached to what they switch. */}
+      <div className="mt-4 rounded-t-xl bg-gradient-to-b from-muted/60 via-muted/20 to-transparent">
+        <div className="flex items-center gap-3 px-3 pb-3 pt-3">
+          {/* Bordered track: on a tinted ground a bare bg-muted track would
+              blend into the gradient behind it. */}
+          <div className="inline-flex items-center gap-0.5 rounded-lg border bg-background/50 p-0.5">
+            {([
+              { key: 'workflow', label: 'Workflow' },
+              { key: 'settings', label: 'Settings' },
+            ] as const).map((t) => (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setActiveTab(t.key)}
+                aria-pressed={activeTab === t.key}
+                className={cn(
+                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
+                  activeTab === t.key
+                    ? 'bg-background text-foreground shadow-sm'
+                    : 'text-muted-foreground hover:text-foreground',
+                )}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* A divider that fades out at both ends.
+            The tabs do need separating from what they switch — without any
+            line the control floated on the tint. But a full-width rule is how
+            the card looked in the first place: it reads as the top edge of a
+            box, and the whole point of the gradient is that there is no box.
+            Fading it out at the margins divides the two without closing
+            anything, and it matches the way the tint itself ends. */}
+        <div className="h-px bg-gradient-to-r from-transparent via-border to-transparent" />
+
+        {/* Deep bottom padding so the gradient still has room to fade AFTER
+            the last thing in the flow — without it the tint would be cut off
+            by the content and read as an edge again. */}
+        <div className="px-4 pb-16 pt-6 sm:px-6">
+
+      {/* ── Workflow ─────────────────────────────────────────────────
+          Constrained to a reading column rather than the page's full
+          1200px. The steps carry one line of text each; stretched edge to
+          edge they read as mostly empty space with a word floating on the
+          left. Narrowing is also why left-to-right was the wrong fix — the
+          flow was never too tall, it was too wide. */}
+      {activeTab === 'workflow' && (
+      <div className="mx-auto w-full max-w-[720px]">
           <div className="space-y-0">
 
-            {/* Trigger */}
+            {/* Trigger — a bookend, not a step. The section name rides
+                inside the bar (see ConfigRow's `section`), so the caption
+                that used to float above it is gone. */}
             <div>
-              <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground mb-2 px-1">Trigger</p>
               {trigger ? (
-                <Card className="border-brand/40 bg-brand/5 dark:bg-brand/10">
-                  <CardContent className="py-3 px-4">
+                <>
+                  {/* A summary in the flow, the detail in a panel. A webhook
+                      trigger rendered its URL, a how-to block and an API key
+                      inline — the card you edit least often was taller than
+                      every step put together. */}
+                  <ConfigRow
+                    section="Trigger"
+                    icon={Play}
+                    label={triggerLabel[trigger.trigger_type as keyof typeof triggerLabel]}
+                    configured
+                    // "Runs ONLY when someone starts it" is false the moment
+                    // another agent calls this one as a sub-agent — which the
+                    // row below this one spells out. Drop the "only" rather
+                    // than let the bar contradict the line under it.
+                    summary={
+                      trigger.trigger_type === 'cron'
+                        ? describeCron(String(trigger.trigger_config.cron_expr ?? ''))
+                        : trigger.trigger_type === 'webhook'
+                          ? 'Runs when its webhook URL is called'
+                          : calledBy.length > 0
+                            ? 'Runs when someone starts it'
+                            : 'Runs only when someone starts it'
+                    }
+                    onClick={() => setTriggerPanelOpen(true)}
+                  />
+
+                  {/* Sits under the Trigger bar, inside the same block, so it
+                      reads as a footnote to "how this starts" rather than a
+                      step of its own — no number, no card, no connector.
+
+                      A COUNT, NOT A LIST. Names inline made the row's length a
+                      function of the data: one caller was a footnote, six were
+                      a paragraph sitting above the flow, and capping the list
+                      only traded that for a truncation nobody could act on. A
+                      count is fixed width whatever the number, and the dialog
+                      behind it can afford to show every caller properly —
+                      with search, which an inline list could never have. */}
+                  {calledBy.length > 0 && (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 pl-3 text-xs text-muted-foreground">
+                      <GitBranch className="h-3 w-3 shrink-0 text-amber-500" />
+                      {/* "Also run by X — it runs whenever they do" described a
+                          side effect and left you to infer the mechanism. This
+                          agent is a STEP inside those agents, which is the fact
+                          that matters: it explains why it runs, why its inputs
+                          come from somewhere else, and why editing it changes
+                          their behaviour too. */}
+                      <span>Called as a sub-agent by</span>
+                      <button
+                        type="button"
+                        onClick={() => { setCalledBySearch(''); setCalledByOpen(true); }}
+                        className="font-medium text-foreground underline decoration-dotted underline-offset-4 hover:text-brand"
+                      >
+                        {calledBy.length} other {calledBy.length === 1 ? 'agent' : 'agents'}
+                      </button>
+                    </div>
+                  )}
+
+                  <ConfigSlideOut
+                    open={triggerPanelOpen}
+                    onOpenChange={setTriggerPanelOpen}
+                    title={triggerLabel[trigger.trigger_type as keyof typeof triggerLabel]}
+                    description="How this agent gets started."
+                  >
                     <div className="flex items-start gap-3">
                       <div className="p-2 rounded-lg bg-brand/15 text-brand mt-0.5 shrink-0">
                         {triggerIcon[trigger.trigger_type as keyof typeof triggerIcon]}
@@ -1203,8 +1394,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         )}
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
+                  </ConfigSlideOut>
+                </>
               ) : (
                 <Card className="border-dashed border-2 border-brand/30 hover:border-brand/50 transition-colors">
                   <CardContent className="py-6 flex flex-col items-center gap-3">
@@ -1223,21 +1414,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               )}
             </div>
 
-            {/* Connector line */}
-            <div className="flex justify-center py-1">
-              <div className="flex flex-col items-center">
-                <div className="w-px h-5 bg-border" />
-                <ArrowDown className="h-3.5 w-3.5 text-muted-foreground -mt-px" />
-              </div>
-            </div>
+            <FlowConnector />
 
-            {/* Steps */}
+            {/* Steps — inset from the bookends on purpose. The bars above
+                and below run the full width of the column; the steps sit
+                inside them. That is the whole distinction, and it survives
+                greyscale, which the old colour-only one did not. The "Steps"
+                caption is gone with it: once the shape says which is which,
+                the caption was labelling the obvious. */}
             <div>
-              <div className="mb-2 px-1">
-                <p className="text-[11px] font-semibold uppercase tracking-widest text-muted-foreground">Steps</p>
-              </div>
-
-              <div>
+              <div className="px-6">
                 {actions.map((action, idx) => {
                   // Paired login + browser_script render as one visual
                   // unit. Both cards adopt the browser_script (violet)
@@ -1282,13 +1468,97 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     action.action_type === 'sub_agent'      ? '(no target agent)' :
                     action.action_type === 'approval'       ? '(no approval step selected)' :
                     '—';
+                  // `tint` is the type's colour as TEXT, for the label beside
+                  // the icon. Without it the label was text-muted-foreground
+                  // while the number badge was fully saturated, so a step row
+                  // read as grey with a coloured dot on it — the type colour
+                  // was carried by 16px of chip and nothing else. Colouring
+                  // the words is what makes the type scannable down a flow,
+                  // which is the only reason these colours exist.
                   const meta = ({
-                    agent:          { label: 'AI Step',        icon: <Bot className="h-3 w-3" />,          solid: 'bg-blue-600',   soft: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400' },
-                    approval:       { label: 'Human Review',   icon: <CheckCircle2 className="h-3 w-3" />, solid: 'bg-orange-500', soft: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400' },
-                    login:          { label: 'Browser Login',  icon: <LogIn className="h-3 w-3" />,        solid: 'bg-sky-500',    soft: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400' },
-                    browser_script: { label: 'Browser Script', icon: <CircleDot className="h-3 w-3" />,    solid: 'bg-violet-500', soft: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400' },
-                    sub_agent:      { label: 'Run Agent',      icon: <GitBranch className="h-3 w-3" />,    solid: 'bg-amber-500',  soft: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' },
+                    agent:          { label: 'AI Step',        icon: <Bot className="h-3 w-3" />,          solid: 'bg-blue-600',   soft: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',       tint: 'text-blue-700 dark:text-blue-400' },
+                    approval:       { label: 'Human Review',   icon: <CheckCircle2 className="h-3 w-3" />, solid: 'bg-orange-500', soft: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400', tint: 'text-orange-700 dark:text-orange-400' },
+                    login:          { label: 'Browser Login',  icon: <LogIn className="h-3 w-3" />,        solid: 'bg-sky-500',    soft: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',          tint: 'text-sky-700 dark:text-sky-400' },
+                    browser_script: { label: 'Browser Script', icon: <CircleDot className="h-3 w-3" />,    solid: 'bg-violet-500', soft: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400', tint: 'text-violet-700 dark:text-violet-400' },
+                    sub_agent:      { label: 'Run Agent',      icon: <GitBranch className="h-3 w-3" />,    solid: 'bg-amber-500',  soft: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',    tint: 'text-amber-700 dark:text-amber-400' },
                   } as const)[action.action_type];
+
+                  /**
+                   * The short facts that ride on the header row, opposite the
+                   * type label.
+                   *
+                   * A step card is as wide as the column and carried one line
+                   * of text, so the whole right half was empty — you had to
+                   * open a step to see which model it used or whether it had
+                   * any tools. These are the questions people actually scan a
+                   * routine for, so they belong on the card.
+                   *
+                   * CAPPED AT THREE, and only facts that are true of THIS step
+                   * rather than defaults. A card listing "0 retries" and "no
+                   * condition" on every row would fill the space without
+                   * adding anything, and the eye stops reading a field that is
+                   * usually the same.
+                   */
+                  /**
+                   * What this step is FOR, in the author's own words.
+                   *
+                   * The name row was the emptiest part of the card — a short
+                   * step name on the left and nothing else across the rest of
+                   * a 600px row. Every reusable entity already carries a
+                   * description that until now you could only read by opening
+                   * it, which is the thing a flow overview exists to save you.
+                   *
+                   * On the SAME row as the name, not below it: the card is
+                   * already the height people liked, and the space that needed
+                   * using was horizontal.
+                   */
+                  let stepDescription: string | null = null;
+
+                  const stepFacts: string[] = [];
+                  if (action.action_type === 'agent') {
+                    const step = aiSteps.find((s) => s.id === action.ai_step_id);
+                    if (step) {
+                      // Description only. The prompt is NOT used as a fallback:
+                      // it is an instruction to a model, and a truncated system
+                      // prompt shown where a summary belongs reads as a summary
+                      // and misrepresents the step.
+                      stepDescription = step.description ?? null;
+                      const model = aiModels.find((m) => m.model_id === step.model);
+                      // "Claude Sonnet 5" → "Sonnet 5": the vendor is the same
+                      // for every row, so it is the part that carries no
+                      // information here.
+                      if (model) stepFacts.push(model.label.replace(/^Claude\s+/i, ''));
+                      const tools = step.connector_ids?.length ?? 0;
+                      if (tools > 0) stepFacts.push(`${tools} ${tools === 1 ? 'tool' : 'tools'}`);
+                      const outs = step.outputs?.length ?? 0;
+                      if (outs > 0) stepFacts.push(`${outs} ${outs === 1 ? 'output' : 'outputs'}`);
+                    }
+                  } else if (action.action_type === 'sub_agent') {
+                    stepDescription = validSubAgents.find((a) => a.id === action.target_agent_id)?.description ?? null;
+                    if (action.batch_size && action.batch_size > 1) stepFacts.push(`batches of ${action.batch_size}`);
+                    if (action.max_concurrent && action.max_concurrent > 1) stepFacts.push(`${action.max_concurrent} at a time`);
+                  } else if (action.action_type === 'browser_script') {
+                    const script = browserScripts.find((s) => s.id === action.script_id);
+                    // Falls back to the recorded length. Not as good as a
+                    // sentence someone wrote, but it is real and it is the
+                    // thing that tells a two-click script from a forty-step
+                    // one at a glance.
+                    stepDescription = script?.description
+                      || (script?.steps?.length
+                        ? `${script.steps.length} recorded ${script.steps.length === 1 ? 'step' : 'steps'}`
+                        : null);
+                    if ((action.max_retries ?? 0) > 0) {
+                      stepFacts.push(`${action.max_retries} ${action.max_retries === 1 ? 'retry' : 'retries'}`);
+                    }
+                  } else if (action.action_type === 'login') {
+                    // A login has no description; its URL is the useful fact —
+                    // which site this signs into. Host only: the full URL is a
+                    // sign-in path nobody reads.
+                    const url = logins.find((l) => l.id === action.login_id)?.url;
+                    if (url) { try { stepDescription = new URL(url).host; } catch { stepDescription = url; } }
+                  } else if (action.action_type === 'approval') {
+                    stepDescription = approvalSteps.find((a) => a.id === action.approval_step_id)?.instructions ?? null;
+                  }
 
                   return (
                   <div
@@ -1338,32 +1608,104 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         }}
                         onClick={() => openEditAction(action)}
                       >
-                        {/* Step number + type icon, hanging off the top-left corner. */}
-                        <div className="absolute -top-2.5 -left-2.5 z-10 flex items-center gap-1">
+                        {/* The step's position in the flow, hanging off the
+                            corner. Only the number lives out here now — where
+                            it sits IS what it means. The type moved inside,
+                            below. */}
+                        <div className="absolute -top-2.5 -left-2.5 z-10">
                           <span className={cn('grid h-5 min-w-[20px] place-items-center rounded-full px-1 text-[10px] font-bold text-white ring-2 ring-background', meta.solid)}>
                             {stepNum}
                           </span>
-                          <span className={cn('grid h-5 w-5 place-items-center rounded-md ring-2 ring-background', meta.soft)} title={meta.label}>
-                            {meta.icon}
-                          </span>
                         </div>
-                        <CardContent className="py-3 pl-5 pr-2">
+                        <CardContent className="py-2.5 pl-5 pr-2">
                           <div className="flex items-center gap-2">
                             <div className="min-w-0 flex-1">
-                              <div
-                                className={cn('truncate text-sm font-medium', !displayName && 'text-muted-foreground italic')}
-                                title={displayName ?? undefined}
-                              >
-                                {displayName ?? placeholder}
+                              {/* What kind of step this is, spelled out. It
+                                  used to be an icon with the name only in a
+                                  title tooltip, which meant telling a Browser
+                                  Script from a Run Agent took a hover per card.
+
+                                  A HEADER ROW, not a left segment like the
+                                  Trigger and On completion bars. Those two are
+                                  defined by their left segment; giving steps
+                                  one too would converge the shapes and undo the
+                                  distinction. Labelling down the card instead
+                                  of across it keeps steps and bookends telling
+                                  apart at a glance. */}
+                              {/* Row 1. flex-wrap so the facts drop under the
+                                  type label on a phone rather than truncating
+                                  to nothing — the two-line rule is a desktop
+                                  rule, and stacking is the right answer when
+                                  there is no width to share. */}
+                              <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                                <span className={cn('grid h-4 w-4 shrink-0 place-items-center rounded', meta.soft)}>
+                                  {meta.icon}
+                                </span>
+                                <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wider', meta.tint)}>
+                                  {meta.label}
+                                </span>
+                                {stepFacts.length > 0 && (
+                                  <span className="ml-auto truncate text-[10px] text-muted-foreground/80">
+                                    {stepFacts.join(' · ')}
+                                  </span>
+                                )}
                               </div>
-                              {(() => {
-                                const bits: string[] = [];
-                                if (action.action_type === 'browser_script' && (action.max_retries ?? 0) > 0) {
-                                  bits.push(`${action.max_retries} ${action.max_retries === 1 ? 'retry' : 'retries'}`);
-                                }
-                                return bits.length ? <p className="mt-0.5 truncate text-xs text-muted-foreground">{bits.join(' · ')}</p> : null;
-                              })()}
-                              <ExecutionOptionsSummary options={action.execution_options} />
+                              {/* Row 2: the step's name, and — pushed to the
+                                  far right — its condition.
+
+                                  The condition used to be a THIRD line, so a
+                                  card grew by a row the moment you gated it and
+                                  a flow with one conditional step had one card
+                                  taller than the rest. It is a qualifier on
+                                  when the step runs, not a fact about the step,
+                                  so the end of the name row is where it reads:
+                                  "Submit Contract — only if …".
+
+                                  Wraps under the name on narrow screens
+                                  (flex-wrap); on desktop both rows are always
+                                  present and nothing else is, so every card is
+                                  exactly two lines tall. */}
+                              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 min-w-0">
+                                {/* The description lives here now, on hover.
+                                    Inline it ate the width the condition
+                                    needed, and most steps have none — so the
+                                    row was sized around something usually
+                                    absent. Hover keeps it one keystroke away
+                                    without spending a permanent column on it.
+
+                                    On the name, not the whole card: the card
+                                    is draggable, and a tooltip that follows a
+                                    drag is noise. */}
+                                {stepDescription ? (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <span
+                                        className={cn(
+                                          'min-w-0 truncate text-sm font-medium decoration-dotted underline-offset-4 hover:underline',
+                                          !displayName && 'text-muted-foreground italic',
+                                        )}
+                                      >
+                                        {displayName ?? placeholder}
+                                      </span>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="bottom" align="start" className="max-w-sm">
+                                      {stepDescription}
+                                    </TooltipContent>
+                                  </Tooltip>
+                                ) : (
+                                  <span
+                                    className={cn(
+                                      'min-w-0 truncate text-sm font-medium',
+                                      !displayName && 'text-muted-foreground italic',
+                                    )}
+                                  >
+                                    {displayName ?? placeholder}
+                                  </span>
+                                )}
+                                <span className="ml-auto shrink-0">
+                                  <ExecutionOptionsSummary options={action.execution_options} />
+                                </span>
+                              </div>
                             </div>
                             <div className="flex shrink-0 items-center opacity-0 transition-opacity group-hover:opacity-100">
                               <Button
@@ -1403,10 +1745,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       })()}
                     </div>
 
-                    {/* Down-arrow connector showing the flow to the next step. */}
-                    <div className="flex justify-center py-1">
-                      <ArrowDown className="h-4 w-4 text-muted-foreground/50" />
-                    </div>
+                    <FlowConnector />
                   </div>
                   );
                 })}
@@ -1416,43 +1755,59 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     line can draw. */}
 
 
-                {/* Add Step — compact, centered */}
+                {/* Add Step.
+                    The one thing you come to this page to do, and it was the
+                    quietest element on it: a w-fit chip in muted grey, smaller
+                    than the steps it adds to. Now it spans the step column so
+                    it lines up with them, and carries the brand rather than
+                    muted-foreground — an empty routine should draw the eye to
+                    the way forward, not make you hunt for it. Still dashed, so
+                    it stays legible as an affordance rather than a step. */}
                 <button
                   type="button"
-                  className="mx-auto block w-fit"
                   onClick={() => setActionTypeModalOpen(true)}
+                  className="group w-full flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-brand/40 bg-brand/[0.04] px-4 py-3 text-brand transition-colors hover:border-brand/70 hover:bg-brand/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/40"
                 >
-                  <Card className="border-dashed border-2 py-0 hover:border-brand/50 hover:bg-muted/20 transition-colors cursor-pointer">
-                    <CardContent className="py-1.5 px-4 flex items-center justify-center gap-1.5">
-                      <Plus className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span className="text-xs text-muted-foreground font-medium">Add Step</span>
-                    </CardContent>
-                  </Card>
+                  <Plus className="h-4 w-4 transition-transform group-hover:scale-110" />
+                  <span className="text-sm font-semibold">Add Step</span>
                 </button>
+
               </div>
             </div>
+
+            {/* Always last, and always present — the bookend to the Trigger
+                bar at the top, and rendered OUTSIDE the inset step column so
+                the two ends line up with each other rather than with the
+                steps. It is NOT a step: it cannot pause the run, cannot fail
+                it, and has no position to reorder. Defaulting to "Nothing"
+                means its presence is a prompt rather than something to
+                remember to add.
+
+                The arrow is the same connector the steps use. Without it the
+                bar's top edge landed flush on Add Step's bottom edge, which
+                reads as overlapping — and it says what spacing alone did not:
+                the outcome ends the same flow, it is not a detached panel. */}
+            {selectedOrgId && (
+              <>
+                <FlowConnector />
+                <OutcomeCard orgId={selectedOrgId} agentId={agentId} />
+              </>
+            )}
           </div>
       </div>
+      )}
 
-      {/* ── Settings Modal ──────────────────────────────────────
-          Replaces the old Settings tab. Same fields, same dirty
-          tracking and Save semantics — just gated behind the gear
-          icon in the header cluster so the page stays focused on
-          the workflow editor by default. */}
-      <Dialog
-        open={settingsOpen}
-        onOpenChange={(open) => {
-          // Block close while a save is in flight (avoids dropping
-          // an in-progress request and re-opening with stale state).
-          if (!open && savingSettings) return;
-          setSettingsOpen(open);
-        }}
-      >
-        <DialogContent className="max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Agent Settings</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
+      {/* ── Settings ────────────────────────────────────────────
+          A tab, not a modal. Same fields, same dirty tracking, same
+          Save semantics — only the container moved. A dialog framed
+          settings as a brief detour from the workflow, but they are
+          the other half of what an agent IS, and a sheet over the
+          flow meant you could not read one while editing the other.
+          Same 720px reading column as the workflow, so switching
+          tabs does not reflow the page under you. */}
+      {activeTab === 'settings' && (
+        <div className="mx-auto w-full max-w-[720px]">
+          <div className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="agent-name">Name <span className="text-destructive">*</span></Label>
               <Input
@@ -1473,8 +1828,27 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               />
             </div>
 
+            {/* Access sits in Settings, next to the other things that are
+                true of the AGENT rather than of one step. It saves on click
+                rather than on the dialog's Save, because it writes to its own
+                table — bundling it into the agent row's dirty tracking would
+                mean one Save doing two unrelated writes. */}
+            {selectedOrgId && (
+              <div className="space-y-1.5">
+                <AgentAccessGroups orgId={selectedOrgId} agentId={agentId} />
+              </div>
+            )}
+
             <div className="space-y-1.5">
-              <Label>Tags</Label>
+              {/* The picker can create a tag but not rename or delete one, so
+                  the link hands off to the page that can. Placed beside the
+                  label rather than inside the dropdown to match the group
+                  picker below — two controls in one panel, one affordance
+                  each, in the same spot. */}
+              <div className="flex items-center justify-between gap-2">
+                <Label>Tags</Label>
+                <Link href="/tags" className="text-xs text-brand hover:underline">Manage tags</Link>
+              </div>
               <TagPicker
                 tags={allTags}
                 selected={agentTagIds}
@@ -1483,31 +1857,48 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               />
             </div>
 
-            {/* Client assignment — owns the agent for a kit client; the reserved
-                client inputs flow straight to the agent's own steps. */}
+            {/* The product this agent is available in.
+                This is still agents.client_id underneath — one kit client per
+                product — but "Client" was the storage talking. Nobody was
+                choosing a client; they were choosing which centre could run
+                the agent, and the clients are now provisioned by the products
+                themselves, so the product name is both truer and the only
+                name an operator ever sees.
+
+                SINGULAR, because the column is singular — agents.client_id
+                holds one id. The label says so before the control does:
+                "Products" over a single select reads as a list you have not
+                filled in yet, and promises a many-to-many the schema does not
+                have. If that changes, the name changes with it. */}
             <div className="rounded-md border px-3 py-2.5">
               <div className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
-                  <p className="text-sm font-medium flex items-center gap-1.5">
-                    <Sparkles className="h-3.5 w-3.5 text-brand" />Client
-                  </p>
+                  <p className="text-sm font-medium">Product</p>
                   <p className="text-xs text-muted-foreground">
                     {agent?.client_id
-                      ? 'Assigned to a client — runnable from its agent kit, which passes _client_prompt / _client_media / _client_video to this agent.'
-                      : 'Assign a client to make this agent runnable from that client’s agent kit.'}
+                      ? 'Runnable from this product’s agent kit, which passes _client_prompt / _client_media / _client_video to this agent.'
+                      : products.length === 0
+                        ? 'No products with an agent kit are enabled for this organization yet.'
+                        : 'Pick a product to make this agent runnable from its agent kit.'}
                   </p>
                 </div>
-                <select
-                  value={agent?.client_id ?? ''}
-                  disabled={savingClient}
-                  onChange={(e) => handleSetClient(e.target.value || null)}
-                  className="h-9 max-w-[45%] rounded-md border bg-background px-2 text-sm disabled:opacity-50"
+                <Select
+                  value={agent?.client_id ?? NO_PRODUCT}
+                  disabled={savingClient || products.length === 0}
+                  onValueChange={(v) => handleSetClient(v === NO_PRODUCT ? null : v)}
                 >
-                  <option value="">None</option>
-                  {clients.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
+                  {/* h-[34px] because SelectTrigger's default is 36 and
+                      <Input>'s is 34 — the panel follows Input. */}
+                  <SelectTrigger className="w-56 h-[34px] shrink-0">
+                    <SelectValue placeholder="None" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_PRODUCT}>None</SelectItem>
+                    {products.map((c) => (
+                      <SelectItem key={c.id} value={c.id}>{clientDisplayName(c)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
             </div>
 
@@ -1530,51 +1921,99 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </button>
             </div>
 
-            {/* Browser toggle */}
-            <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
-              <div>
-                <p className="text-sm font-medium flex items-center gap-1.5">
-                  <Monitor className="h-3.5 w-3.5 text-sky-500" />Requires Browser
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  {agentRequiresBrowser ? 'Browser tools available to all actions in this agent' : 'No browser — enable to use browser tools or login steps'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => { setAgentRequiresBrowser((v) => !v); setSettingsDirty(true); }}
-                className={cn(
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
-                  agentRequiresBrowser ? 'bg-sky-500' : 'bg-muted-foreground/30'
-                )}
-              >
-                <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentRequiresBrowser ? 'translate-x-5' : 'translate-x-0.5')} />
-              </button>
-            </div>
           </div>
-          <DialogFooter>
-            <Button variant="ghost" onClick={() => setSettingsOpen(false)} disabled={savingSettings}>
-              Close
-            </Button>
+          {/* No Close button: the Workflow tab is the way out, and a
+              dead "Close" that only navigates would suggest the edits
+              were discarded. Save stays disabled until something is
+              actually dirty, so the row doubles as the dirty state. */}
+          <div className="flex items-center justify-end gap-3 border-t pt-4">
+            {settingsDirty && (
+              <span className="text-xs text-muted-foreground">Unsaved changes</span>
+            )}
             <Button
-              onClick={async () => {
-                const ok = await handleSaveSettings();
-                // Close on success; on failure the modal stays open
-                // with the dirty form so the operator can retry.
-                if (ok) setSettingsOpen(false);
-              }}
+              onClick={() => { void handleSaveSettings(); }}
               disabled={!settingsDirty || !agentName.trim() || savingSettings}
             >
               {savingSettings ? 'Saving…' : 'Save Changes'}
             </Button>
-          </DialogFooter>
+          </div>
+        </div>
+      )}
+        </div>
+      </div>
+
+      {/* ── Called by ──────────────────────────────────────────────
+          Every agent that runs this one as a sub-agent step. Read-only: the
+          relationship is owned by the CALLING agent's step list, so this is a
+          way to FIND them, not to change them. Each row navigates there.
+
+          Search is here because the count in the trigger row has no ceiling —
+          a shared utility agent can be called by dozens, and a bare list of
+          dozens is the same problem the inline names had, just moved. */}
+      <Dialog open={calledByOpen} onOpenChange={setCalledByOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Also run by</DialogTitle>
+          </DialogHeader>
+          <p className="-mt-1 text-xs text-muted-foreground">
+            These agents run <span className="font-medium text-foreground">{agent?.name}</span> as a
+            step. It runs whenever they do, and each one decides its own batching.
+          </p>
+
+          {/* Only worth a search box once scanning stops being instant. */}
+          {calledBy.length > 6 && (
+            <div className="relative">
+              <Search className="absolute left-2 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                autoFocus
+                value={calledBySearch}
+                onChange={(e) => setCalledBySearch(e.target.value)}
+                placeholder="Search agents…"
+                className="h-9 pl-7"
+              />
+            </div>
+          )}
+
+          <div className="-mx-1 max-h-[320px] overflow-y-auto px-1">
+            {(() => {
+              const q = calledBySearch.trim().toLowerCase();
+              const rows = q ? calledBy.filter((p) => p.name.toLowerCase().includes(q)) : calledBy;
+              if (rows.length === 0) {
+                return <p className="py-6 text-center text-xs text-muted-foreground">No agents match that search.</p>;
+              }
+              return (
+                <ul className="divide-y rounded-md border">
+                  {rows.map((p) => (
+                    <li key={p.agent_id}>
+                      <Link
+                        href={`/agents/${p.agent_id}`}
+                        onClick={() => setCalledByOpen(false)}
+                        className="flex items-center gap-2 px-3 py-2.5 text-sm transition-colors hover:bg-muted/50"
+                      >
+                        <Bot className="h-3.5 w-3.5 shrink-0 text-brand" />
+                        <span className="min-w-0 flex-1 truncate font-medium">{p.name}</span>
+                        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              );
+            })()}
+          </div>
         </DialogContent>
       </Dialog>
 
       {/* ── Action Dialog ─────────────────────────────────────── */}
+      {/* Only the AI-step form has modes; every other action type opens
+          straight onto its fields. */}
       <Sheet open={actionDialogOpen} onOpenChange={setActionDialogOpen}>
         <SheetContent side="right" className="w-full sm:max-w-2xl flex flex-col gap-0 p-0">
-          <SheetHeader className="border-b px-4 py-4 sm:px-6">
+          {/* Tabs live INSIDE the header, above its single border — the
+              same shape ConfigSlideOut gives the outcome panel. They were
+              the first thing in the body, which needed negative margins to
+              escape the padding and left two hairlines for one boundary.
+              pb-0 when tabs are present so their underline meets the border. */}
+          <SheetHeader className={cn('border-b px-4 pt-4 sm:px-6', isAiStepAction ? 'gap-3 pb-0' : 'pb-4')}>
             <SheetTitle>
               {editingAction ? 'Edit' : 'Add'}{' '}
               {actionForm.action_type === 'approval' ? 'Human Review'
@@ -1583,44 +2022,41 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 : actionForm.action_type === 'sub_agent' ? 'Run Agent'
                 : 'AI Step'}
             </SheetTitle>
+            {isAiStepAction && (
+              <div className="-mx-0.5">
+                <PanelTabs
+                  tabs={[
+                    { value: 'new',      label: 'New AI step' },
+                    { value: 'existing', label: 'Use existing' },
+                  ] as const}
+                  value={aiStepMode}
+                  onChange={(m) => {
+                    if (m === 'new') {
+                      // Keep aiStepId so switching back to "Use existing"
+                      // restores the previous step; just blank the draft.
+                      setAiStepMode('new');
+                      setNewAiStepForm({ name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [], skill_ids: [] });
+                      return;
+                    }
+                    setAiStepMode('existing');
+                    // Default to the step already linked to this action (or
+                    // the last selected one) rather than a blank selection.
+                    const targetId = actionForm.aiStepId || editingAction?.ai_step_id || '';
+                    if (targetId) {
+                      const s = aiSteps.find((x) => x.id === targetId);
+                      setActionForm(f => ({ ...f, aiStepId: targetId }));
+                      if (s) setNewAiStepForm({ name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [], skill_ids: s.skill_ids ?? [] });
+                    }
+                  }}
+                />
+              </div>
+            )}
           </SheetHeader>
           <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 space-y-4">
             {actionForm.action_type === 'agent' && (
               <>
                 {/* Create a brand-new AI step (default) or edit an existing one
                     in place — the same editor as the standalone AI Step page. */}
-                <div className="flex w-fit items-center gap-1 rounded-md bg-muted p-1 text-sm">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      // Keep aiStepId so switching back to "Use existing" restores
-                      // the previously-selected step; just blank the draft form.
-                      setAiStepMode('new');
-                      setNewAiStepForm({ name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [], skill_ids: [] });
-                    }}
-                    className={cn('rounded px-3 py-1', aiStepMode === 'new' ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground')}
-                  >
-                    New AI step
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setAiStepMode('existing');
-                      // Default to the step already linked to this action (or the
-                      // last selected one) rather than a blank selection.
-                      const targetId = actionForm.aiStepId || editingAction?.ai_step_id || '';
-                      if (targetId) {
-                        const s = aiSteps.find((x) => x.id === targetId);
-                        setActionForm(f => ({ ...f, aiStepId: targetId }));
-                        if (s) setNewAiStepForm({ name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [], skill_ids: s.skill_ids ?? [] });
-                      }
-                    }}
-                    className={cn('rounded px-3 py-1', aiStepMode === 'existing' ? 'bg-background shadow-sm font-medium' : 'text-muted-foreground')}
-                  >
-                    Use existing
-                  </button>
-                </div>
-
                 {aiStepMode === 'existing' && (
                   <div className="space-y-1">
                     <Label>AI Step</Label>
@@ -2135,10 +2571,24 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 and items passthrough instead of aborting the agent run.
                 Available on every action_type (approval / login / AI step /
                 browser_script / sub_agent) — approval and login rarely
-                use them but the storage shape is uniform. */}
-            <div className="mt-4 pt-4 border-t border-dashed border-muted-foreground/20">
-              <p className="text-[11px] uppercase tracking-wider text-muted-foreground mb-2">
-                Execution options
+                use them but the storage shape is uniform.
+
+                SEPARATED, and said out loud. Everything above this line edits
+                a REUSABLE entity — change the prompt here and every agent
+                using that AI step changes with it — while everything below
+                applies to this one use of it. The panel gave no sign of that,
+                so the two read as one form and the blast radius of an edit
+                was invisible. A dashed hairline was not enough to carry it. */}
+            <div className="mt-5 space-y-2 rounded-md border bg-muted/20 p-3">
+              <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                Only in this routine
+              </p>
+              <p className="text-[11px] text-muted-foreground">
+                Applies to this step in this agent. Nothing here touches the reusable
+                {' '}{actionForm.action_type === 'agent' ? 'AI step'
+                    : actionForm.action_type === 'browser_script' ? 'script'
+                    : actionForm.action_type === 'login' ? 'login'
+                    : 'entity'} above.
               </p>
               <ExecutionOptionsEditor
                 value={actionForm.executionOptions}
@@ -2291,61 +2741,31 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               );
             })()}
 
-            {/* Browser Script — gated on requires_browser.
-                Standalone Browser Login is intentionally NOT an option:
-                a login by itself does nothing. The login step gets
-                auto-added when a browser_script that's linked to a
-                login is added; remove the script and the paired login
-                goes with it. */}
-            {agentRequiresBrowser ? (
-              <button
-                type="button"
-                className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
-                onClick={() => { setActionTypeModalOpen(false); openNewAction('browser_script'); }}
-              >
-                <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0">
-                  <CircleDot className="h-4 w-4 text-violet-700 dark:text-violet-400" />
-                </div>
-                <div>
-                  <p className="font-medium text-sm">Browser Script</p>
-                  <p className="text-xs text-muted-foreground">Execute a recorded browser automation script (login step auto-added when linked)</p>
-                </div>
-              </button>
-            ) : (
-              /* Same card as the enabled state — icon, title, description —
-                 just muted, with the unlock action inline on the right.
-                 It used to render as a differently-shaped dashed panel with
-                 its own heading and a chip preview, which made a temporarily
-                 unavailable option look like a different kind of thing. */
-              <div className="flex items-center gap-3 rounded-lg border px-3 py-2.5 bg-muted/30">
-                <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0 opacity-50">
-                  <CircleDot className="h-4 w-4 text-violet-700 dark:text-violet-400" />
-                </div>
-                <div className="min-w-0 opacity-60">
-                  <p className="font-medium text-sm">Browser Script</p>
-                  <p className="text-xs text-muted-foreground">
-                    Needs browser mode enabled for this agent
-                  </p>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="ml-auto shrink-0 text-xs border-info/40 text-info hover:bg-info-soft hover:border-info/60"
-                  onClick={async () => {
-                    if (!selectedOrgId) return;
-                    try {
-                      await updateAgent(selectedOrgId, agentId, { requires_browser: true });
-                      setAgentRequiresBrowser(true);
-                      toast.success('Browser enabled');
-                    } catch {
-                      toast.error('Failed to enable browser');
-                    }
-                  }}
-                >
-                  <Monitor className="mr-1.5 h-3.5 w-3.5" />Enable
-                </Button>
+            {/* Browser Script.
+                NO LONGER GATED. It sat behind a "browser mode" flag on the
+                agent, with an Enable button to unlock it — but adding a
+                browser script IS how an agent comes to need a browser, and
+                the runtime now works that out from the steps themselves. The
+                gate asked you to declare in advance the thing you were in the
+                middle of doing, and the only way through it was to say yes.
+
+                Standalone Browser Login is intentionally NOT an option: a
+                login by itself does nothing. The login step gets auto-added
+                when a browser_script linked to a login is added; remove the
+                script and the paired login goes with it. */}
+            <button
+              type="button"
+              className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
+              onClick={() => { setActionTypeModalOpen(false); openNewAction('browser_script'); }}
+            >
+              <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0">
+                <CircleDot className="h-4 w-4 text-violet-700 dark:text-violet-400" />
               </div>
-            )}
+              <div>
+                <p className="font-medium text-sm">Browser Script</p>
+                <p className="text-xs text-muted-foreground">Execute a recorded browser automation script (login step auto-added when linked)</p>
+              </div>
+            </button>
           </div>
         </DialogContent>
       </Dialog>
@@ -2372,5 +2792,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       </Dialog>
 
     </div>
+    </TooltipProvider>
   );
 }

@@ -2,10 +2,16 @@ import agentClient from './agent-client';
 
 /**
  * An agent-kit "client" — an org-scoped deployment target (backend migration
- * 269). Its `public_id` is a non-secret scoping identifier an operator pastes
- * into a host app (Commerce Center, Admin Center, …); the embedded kit then
- * shows only the agents assigned directly to that client. Distinct from OAuth
+ * 269). Its `public_id` is a non-secret scoping identifier the host app uses
+ * to scope the embedded kit to the agents assigned to it. Distinct from OAuth
  * `oauth_clients`.
+ *
+ * NOT A USER-FACING CONCEPT ANY MORE. One client is provisioned per product
+ * when that product is enabled for the org, and deactivated when it is turned
+ * off — so the UI talks about PRODUCTS and lets this remain the storage
+ * detail it always was. `product_slug` / `product_name` come from the kit
+ * settings row that provisioned it, and are null for clients created by hand
+ * before that was automatic.
  */
 export interface Client {
   id: string;
@@ -19,6 +25,17 @@ export interface Client {
   created_by: string | null;
   /** Number of agents assigned to this client — only present on list(). */
   agent_count?: number;
+  /** The product this was provisioned for, e.g. 'cc'. Null if hand-created. */
+  product_slug?: string | null;
+  /** Display name from the products table, e.g. "Commerce Center". */
+  product_name?: string | null;
+  /** Whether the kit is switched on for that product. */
+  kit_enabled?: boolean;
+}
+
+/** What to call a client in the UI: its product, falling back to its name. */
+export function clientDisplayName(c: Pick<Client, 'name' | 'product_name'>): string {
+  return c.product_name ?? c.name;
 }
 
 export interface ClientInput {
