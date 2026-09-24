@@ -1355,7 +1355,11 @@ export default function EditLoginPage() {
     );
   }
 
-  const needsLogin = login.status === 'needs_login';
+  // Never signed in counts as signed out. Logins created before new rows
+  // started life as 'needs_login' sit at 'unknown' with no sign-in ever
+  // recorded; they have an empty profile, so offer Log In, not Log Out.
+  const neverSignedIn = login.status === 'unknown' && !login.last_logged_in_at;
+  const needsLogin = login.status === 'needs_login' || neverSignedIn;
 
   return (
     // Radix tooltips need a Provider in scope; there isn't a global one, so
@@ -1579,7 +1583,7 @@ export default function EditLoginPage() {
         <CardContent className="py-3 px-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3 flex-wrap">
-              <StatusPill status={login.status} />
+              <StatusPill status={neverSignedIn ? 'needs_login' : login.status} />
               <span className="text-xs text-muted-foreground">
                 Checked {formatRelative(login.last_checked_at)}
               </span>
