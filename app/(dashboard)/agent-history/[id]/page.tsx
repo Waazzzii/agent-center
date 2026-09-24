@@ -32,7 +32,7 @@ import { toast } from 'sonner';
 import {
   Loader2, GitBranch, PauseCircle,
   AlertCircle, Copy, Hash, Bot, ChevronRight, ChevronLeft, Gavel,
-  ImageIcon, ExternalLink, ChevronDown, ChevronUp,
+  ImageIcon, ExternalLink, ChevronDown, ChevronUp, LogIn,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getActionBatchItems, getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
@@ -113,6 +113,38 @@ function fmtDate(iso: string): string {
  * by the executor (see agent-executor.service.js + execution-options.js).
  * Plain `error_message` values fall back to the original red banner.
  */
+/**
+ * The way out of a sign-in pause, shown where the pause is.
+ *
+ * A run parked on a login said so — "Paused — COPS Login is being signed in
+ * by another run" — and left finding the login to the reader, several pages
+ * away. The recovery is one click from here instead: the login's Credentials
+ * tab, where the stepper shows which browser is signed out and Log In fixes
+ * it. Finishing that sign-in resumes every run waiting on the login, this one
+ * included.
+ */
+function SignInRecovery({ step }: { step: FullTreeNode }) {
+  if (!step.login_id) return null;
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning-soft/60 p-3">
+      <LogIn className="h-4 w-4 shrink-0 text-warning" />
+      <div className="min-w-0 flex-1 text-xs">
+        <span className="font-medium text-foreground">
+          Waiting for a sign-in to {step.login_name ?? 'its login'}
+        </span>
+        <span className="block text-muted-foreground">
+          Signing in there resumes this run and every other run waiting on it.
+        </span>
+      </div>
+      <Button asChild size="sm" variant="outline" className="shrink-0 text-xs">
+        <Link href={`/actions/logins/${step.login_id}?tab=credentials`}>
+          Open {step.login_name ?? 'login'}
+        </Link>
+      </Button>
+    </div>
+  );
+}
+
 function ActionMessageBanner({ message }: { message: string }) {
   // COLLAPSED TO THE FIRST LINE, expandable.
   //
@@ -1225,6 +1257,14 @@ export default function ExecutionDetailPage() {
       {current.error_message
         && !(current.error_message.startsWith('Waiting for ') && current.status !== 'queued')
         && <ActionMessageBanner message={current.error_message} />}
+
+      {/* Parked on a sign-in — the run page names the step; this is the way out. */}
+      {(() => {
+        const parked = isExecution
+          ? visibleActions.find((a) => a.status === 'awaiting_approval' && a.login_id)
+          : isAction && current.status === 'awaiting_approval' && current.login_id ? current : null;
+        return parked ? <SignInRecovery step={parked} /> : null;
+      })()}
 
       {/* ── Content ────────────────────────────────────────────── */}
       {/* Trigger → Steps → On completion: the same three zones the editor

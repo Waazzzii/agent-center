@@ -973,6 +973,10 @@ export interface FullTreeNode {
    * if it 404s.
    */
   screenshot_url?: string | null;
+  /** The login this step runs as (the pool parent), when it has one — so a
+   *  step parked on a sign-in can link to where a person fixes it. */
+  login_id?: string | null;
+  login_name?: string | null;
   batch_item_count?: number;
   batch_item_index?: number | null;
   // Children
