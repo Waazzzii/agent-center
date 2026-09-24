@@ -682,7 +682,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           // The identity this action runs as. Explicit null rather than omitted
           // so clearing it actually clears it on update.
           login_id: actionForm.loginId || null,
-          max_retries: actionForm.maxRetries,
         };
       } else if (actionForm.action_type === 'sub_agent') {
         payload = {
@@ -1472,9 +1471,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       || (script?.steps?.length
                         ? `${script.steps.length} recorded ${script.steps.length === 1 ? 'step' : 'steps'}`
                         : null);
-                    if ((action.max_retries ?? 0) > 0) {
-                      stepFacts.push(`${action.max_retries} ${action.max_retries === 1 ? 'retry' : 'retries'}`);
-                    }
                   } else if (action.action_type === 'login') {
                     // A login has no description; its URL is the useful fact —
                     // which site this signs into. Host only: the full URL is a
@@ -2347,33 +2343,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   );
                 })()}
 
-                {/* Retry config */}
-                <div className="space-y-1">
-                  <Label>Retries on Failure</Label>
-                  <Select
-                    value={String(actionForm.maxRetries)}
-                    onValueChange={(v) => setActionForm(f => ({ ...f, maxRetries: parseInt(v) }))}
-                  >
-                    <SelectTrigger className="w-32">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="0">No retries</SelectItem>
-                      <SelectItem value="1">1 retry</SelectItem>
-                      <SelectItem value="2">2 retries</SelectItem>
-                      <SelectItem value="3">3 retries</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Failed items will be retried up to this many times. Each retry re-runs the <strong>entire script from the beginning</strong> for that item.
-                  </p>
-                  {actionForm.maxRetries > 0 && (
-                    <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
-                      <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-                      <span>Use caution with scripts that perform submissions or create records — a retry will re-execute those actions and may cause duplicates.</span>
-                    </div>
-                  )}
-                </div>
               </>
             )}
 
