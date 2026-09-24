@@ -933,6 +933,8 @@ export interface FullTreeNode {
   item_index?: number | null;
   depth?: number;
   error_message?: string | null;
+  /** Queued runs: when the queue last checked it and wrote error_message's reason. */
+  queue_checked_at?: string | null;
   /** What set this run off — webhook | cron | manual | decision | sub_agent. */
   trigger_type?: string | null;
   trigger_id?: string | null;

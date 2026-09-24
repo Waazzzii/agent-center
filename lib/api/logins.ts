@@ -326,6 +326,8 @@ export interface PoolSizeResult {
   draining: number[];
   /** Was being removed; raising the size put it back in service. */
   restored: number[];
+  /** Created by this change — new browsers, not signed in yet. */
+  added?: number[];
 }
 
 export async function setPoolSize(

@@ -145,7 +145,23 @@ function SignInRecovery({ step }: { step: FullTreeNode }) {
   );
 }
 
-function ActionMessageBanner({ message }: { message: string }) {
+/** "checked 40s ago", ticking. So a waiting run shows it is still being looked at. */
+function CheckedAgo({ at }: { at: string }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 10_000);
+    return () => clearInterval(t);
+  }, []);
+  const s = Math.max(0, Math.round((now - new Date(at).getTime()) / 1000));
+  const ago = s < 15 ? 'just now' : s < 60 ? `${s}s ago` : `${Math.floor(s / 60)} min ago`;
+  return (
+    <span className="text-[11px] text-muted-foreground" title={new Date(at).toLocaleString()}>
+      Last checked {ago}
+    </span>
+  );
+}
+
+function ActionMessageBanner({ message, checkedAt }: { message: string; checkedAt?: string | null }) {
   // COLLAPSED TO THE FIRST LINE, expandable.
   //
   // A Playwright failure carries its whole call log in `message` — the retry
@@ -211,6 +227,7 @@ function ActionMessageBanner({ message }: { message: string }) {
         <pre className={cn('text-xs whitespace-pre-wrap break-words font-mono leading-relaxed', tone.text)}>
           {head}
         </pre>
+        {checkedAt && <CheckedAgo at={checkedAt} />}
 
         {hiddenCount > 0 && expanded && (
           // Capped and scrollable: expanding a 200-line trace should not put
@@ -1256,7 +1273,10 @@ export default function ExecutionDetailPage() {
       {/* ── Error / breadcrumb message ──────────────────────────── */}
       {current.error_message
         && !(current.error_message.startsWith('Waiting for ') && current.status !== 'queued')
-        && <ActionMessageBanner message={current.error_message} />}
+        && <ActionMessageBanner
+          message={current.error_message}
+          checkedAt={current.status === 'queued' ? current.queue_checked_at : null}
+        />}
 
       {/* Parked on a sign-in — the run page names the step; this is the way out. */}
       {(() => {

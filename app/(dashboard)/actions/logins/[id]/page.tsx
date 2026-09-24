@@ -1238,12 +1238,13 @@ export default function EditLoginPage() {
         r.removed.length ? `${list(r.removed)} removed` : '',
         r.draining.length ? `${list(r.draining)} will be removed when its run finishes` : '',
         r.restored.length ? `${list(r.restored)} kept — its removal was cancelled` : '',
+        r.added?.length ? `${list(r.added)} added — sign ${r.added.length === 1 ? 'it' : 'them'} in on the Credentials tab` : '',
       ].filter(Boolean);
       toast.success(parts.length
         ? `Pool size ${n}. ${parts.join('. ')}.`
         : n === 1
           ? 'One browser — runs on this login now take turns'
-          : `Up to ${n} browsers — added as concurrent runs need them`);
+          : `Pool size ${n}`);
       // This page's browser may be the one that just went.
       const everyLogin = await listLogins(selectedOrgId);
       setAllLogins(everyLogin);

@@ -136,9 +136,9 @@ export function PoolSizeControl({
       </span>
       <InfoBubble>
         How many runs can use this login at the same time. Each gets its own browser, so they
-        never share a window. Browsers are added as concurrent runs need them, up to this
-        number. Lowering it removes the highest-numbered browsers: an idle one goes at once, one
-        in use finishes its current run first.
+        never share a window. Raising it adds the new browsers straight away, so you can sign
+        each one in before a run needs it. Lowering it removes the highest-numbered browsers: an
+        idle one goes at once, one in use finishes its current run first.
       </InfoBubble>
     </div>
   );
