@@ -210,9 +210,9 @@ export default function BillingPage() {
         </div>
       ) : (
         <Tabs defaultValue="ai">
-          <TabsList className="grid w-full max-w-xs grid-cols-2">
-            <TabsTrigger value="ai"><Zap className="h-4 w-4 mr-2" /> AI</TabsTrigger>
-            <TabsTrigger value="browser"><Monitor className="h-4 w-4 mr-2" /> Browser</TabsTrigger>
+          <TabsList>
+            <TabsTrigger value="ai"><Zap /> AI</TabsTrigger>
+            <TabsTrigger value="browser"><Monitor /> Browser</TabsTrigger>
           </TabsList>
 
           <TabsContent value="ai" className="mt-4 space-y-4">

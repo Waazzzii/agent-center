@@ -29,7 +29,13 @@ import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
 import { SearchableSelect } from '@/components/ui/searchable-select';
 import { BrowserScriptPreview } from '@/components/actions/BrowserScriptPreview';
 import { SubAgentPreview } from '@/components/actions/SubAgentPreview';
+import { AgentPickerField } from '@/components/agents/AgentPicker';
 import { PanelTabs } from '@/components/agents/PanelTabs';
+import { Tabs, TabsList, TabsTrigger, TabsPanel } from '@/components/ui/tabs';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { Field, FieldGroup } from '@/components/ui/field';
+import { Switch } from '@/components/ui/switch';
+import { StepTypeIcon, StepTypeLabel } from '@/components/execution/step-types';
 import { ApprovalPreview } from '@/components/actions/ApprovalPreview';
 import { InfoBlock } from '@/components/actions/InfoBlock';
 import { ExecutionOptionsEditor, ExecutionOptionsSummary } from '@/components/actions/ExecutionOptionsEditor';
@@ -57,8 +63,8 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
-  Webhook, Clock, Play, History, CheckCircle2, PlayCircle, X,
-  LogIn, GitBranch, Settings, CircleDot, AlertTriangle, Globe, Users, Link as LinkIcon,
+  Webhook, Clock, Play, History, X,
+  GitBranch, Settings, AlertTriangle, Globe, Users, Link as LinkIcon,
   Bot, ChevronRight, Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -1107,131 +1113,64 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     // flow on its way somewhere else.
     <TooltipProvider delayDuration={300}>
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      {/* Header — no Back button. The sidebar is always present and
-          browser-back covers the "return to list" case. */}
-      <div className="flex items-start gap-3">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-              <Bot className="h-5 w-5 text-brand" />
-              {agent.name}
-            </h1>
-            <Badge variant={agent.is_active ? 'default' : 'secondary'}>{agent.is_active ? 'Active' : 'Inactive'}</Badge>
-            {/* No product badge here. It is set in Settings and shown in the
-                agents table; repeating it beside the name spent the most
-                prominent spot on the page on something you change once and
-                then never think about. */}
-          </div>
-          {agent.description && <p className="text-sm text-muted-foreground mt-0.5">{agent.description}</p>}
-
-          {/* "Bound to" was here: the centers.ssc_routines rows this agent is
-              assigned to. Removed — it is a Submissions Center concept, and
-              the Agent Center is not where you reason about it. It also sat in
-              the most prominent spot on the page for something most agents in
-              most orgs will never have. The bindings and their verified state
-              still live in Submissions Center, which owns them. */}
-        </div>
-
-        {/* Action cluster — three icon buttons with hover-title
-            tooltips: Run · History · Settings. All same shape (icon-only
-            ghost buttons in a bordered group) so they read as a
-            coherent toolbar rather than competing primary actions.
-            Run is highlighted with the success-green icon to give it a
-            slight visual lead — it's the most common reason an
-            operator opens this page beyond initial setup. */}
-        <div className="flex items-center rounded-md border shrink-0 divide-x">
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 rounded-none rounded-l-md disabled:opacity-50"
-            onClick={handleRunAgent}
-            disabled={runningAgent || !agent.is_active}
-            title={
-              !agent.is_active
-                ? 'Agent is inactive — activate it in Settings before running'
-                : runningAgent
-                  ? 'Triggering…'
-                  : 'Run agent now'
-            }
-          >
-            {runningAgent
-              ? <RefreshCw className="h-4 w-4 animate-spin" />
-              : <Play className={cn('h-4 w-4', agent.is_active && 'text-success')} />}
-          </Button>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-9 w-9 rounded-none rounded-r-md"
-            onClick={() => router.push(`/agent-history?agent_id=${agentId}`)}
-            title="View execution history"
-          >
-            <History className="h-4 w-4 text-muted-foreground" />
-          </Button>
-        </div>
-      </div>
+      {/* Header. The breadcrumb is the way back to the list, so there is
+          still no Back button. Run and History are LABELLED: as bare icons
+          they were the two most common reasons to open this page and the
+          two hardest things on it to find. */}
+      <PageHeader
+        breadcrumbs={[{ label: 'Agents', href: '/agents' }, { label: agent.name }]}
+        icon={Bot}
+        title={agent.name}
+        badge={
+          <Badge variant={agent.is_active ? 'success' : 'neutral'} className="gap-1.5">
+            <span className={cn('h-1.5 w-1.5 rounded-full', agent.is_active ? 'bg-success' : 'bg-text-dim')} />
+            {agent.is_active ? 'Active' : 'Inactive'}
+          </Badge>
+        }
+        description={agent.description || undefined}
+        actions={
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => router.push(`/agent-history?agent_id=${agentId}`)}
+            >
+              <History className="h-4 w-4" />
+              History
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleRunAgent}
+              disabled={runningAgent || !agent.is_active}
+              title={!agent.is_active ? 'Agent is inactive — activate it in Settings before running' : undefined}
+            >
+              {runningAgent
+                ? <RefreshCw className="h-4 w-4 animate-spin" />
+                : <Play className="h-4 w-4" />}
+              {runningAgent ? 'Starting…' : 'Run now'}
+            </Button>
+          </>
+        }
+      />
 
       {/* ── Workflow | Settings ──────────────────────────────────────
-          A segmented control in a panel header, not underlined tabs on the
-          page background. Bare tabs left the content floating with nothing
-          holding it: the flow is a centred 720px column inside a 1200px page,
-          so without a frame it read as an island with a rule above it. The
-          panel gives the column an edge to sit in, and putting the control in
-          its header makes the relationship obvious — this switch changes what
-          is in THIS box.
-
-          Segmented rather than underlined because there are exactly two
-          mutually exclusive views. An underline scales to six tabs; a pill
-          pair says "one or the other" at a glance and takes less room. */}
-      {/* A GRADIENT, NOT A CARD.
-          The card version had a hard bottom edge that closed the flow off
-          mid-page, and a Card is `flex flex-col gap-6` — overriding py-0
-          without gap-0 left a 24px band between the header and the body
-          showing bg-card through, which is the stray colour. Rather than
-          patch the gap, the frame goes: a tint at the top that fades to
-          nothing, so the panel has a clear beginning and simply dissolves
-          into the page instead of drawing a box around a flow of unknown
-          length. Tabs sit INSIDE the tint, where it is strongest, so they
-          still read as attached to what they switch. */}
-      <div className="mt-4 rounded-t-xl bg-gradient-to-b from-muted/60 via-muted/20 to-transparent">
-        <div className="flex items-center gap-3 px-3 pb-3 pt-3">
-          {/* Bordered track: on a tinted ground a bare bg-muted track would
-              blend into the gradient behind it. */}
-          <div className="inline-flex items-center gap-0.5 rounded-lg border bg-background/50 p-0.5">
-            {([
-              { key: 'workflow', label: 'Workflow' },
-              { key: 'settings', label: 'Settings' },
-            ] as const).map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                onClick={() => setActiveTab(t.key)}
-                aria-pressed={activeTab === t.key}
-                className={cn(
-                  'rounded-md px-3 py-1.5 text-sm font-medium transition-colors',
-                  activeTab === t.key
-                    ? 'bg-background text-foreground shadow-sm'
-                    : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* A divider that fades out at both ends.
-            The tabs do need separating from what they switch — without any
-            line the control floated on the tint. But a full-width rule is how
-            the card looked in the first place: it reads as the top edge of a
-            box, and the whole point of the gradient is that there is no box.
-            Fading it out at the margins divides the two without closing
-            anything, and it matches the way the tint itself ends. */}
-        <div className="h-px bg-gradient-to-r from-transparent via-border to-transparent" />
-
-        {/* Deep bottom padding so the gradient still has room to fade AFTER
-            the last thing in the flow — without it the tint would be cut off
-            by the content and read as an edge again. */}
-        <div className="px-4 pb-16 pt-6 sm:px-6">
+          Folder tabs on a panel (components/ui/tabs, `attached`). The strip
+          is the panel's top edge and the active tab is cut from the panel's
+          surface, so the switch and what it switches are one object. An
+          underline over the bare page — the previous pass — left the flow
+          floating under a rule that touched nothing. */}
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'workflow' | 'settings')}>
+        <TabsList>
+          <TabsTrigger value="workflow">
+            <GitBranch />
+            Workflow
+          </TabsTrigger>
+          <TabsTrigger value="settings">
+            <Settings />
+            Settings
+          </TabsTrigger>
+        </TabsList>
+        <TabsPanel className="px-4 pb-12 pt-8 sm:px-6">
 
       {/* ── Workflow ─────────────────────────────────────────────────
           Constrained to a reading column rather than the page's full
@@ -1287,7 +1226,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       with search, which an inline list could never have. */}
                   {calledBy.length > 0 && (
                     <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 pl-3 text-xs text-muted-foreground">
-                      <GitBranch className="h-3 w-3 shrink-0 text-amber-500" />
+                      <GitBranch className="h-3 w-3 shrink-0 text-step-agent" />
                       {/* "Also run by X — it runs whenever they do" described a
                           side effect and left you to infer the mechanism. This
                           agent is a STEP inside those agents, which is the fact
@@ -1468,20 +1407,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     action.action_type === 'sub_agent'      ? '(no target agent)' :
                     action.action_type === 'approval'       ? '(no approval step selected)' :
                     '—';
-                  // `tint` is the type's colour as TEXT, for the label beside
-                  // the icon. Without it the label was text-muted-foreground
-                  // while the number badge was fully saturated, so a step row
-                  // read as grey with a coloured dot on it — the type colour
-                  // was carried by 16px of chip and nothing else. Colouring
-                  // the words is what makes the type scannable down a flow,
-                  // which is the only reason these colours exist.
-                  const meta = ({
-                    agent:          { label: 'AI Step',        icon: <Bot className="h-3 w-3" />,          solid: 'bg-blue-600',   soft: 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400',       tint: 'text-blue-700 dark:text-blue-400' },
-                    approval:       { label: 'Human Review',   icon: <CheckCircle2 className="h-3 w-3" />, solid: 'bg-orange-500', soft: 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400', tint: 'text-orange-700 dark:text-orange-400' },
-                    login:          { label: 'Browser Login',  icon: <LogIn className="h-3 w-3" />,        solid: 'bg-sky-500',    soft: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',          tint: 'text-sky-700 dark:text-sky-400' },
-                    browser_script: { label: 'Browser Script', icon: <CircleDot className="h-3 w-3" />,    solid: 'bg-violet-500', soft: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-400', tint: 'text-violet-700 dark:text-violet-400' },
-                    sub_agent:      { label: 'Run Agent',      icon: <GitBranch className="h-3 w-3" />,    solid: 'bg-amber-500',  soft: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',    tint: 'text-amber-700 dark:text-amber-400' },
-                  } as const)[action.action_type];
 
                   /**
                    * The short facts that ride on the header row, opposite the
@@ -1575,7 +1500,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         className={cn(
                           'group relative flex-1 min-w-0 py-0 transition-all duration-150 cursor-pointer',
                           isBeingDragged && 'opacity-40 scale-[0.98]',
-                          hasExecutionOptions && 'border-l-4 border-l-amber-400 dark:border-l-amber-500',
+                          hasExecutionOptions && 'border-l-2 border-l-warning',
                         )}
                         draggable
                         onDragStart={(e) => {
@@ -1613,7 +1538,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                             it sits IS what it means. The type moved inside,
                             below. */}
                         <div className="absolute -top-2.5 -left-2.5 z-10">
-                          <span className={cn('grid h-5 min-w-[20px] place-items-center rounded-full px-1 text-[10px] font-bold text-white ring-2 ring-background', meta.solid)}>
+                          {/* Neutral. Position is not a type — colouring the
+                              number by type put a saturated dot on every card
+                              that repeated what the label beside it says. */}
+                          <span className="grid h-5 min-w-[20px] place-items-center rounded-full border bg-background px-1 text-[10px] font-semibold tabular-nums text-muted-foreground">
                             {stepNum}
                           </span>
                         </div>
@@ -1638,12 +1566,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                                   rule, and stacking is the right answer when
                                   there is no width to share. */}
                               <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                                <span className={cn('grid h-4 w-4 shrink-0 place-items-center rounded', meta.soft)}>
-                                  {meta.icon}
-                                </span>
-                                <span className={cn('shrink-0 text-[10px] font-semibold uppercase tracking-wider', meta.tint)}>
-                                  {meta.label}
-                                </span>
+                                <StepTypeIcon type={action.action_type} size="sm" />
+                                <StepTypeLabel type={action.action_type} />
                                 {stepFacts.length > 0 && (
                                   <span className="ml-auto truncate text-[10px] text-muted-foreground/80">
                                     {stepFacts.join(' · ')}
@@ -1807,126 +1731,105 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           tabs does not reflow the page under you. */}
       {activeTab === 'settings' && (
         <div className="mx-auto w-full max-w-[720px]">
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="agent-name">Name <span className="text-destructive">*</span></Label>
+          {/* The same Field system the inspector panels use, so a form here
+              and a form in a slide-out have one rhythm. Groups follow what
+              the fields are ABOUT — the agent, who may act on it, how it is
+              organised, whether it runs — rather than a flat list. */}
+          <FieldGroup title="Agent">
+            <Field label="Name" required htmlFor="agent-name">
               <Input
                 id="agent-name"
                 value={agentName}
                 onChange={(e) => { setAgentName(e.target.value); setSettingsDirty(true); }}
                 placeholder="Agent name"
               />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="agent-desc">Description</Label>
+            </Field>
+            <Field label="Description" htmlFor="agent-desc" hint="Shown on the agents list and wherever this agent is picked.">
               <Textarea
                 id="agent-desc"
                 value={agentDesc}
                 onChange={(e) => { setAgentDesc(e.target.value); setSettingsDirty(true); }}
-                placeholder="Optional description…"
+                placeholder="What this agent does, in a sentence"
                 rows={3}
               />
-            </div>
+            </Field>
+          </FieldGroup>
 
-            {/* Access sits in Settings, next to the other things that are
-                true of the AGENT rather than of one step. It saves on click
-                rather than on the dialog's Save, because it writes to its own
-                table — bundling it into the agent row's dirty tracking would
-                mean one Save doing two unrelated writes. */}
-            {selectedOrgId && (
-              <div className="space-y-1.5">
-                <AgentAccessGroups orgId={selectedOrgId} agentId={agentId} />
-              </div>
-            )}
+          {/* Access sits in Settings, next to the other things that are true
+              of the AGENT rather than of one step. It saves on change rather
+              than on this tab's Save, because it writes to its own table —
+              bundling it into the agent row's dirty tracking would mean one
+              Save doing two unrelated writes. The component says so. */}
+          {selectedOrgId && (
+            <FieldGroup title="Access" description="Saved as you change it.">
+              <AgentAccessGroups orgId={selectedOrgId} agentId={agentId} />
+            </FieldGroup>
+          )}
 
-            <div className="space-y-1.5">
-              {/* The picker can create a tag but not rename or delete one, so
-                  the link hands off to the page that can. Placed beside the
-                  label rather than inside the dropdown to match the group
-                  picker below — two controls in one panel, one affordance
-                  each, in the same spot. */}
-              <div className="flex items-center justify-between gap-2">
-                <Label>Tags</Label>
-                <Link href="/tags" className="text-xs text-brand hover:underline">Manage tags</Link>
-              </div>
+          <FieldGroup title="Organise">
+            <Field
+              label="Tags"
+              // The picker can create a tag but not rename or delete one, so
+              // the link hands off to the page that can.
+              trailing={<Link href="/tags" className="text-brand hover:underline">Manage tags</Link>}
+            >
               <TagPicker
                 tags={allTags}
                 selected={agentTagIds}
                 onChange={(ids) => { setAgentTagIds(ids); setSettingsDirty(true); }}
                 onCreate={(name) => createTag({ name })}
               />
-            </div>
-
-            {/* The product this agent is available in.
-                This is still agents.client_id underneath — one kit client per
-                product — but "Client" was the storage talking. Nobody was
-                choosing a client; they were choosing which centre could run
-                the agent, and the clients are now provisioned by the products
-                themselves, so the product name is both truer and the only
-                name an operator ever sees.
-
-                SINGULAR, because the column is singular — agents.client_id
-                holds one id. The label says so before the control does:
-                "Products" over a single select reads as a list you have not
-                filled in yet, and promises a many-to-many the schema does not
-                have. If that changes, the name changes with it. */}
-            <div className="rounded-md border px-3 py-2.5">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-sm font-medium">Product</p>
-                  <p className="text-xs text-muted-foreground">
-                    {agent?.client_id
-                      ? 'Runnable from this product’s agent kit, which passes _client_prompt / _client_media / _client_video to this agent.'
-                      : products.length === 0
-                        ? 'No products with an agent kit are enabled for this organization yet.'
-                        : 'Pick a product to make this agent runnable from its agent kit.'}
-                  </p>
-                </div>
-                <Select
-                  value={agent?.client_id ?? NO_PRODUCT}
-                  disabled={savingClient || products.length === 0}
-                  onValueChange={(v) => handleSetClient(v === NO_PRODUCT ? null : v)}
-                >
-                  {/* h-[34px] because SelectTrigger's default is 36 and
-                      <Input>'s is 34 — the panel follows Input. */}
-                  <SelectTrigger className="w-56 h-[34px] shrink-0">
-                    <SelectValue placeholder="None" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={NO_PRODUCT}>None</SelectItem>
-                    {products.map((c) => (
-                      <SelectItem key={c.id} value={c.id}>{clientDisplayName(c)}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-between rounded-md border px-3 py-2.5">
-              <div>
-                <p className="text-sm font-medium">Status</p>
-                <p className="text-xs text-muted-foreground">
-                  {agentActive ? 'Agent is active and will run triggers' : 'Agent is inactive and will not run'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => { setAgentActive((v) => !v); setSettingsDirty(true); }}
-                className={cn(
-                  'relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none',
-                  agentActive ? 'bg-brand' : 'bg-muted-foreground/30'
-                )}
+            </Field>
+            {/* SINGULAR — agents.client_id holds one id. "Products" over a
+                single select would promise a many-to-many the schema does
+                not have. Saves on change, like Access, for the same reason. */}
+            <Field
+              label="Product"
+              trailing="saved on change"
+              hint={agent?.client_id
+                ? 'Runnable from this product’s agent kit, which passes _client_prompt / _client_media / _client_video to this agent.'
+                : products.length === 0
+                  ? 'No products with an agent kit are enabled for this organisation yet.'
+                  : 'Pick a product to make this agent runnable from its agent kit.'}
+            >
+              <Select
+                value={agent?.client_id ?? NO_PRODUCT}
+                disabled={savingClient || products.length === 0}
+                onValueChange={(v) => handleSetClient(v === NO_PRODUCT ? null : v)}
               >
-                <span className={cn('inline-block h-5 w-5 transform rounded-full bg-white shadow transition-transform', agentActive ? 'translate-x-5' : 'translate-x-0.5')} />
-              </button>
-            </div>
+                <SelectTrigger className="w-full sm:w-72">
+                  <SelectValue placeholder="None" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NO_PRODUCT}>None</SelectItem>
+                  {products.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{clientDisplayName(c)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </Field>
+          </FieldGroup>
 
-          </div>
-          {/* No Close button: the Workflow tab is the way out, and a
-              dead "Close" that only navigates would suggest the edits
-              were discarded. Save stays disabled until something is
-              actually dirty, so the row doubles as the dirty state. */}
-          <div className="flex items-center justify-end gap-3 border-t pt-4">
+          <FieldGroup title="Status">
+            <label className="flex cursor-pointer items-center justify-between gap-4 rounded-[var(--r-md)] border bg-card/50 px-3.5 py-3">
+              <span>
+                <span className="block text-sm font-medium">{agentActive ? 'Active' : 'Inactive'}</span>
+                <span className="block text-xs text-muted-foreground">
+                  {agentActive ? 'Triggers run and the agent can be started.' : 'Triggers are ignored and Run now is disabled.'}
+                </span>
+              </span>
+              <Switch
+                checked={agentActive}
+                onCheckedChange={(v) => { setAgentActive(v); setSettingsDirty(true); }}
+              />
+            </label>
+          </FieldGroup>
+
+          {/* No Close button: the Workflow tab is the way out, and a dead
+              "Close" that only navigates would suggest the edits were
+              discarded. Save stays disabled until something is dirty, so the
+              row doubles as the dirty state. */}
+          <div className="mt-6 flex items-center justify-end gap-3 border-t pt-4">
             {settingsDirty && (
               <span className="text-xs text-muted-foreground">Unsaved changes</span>
             )}
@@ -1934,13 +1837,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               onClick={() => { void handleSaveSettings(); }}
               disabled={!settingsDirty || !agentName.trim() || savingSettings}
             >
-              {savingSettings ? 'Saving…' : 'Save Changes'}
+              {savingSettings ? 'Saving…' : 'Save changes'}
             </Button>
           </div>
         </div>
       )}
-        </div>
-      </div>
+        </TabsPanel>
+      </Tabs>
 
       {/* ── Called by ──────────────────────────────────────────────
           Every agent that runs this one as a sub-agent step. Read-only: the
@@ -2007,13 +1910,13 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       {/* Only the AI-step form has modes; every other action type opens
           straight onto its fields. */}
       <Sheet open={actionDialogOpen} onOpenChange={setActionDialogOpen}>
-        <SheetContent side="right" className="w-full sm:max-w-2xl flex flex-col gap-0 p-0">
+        <SheetContent side="right" width={680} className="flex flex-col gap-0 p-0">
           {/* Tabs live INSIDE the header, above its single border — the
               same shape ConfigSlideOut gives the outcome panel. They were
               the first thing in the body, which needed negative margins to
               escape the padding and left two hairlines for one boundary.
               pb-0 when tabs are present so their underline meets the border. */}
-          <SheetHeader className={cn('border-b px-4 pt-4 sm:px-6', isAiStepAction ? 'gap-3 pb-0' : 'pb-4')}>
+          <SheetHeader className={cn('border-b px-6 pt-5', isAiStepAction ? 'gap-3 pb-0' : 'pb-4')}>
             <SheetTitle>
               {editingAction ? 'Edit' : 'Add'}{' '}
               {actionForm.action_type === 'approval' ? 'Human Review'
@@ -2052,7 +1955,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             )}
           </SheetHeader>
-          <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 space-y-4">
+          <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
             {actionForm.action_type === 'agent' && (
               <>
                 {/* Create a brand-new AI step (default) or edit an existing one
@@ -2188,7 +2091,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         </span>
                       </div>
                     ) : (
-                      <div className="flex items-start gap-2 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+                      <div className="flex items-start gap-2 rounded-md border border-success/25 bg-success-soft px-3 py-2 text-xs text-success">
                         <Users className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                         <span>
                           <strong>Restricted.</strong> Only members of the {actionForm.accessGroupIds.length === 1 ? 'assigned group' : `${actionForm.accessGroupIds.length} assigned groups`} can complete this login. Applies to every agent using this login profile.
@@ -2306,7 +2209,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       </span>
                     </div>
                   ) : (
-                    <div className="flex items-start gap-2 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+                    <div className="flex items-start gap-2 rounded-md border border-success/25 bg-success-soft px-3 py-2 text-xs text-success">
                       <Users className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                       <span>
                         <strong>Restricted.</strong> Only members of the {actionForm.accessGroupIds.length === 1 ? 'selected group' : `${actionForm.accessGroupIds.length} selected groups`} will see and be able to approve this step.
@@ -2478,20 +2381,18 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               <>
                 <div className="space-y-1">
                   <Label>Target Agent <span className="text-destructive">*</span></Label>
-                  <Select value={actionForm.targetAgentId} onValueChange={(v) => setActionForm(f => ({ ...f, targetAgentId: v }))}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Select an agent to run as sub-agent…" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {validSubAgents.length === 0 ? (
-                        <SelectItem value="_none" disabled>No other agents available</SelectItem>
-                      ) : (
-                        validSubAgents.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                        ))
-                      )}
-                    </SelectContent>
-                  </Select>
+                  {/* The same picker a completion rule uses for its follow-on
+                      agent — one way to pick an agent, wherever one is picked. */}
+                  <AgentPickerField
+                    agents={validSubAgents}
+                    value={actionForm.targetAgentId}
+                    onChange={(v) => setActionForm(f => ({ ...f, targetAgentId: v }))}
+                    placeholder="Choose an agent to run as a sub-agent…"
+                    clearable={false}
+                    dialogTitle="Run as sub-agent"
+                    dialogDescription="Only agents without their own Run Agent step are offered — nesting is limited to one level."
+                    emptyHint="Agents that themselves run sub-agents are not offered."
+                  />
                   <p className="text-xs text-muted-foreground">
                     Only agents without their own sub-agent actions are shown. Nesting is limited to one level.
                   </p>
@@ -2596,7 +2497,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               />
             </div>
           </div>
-          <SheetFooter className="border-t px-4 py-4 sm:px-6">
+          <SheetFooter className="border-t bg-surface-2/50 px-6 py-3">
             <Button variant="outline" onClick={() => setActionDialogOpen(false)}>Cancel</Button>
             <Button
               onClick={handleSaveAction}
@@ -2689,9 +2590,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
               onClick={() => { setActionTypeModalOpen(false); openNewAction('agent'); }}
             >
-              <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30 shrink-0">
-                <PlayCircle className="h-4 w-4 text-blue-700 dark:text-blue-400" />
-              </div>
+              <StepTypeIcon type="agent" size="lg" />
               <div>
                 <p className="font-medium text-sm">AI Step</p>
                 <p className="text-xs text-muted-foreground">Run an AI model to process, generate, or analyze data</p>
@@ -2704,9 +2603,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
               onClick={() => { setActionTypeModalOpen(false); openNewAction('approval'); }}
             >
-              <div className="p-2 rounded-lg bg-orange-100 dark:bg-orange-900/30 shrink-0">
-                <CheckCircle2 className="h-4 w-4 text-orange-600 dark:text-orange-400" />
-              </div>
+              <StepTypeIcon type="approval" size="lg" />
               <div>
                 <p className="font-medium text-sm">Human Review</p>
                 <p className="text-xs text-muted-foreground">Pause for a human to review and approve before continuing</p>
@@ -2724,9 +2621,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   onClick={() => { if (!disabled) { setActionTypeModalOpen(false); openNewAction('sub_agent'); } }}
                   disabled={disabled}
                 >
-                  <div className="p-2 rounded-lg bg-amber-100 dark:bg-amber-900/30 shrink-0">
-                    <GitBranch className="h-4 w-4 text-amber-700 dark:text-amber-400" />
-                  </div>
+                  <StepTypeIcon type="sub_agent" size="lg" />
                   <div>
                     <p className="font-medium text-sm">Run Agent</p>
                     {disabled ? (
@@ -2758,9 +2653,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
               onClick={() => { setActionTypeModalOpen(false); openNewAction('browser_script'); }}
             >
-              <div className="p-2 rounded-lg bg-violet-100 dark:bg-violet-900/30 shrink-0">
-                <CircleDot className="h-4 w-4 text-violet-700 dark:text-violet-400" />
-              </div>
+              <StepTypeIcon type="browser_script" size="lg" />
               <div>
                 <p className="font-medium text-sm">Browser Script</p>
                 <p className="text-xs text-muted-foreground">Execute a recorded browser automation script (login step auto-added when linked)</p>
@@ -2775,7 +2668,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         <DialogContent className="max-w-md">
           <DialogHeader><DialogTitle>API Key Generated</DialogTitle></DialogHeader>
           <div className="space-y-3">
-            <div className="rounded-md bg-orange-50 border border-orange-200 p-3 text-sm text-orange-600 font-medium dark:bg-orange-950/30 dark:border-orange-800 dark:text-orange-400">
+            <div className="rounded-md border border-warning/30 bg-warning-soft p-3 text-sm font-medium text-warning">
               ⚠ Copy this key now. It will not be shown again.
             </div>
             <div className="flex items-center gap-2">

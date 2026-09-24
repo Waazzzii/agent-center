@@ -9,7 +9,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { Tabs, TabsContent, TabsList, TabsTrigger, TabsCount } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { ExternalLink, Settings, Link2 } from 'lucide-react';
 
@@ -87,19 +87,15 @@ export default function EditSkillPage({ params }: { params: Promise<{ id: string
       </div>
 
       <Tabs defaultValue="settings">
-        <TabsList className="grid w-full max-w-xs grid-cols-2">
+        <TabsList>
           <TabsTrigger value="settings">
-            <Settings className="h-4 w-4 mr-2" />
+            <Settings />
             Settings
           </TabsTrigger>
           <TabsTrigger value="assignments">
-            <Link2 className="h-4 w-4 mr-2" />
+            <Link2 />
             Assignments
-            {usages.length > 0 && (
-              <span className="ml-1.5 rounded-full bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground">
-                {usages.length}
-              </span>
-            )}
+            {usages.length > 0 && <TabsCount>{usages.length}</TabsCount>}
           </TabsTrigger>
         </TabsList>
 

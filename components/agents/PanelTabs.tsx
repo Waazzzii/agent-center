@@ -60,18 +60,24 @@ export function PanelTabs<T extends string>({
             disabled={t.disabled}
             onClick={() => onChange(t.value)}
             className={cn(
-              'relative px-2.5 pb-2.5 pt-1 text-xs font-medium transition-colors disabled:pointer-events-none disabled:opacity-40',
+              // Same metrics as the `line` TabsTrigger (components/ui/tabs)
+              // so a tab row in a panel and one on a page are one control.
+              'relative px-3 pb-2.5 pt-1 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-40',
               active
                 // -bottom-px overlaps the header's border by a pixel. The
                 // header sets pb-0 when it carries tabs, so this row's own
                 // bottom padding IS the gap to that border — offsetting by
                 // the padding instead left the underline floating below it.
-                ? 'text-foreground after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:bg-brand'
+                ? 'text-foreground after:absolute after:inset-x-2 after:-bottom-px after:h-0.5 after:rounded-full after:bg-brand'
                 : 'text-muted-foreground hover:text-foreground',
             )}
           >
             {t.label}
-            {t.hint && <span className="ml-1.5 text-[10px] text-muted-foreground">{t.hint}</span>}
+            {t.hint && (
+              <span className="ml-1.5 rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                {t.hint}
+              </span>
+            )}
           </button>
         );
       })}

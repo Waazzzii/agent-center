@@ -22,6 +22,12 @@ interface Props {
   /** Optional extra hint that follows the standard explanation. */
   description?: string;
   /**
+   * Optional: what this channel is FOR, shown under the label before the
+   * input. The fallback text below the input only says what happens when it
+   * is blank, which on its own leaves the reader guessing why to fill it in.
+   */
+  purpose?: string;
+  /**
    * Where this input is being rendered. Drives the "what gets used if I
    * leave this blank?" explanation under the field.
    * There is NO org-default channel — it was retired in migration 200, so the
@@ -54,6 +60,7 @@ export function SlackChannelInput({
   value, onChange,
   label = 'Slack notification channel',
   description,
+  purpose,
   scope,
   status: providedStatus = null,
   disabled = false,
@@ -120,6 +127,7 @@ export function SlackChannelInput({
         <Label className="text-xs font-medium">{label}</Label>
         {renderBadge()}
       </div>
+      {purpose && <p className="text-xs text-muted-foreground">{purpose}</p>}
       <Input
         type="text"
         inputMode="text"

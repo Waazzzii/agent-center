@@ -1,6 +1,7 @@
 'use client';
 
 import { AlertTriangle, Link2 } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
 import type { RecordedStep, SelectorCandidate } from '@/lib/api/scripts';
 
@@ -100,20 +101,21 @@ export function SelectorPanel({ step, stepIndex, onUpdateStep }: SelectorPanelPr
             <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Wait until
             </span>
-            <select
+            <Select
               value={step.wait_state ?? 'visible'}
-              onChange={(e) =>
-                onUpdateStep({
-                  ...step,
-                  wait_state: e.target.value as 'visible' | 'hidden' | 'detached',
-                })
+              onValueChange={(v) =>
+                onUpdateStep({ ...step, wait_state: v as 'visible' | 'hidden' | 'detached' })
               }
-              className="h-6 text-xs bg-transparent border border-border/50 rounded px-1.5 focus:outline-none focus:ring-1 focus:ring-ring"
             >
-              <option value="visible">Visible (default)</option>
-              <option value="hidden">Hidden (display:none / not visible)</option>
-              <option value="detached">Detached (removed from DOM)</option>
-            </select>
+              <SelectTrigger size="sm" className="h-7 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent position="popper" align="start">
+                <SelectItem value="visible">Visible (default)</SelectItem>
+                <SelectItem value="hidden">Hidden (display:none / not visible)</SelectItem>
+                <SelectItem value="detached">Detached (removed from DOM)</SelectItem>
+              </SelectContent>
+            </Select>
           </div>
           {(step.wait_state === 'hidden' || step.wait_state === 'detached') && (
             <p className="text-[10px] text-muted-foreground leading-tight">

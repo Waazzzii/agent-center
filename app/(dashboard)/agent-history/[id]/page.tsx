@@ -22,21 +22,24 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import agentClient from '@/lib/api/agent-client';
 import { isInertLoginRow } from '@/lib/api/agents';
 import { TokenUsage } from '@/components/execution/TokenUsage';
-import { Badge } from '@/components/ui/badge';
-import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { PageHeader, MetaSep } from '@/components/layout/PageHeader';
+import { StatusBadge } from '@/components/execution/status';
+import { StepTypeIcon, stepTypeDef } from '@/components/execution/step-types';
+import { JsonHighlight, isJsonText } from '@/components/execution/JsonHighlight';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  Loader2, Zap, LogIn, Play, GitBranch, PauseCircle,
-  AlertCircle, Copy, Hash, Bot, History, ChevronRight, ChevronLeft, Gavel, MessageSquare,
+  Loader2, GitBranch, PauseCircle,
+  AlertCircle, Copy, Hash, Bot, ChevronRight, ChevronLeft, Gavel,
   ImageIcon, ExternalLink, ChevronDown, ChevronUp,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { getActionBatchItems, getFullExecutionTree, type FullTreeNode } from '@/lib/api/agents';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { LogViewer } from '@/components/execution/LogViewer';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
-import { TriggerBadge } from '@/components/execution/TriggerBadge';
+import { Tabs, TabsList, TabsTrigger, TabsContent, TabsCount, TabsPanel } from '@/components/ui/tabs';
+import { RunTimeline, Zone, RunRow, TriggerZone, StepsZone, OutcomeZone, FailureSummary, readOutcome } from '@/components/execution/RunTimeline';
 
 // ═══════════════════════════════════════════════════════════════
 // Types
@@ -69,43 +72,6 @@ function fmtDur(ms: number | null | undefined): string {
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
-const ST: Record<string, { dot: string; cls: string; label: string }> = {
-  completed: { dot: 'bg-emerald-500', cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400', label: 'Completed' },
-  approved:  { dot: 'bg-emerald-500', cls: 'border-emerald-500/40 text-emerald-600 dark:text-emerald-400', label: 'Approved' },
-  failed:    { dot: 'bg-red-500', cls: 'border-red-400 text-red-600 dark:text-red-400', label: 'Failed' },
-  // 'skipped' covers two operator-visible cases:
-  //   • Conditional-gate skip (all items gated by the step's
-  //     execution_options.conditional_execution predicate)
-  //   • Cascade skip (every item arrived _status='failed' from an
-  //     upstream non-tolerant step)
-  // Both render the same neutral gray pill; the error_message tooltip
-  // names the cause. Differentiating with TWO status values would
-  // bloat the enum for no behavioral gain — gate-skipped items
-  // continue normally next step (item _status='completed'), cascade-
-  // skipped items keep cascading (item _status='failed'), and that
-  // behavioral split is enforced by item _status, not row status.
-  skipped:   { dot: 'bg-slate-400', cls: 'border-slate-300 text-slate-500 dark:text-slate-400', label: 'Skipped' },
-  aborted:   { dot: 'bg-red-400', cls: 'border-red-400 text-red-500', label: 'Aborted' },
-  denied:    { dot: 'bg-red-400', cls: 'border-red-400 text-red-500', label: 'Denied' },
-  executing: { dot: 'bg-blue-500 animate-pulse', cls: 'border-blue-400 text-blue-600 dark:text-blue-400', label: 'Running' },
-  awaiting_approval: { dot: 'bg-brand animate-pulse', cls: 'border-brand/40 text-brand', label: 'Awaiting' },
-  provisioning: { dot: 'bg-warning animate-pulse', cls: 'border-warning/40 text-warning', label: 'Starting' },
-  queued: { dot: 'bg-slate-400', cls: 'border-slate-300 text-slate-500', label: 'Queued' },
-  // Synthesised by the tree endpoint for a declared step that never got a
-  // row — the run stopped before reaching it. Not a real action_log.
-  not_run: { dot: 'bg-slate-300 dark:bg-slate-600', cls: 'border-slate-300 text-slate-400 dark:text-slate-500', label: 'Not run' },
-};
-const AT: Record<string, string> = { agent: 'AI Step', login: 'Login', approval: 'Approval', browser_script: 'Script', sub_agent: 'Sub Agents' };
-const ICONS: Record<string, typeof Zap> = { agent: Zap, login: LogIn, approval: PauseCircle, browser_script: Play, sub_agent: GitBranch };
-
-function Dot({ status, className: cls }: { status: string; className?: string }) {
-  return <span className={cn('w-2 h-2 rounded-full shrink-0', ST[status]?.dot ?? 'bg-slate-400', cls)} />;
-}
-function SBadge({ status }: { status: string }) {
-  const s = ST[status] ?? ST.executing;
-  return <Badge variant="outline" className={cn('text-[10px] h-5 px-1.5', s.cls)}>{s.label}</Badge>;
-}
-
 /**
  * Banner under each action header. Most of the time `error_message`
  * carries a real failure and gets the red treatment. But several
@@ -128,6 +94,12 @@ function SBadge({ status }: { status: string }) {
  *     step's error and passed its items on as though they had succeeded.
  *     No new run produces these; they survive on rows from before the
  *     removal, so the strings are documented here and nowhere else.
+ *
+ *   "Waiting for …"  — yellow, and TEMPORARY. A RUN-level queue reason
+ *     ("Waiting for a free browser slot"): every browser the run could use
+ *     is busy, so it is queued. The executor clears it when the run starts
+ *     again, and the page hides it on any run no longer queued — older rows
+ *     kept it after they ran, which read as a failure on a finished run.
  *
  *   "Paused — …"  — yellow, and TEMPORARY.
  *     The script's login_indicator failed and the sign-in it needs is
@@ -172,24 +144,25 @@ function ActionMessageBanner({ message }: { message: string }) {
     message.startsWith('Partition:');
   // Waiting, not broken. Shares the yellow treatment with the tolerated
   // variants because it is the same claim: worth seeing, not a failure.
-  const isTolerated = message.startsWith('Tolerated ') || message.startsWith('Paused — ');
+  const isTolerated =
+    message.startsWith('Tolerated ') || message.startsWith('Paused — ') || message.startsWith('Waiting for ');
 
   const tone = isSkipped
     ? {
-        box: 'border-slate-200 dark:border-slate-700 bg-slate-50/50 dark:bg-slate-900/40',
-        text: 'text-slate-700 dark:text-slate-300',
-        icon: <PauseCircle className="h-4 w-4 text-slate-500 dark:text-slate-400 shrink-0 mt-0.5" />,
+        box: 'border-border bg-muted/40',
+        text: 'text-muted-foreground',
+        icon: <PauseCircle className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />,
       }
     : isTolerated
       ? {
-          box: 'border-yellow-200 dark:border-yellow-800 bg-yellow-50/50 dark:bg-yellow-950/20',
-          text: 'text-yellow-700 dark:text-yellow-400',
-          icon: <AlertCircle className="h-4 w-4 text-yellow-600 dark:text-yellow-400 shrink-0 mt-0.5" />,
+          box: 'border-warning/30 bg-warning-soft/60',
+          text: 'text-warning',
+          icon: <AlertCircle className="h-4 w-4 text-warning shrink-0 mt-0.5" />,
         }
       : {
-          box: 'border-red-200 dark:border-red-800 bg-red-50/50 dark:bg-red-950/20',
-          text: 'text-red-700 dark:text-red-400',
-          icon: <AlertCircle className="h-4 w-4 text-red-500 shrink-0 mt-0.5" />,
+          box: 'border-danger/30 bg-danger-soft/60',
+          text: 'text-danger',
+          icon: <AlertCircle className="h-4 w-4 text-danger shrink-0 mt-0.5" />,
         };
 
   const lines = message.split('\n');
@@ -262,15 +235,10 @@ function nodeTypeLabel(node: FullTreeNode): string {
     return (node.depth ?? 0) > 0 ? 'Sub Agent' : 'Agent';
   }
   if (node.type === 'batch_item') return `Batch Item #${node.batch_item_index ?? '?'}`;
-  return AT[node.action_type ?? ''] ?? node.action_type ?? 'Action';
+  if (node.action_type === 'outcome') return 'On completion';
+  return node.action_type ? stepTypeDef(node.action_type).label : 'Action';
 }
 
-function NodeIcon({ node, className: cls }: { node: FullTreeNode; className?: string }) {
-  if (node.type === 'execution') return <Bot className={cn('h-4 w-4 text-blue-500', cls)} />;
-  if (node.type === 'batch_item') return <Hash className={cn('h-4 w-4 text-muted-foreground', cls)} />;
-  const Icon = ICONS[node.action_type ?? ''] ?? Zap;
-  return <Icon className={cn('h-4 w-4 text-muted-foreground', cls)} />;
-}
 
 // ═══════════════════════════════════════════════════════════════
 // Breadcrumb
@@ -335,34 +303,6 @@ function Breadcrumb({ crumbs, currentId, onNavigate }: {
 //
 // One rule, three cases, and the step count finally means steps.
 
-/** An outcome row's payload, as outcome-dispatch.service.js writes it. */
-interface OutcomeInfo {
-  deskId: string | null;
-  ruleName: string | null;
-  type: 'notify' | 'decision' | null;
-  decisions: number;
-  reason: string | null;
-}
-
-function readOutcome(node: FullTreeNode): OutcomeInfo {
-  let o: Record<string, any> = {};
-  try {
-    o = typeof node.output === 'string' ? JSON.parse(node.output) : (node.output ?? {});
-  } catch {
-    // A row whose output never parsed still belongs in the zone — it says a
-    // rule fired, which is the part that matters.
-  }
-  return {
-    deskId: o.decision_desk_id ?? null,
-    ruleName: o.outcome_name ?? null,
-    type: o.outcome_type ?? null,
-    decisions: Number(o.decisions ?? 0),
-    // Written when rules existed and none matched. The only thing separating
-    // a correct silence from a misspelled field name.
-    reason: o.reason ?? null,
-  };
-}
-
 interface RunZones {
   steps: FullTreeNode[];
   outcomes: FullTreeNode[];
@@ -396,164 +336,6 @@ function runZones(children: FullTreeNode[] | undefined): RunZones {
   }
 
   return { steps: rest.filter((r) => !nested.has(r.id)), outcomes, loginsFor };
-}
-
-// ═══════════════════════════════════════════════════════════════
-// Trigger — what set the run off, and what it was handed
-// ═══════════════════════════════════════════════════════════════
-//
-// The first zone, because it is the first question about any run that went
-// wrong: what was it actually given? Nothing else on this page answers it —
-// each step's log records what that STEP produced, so the earliest thing
-// visible was already one transformation away from the input.
-//
-// The payload is shown verbatim, runtime keys and all. Every other view here
-// strips _input_id and friends as noise, but this one is the record of what
-// arrived, and quietly editing it would defeat the point of having it.
-
-function TriggerZone({ node }: { node: FullTreeNode }) {
-  const [open, setOpen] = useState(false);
-  const payload = node.trigger_input;
-  const hasPayload = payload !== null && payload !== undefined;
-  const items = Array.isArray(payload) ? payload.length : null;
-
-  return (
-    <div>
-      <h2 className="text-sm font-semibold mb-3">Trigger</h2>
-      <Card>
-        <CardContent className="py-3 space-y-3">
-          <div className="flex flex-wrap items-center gap-2 text-sm">
-            <TriggerBadge type={node.trigger_type ?? 'internal'} />
-            {(node.triggered_by_name || node.triggered_by) && (
-              <span className="text-muted-foreground">by {node.triggered_by_name ?? node.triggered_by}</span>
-            )}
-            {items !== null && (
-              <span className="text-xs text-muted-foreground">
-                · {items} item{items === 1 ? '' : 's'}
-              </span>
-            )}
-            {node.item_index !== null && node.item_index !== undefined && (
-              <span className="text-xs text-muted-foreground">· item #{node.item_index + 1} of its parent</span>
-            )}
-          </div>
-
-          {hasPayload ? (
-            <div>
-              <button
-                onClick={() => setOpen((v) => !v)}
-                aria-expanded={open}
-                className="flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground"
-              >
-                <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', !open && '-rotate-90')} />
-                Incoming payload
-              </button>
-              {open && (
-                <pre className="mt-2 max-h-80 overflow-auto rounded-md bg-muted/40 px-3 py-2 text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed">
-                  {JSON.stringify(payload, null, 2)}
-                </pre>
-              )}
-            </div>
-          ) : (
-            // Not the same as an empty payload. Runs predating this recording,
-            // and resumed runs that reuse an existing log, legitimately have
-            // nothing here — saying so beats rendering "null" as though the
-            // agent was handed nothing.
-            <p className="text-xs text-muted-foreground">
-              No payload recorded for this run.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════
-// On completion — the bookend, not a step
-// ═══════════════════════════════════════════════════════════════
-
-function OutcomeZone({ rows }: { rows: FullTreeNode[] }) {
-  const parsed = rows.map((r) => ({ row: r, info: readOutcome(r) }));
-  const notifies = parsed.filter((p) => p.info.type === 'notify').length;
-  const decisions = parsed.reduce((n, p) => n + p.info.decisions, 0);
-
-  const summary = [
-    notifies ? `${notifies} notification${notifies === 1 ? '' : 's'}` : null,
-    decisions ? `${decisions} decision${decisions === 1 ? '' : 's'}` : null,
-  ].filter(Boolean).join(' · ');
-
-  return (
-    <div>
-      <div className="flex items-baseline gap-2 mb-3">
-        <h2 className="text-sm font-semibold">On completion</h2>
-        {summary && <span className="text-xs text-muted-foreground">{summary}</span>}
-      </div>
-
-      <div className="space-y-1">
-        {parsed.map(({ row, info }) => {
-          const isDecision = info.type === 'decision';
-          // A rule that matched nothing writes one row for the whole run and
-          // has no desk. It is the only evidence that the rules ran at all,
-          // so it is shown rather than filtered.
-          const nothing = !info.type;
-          // Gavel for a decision, MessageSquare for a notification —
-          // deliberately NOT GitBranch or Bot, which already mean sub-agent
-          // and execution in this very list. A decision rendered with the
-          // sub-agent icon sitting directly under a real sub-agent step is
-          // unreadable, and Gavel is what Decisions, the desk screen and the
-          // nav have always used.
-          const Icon = nothing ? AlertCircle : isDecision ? Gavel : MessageSquare;
-
-          const body = (
-            <>
-              <div className={cn('p-1.5 rounded-md shrink-0',
-                nothing ? 'bg-muted'
-                  : isDecision ? 'bg-amber-100 dark:bg-amber-900/30'
-                  : 'bg-blue-100 dark:bg-blue-900/30')}>
-                <Icon className={cn('h-4 w-4',
-                  nothing ? 'text-muted-foreground'
-                    : isDecision ? 'text-amber-700 dark:text-amber-400'
-                    : 'text-blue-700 dark:text-blue-400')} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <Dot status={row.status} />
-                  <span className="text-sm font-medium truncate">
-                    {info.ruleName ?? row.label}
-                  </span>
-                  <Badge variant="outline" className="text-[10px] h-5 px-1.5">
-                    {nothing ? 'No match' : isDecision ? 'Decision' : 'Notification'}
-                  </Badge>
-                </div>
-                <div className="mt-1 text-xs text-muted-foreground truncate">
-                  {info.reason
-                    ? info.reason
-                    : isDecision
-                      ? `${info.decisions} item${info.decisions === 1 ? '' : 's'} to answer`
-                      : 'Posted to Slack'}
-                </div>
-              </div>
-              {info.deskId && <ChevronRight className="h-4 w-4 text-muted-foreground/30 shrink-0" />}
-            </>
-          );
-
-          const cls = 'w-full flex items-center gap-3 rounded-lg border p-3 text-left transition-all';
-
-          // Links to the DESK, not to an action detail page. The desk is where
-          // the decision actually gets answered, and for a notification it is
-          // the record of what was posted — either way it is the thing the
-          // operator is reaching for when they click this row.
-          return info.deskId ? (
-            <Link key={row.id} href={`/decisions/${info.deskId}`} className={cn(cls, 'hover:bg-muted/30')}>
-              {body}
-            </Link>
-          ) : (
-            <div key={row.id} className={cn(cls, 'opacity-70')}>{body}</div>
-          );
-        })}
-      </div>
-    </div>
-  );
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -594,15 +376,21 @@ function SummaryCards({ node }: { node: FullTreeNode }) {
     : undefined;
 
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-      <SummaryCard label="Status"><SBadge status={node.status} /></SummaryCard>
+    // No Status tile: the status is the badge beside the title. It used to
+    // appear three times on one screen — header corner, this tile, the step.
+    // Two columns on a phone; an odd last tile spans both so nothing is
+    // orphaned beside an empty cell. Three across from md.
+    <div className="grid grid-cols-2 gap-2 md:grid-cols-3 [&>*:last-child:nth-child(odd)]:col-span-2 md:[&>*:last-child:nth-child(odd)]:col-span-1">
       <SummaryCard label="Duration" value={fmtDur(node.duration_ms)} />
       {isExec && (
         <SummaryCard label="Steps">
           {/* No bar here — the list below IS the detail, step by step, so a
               second rendering of the same fraction is noise. The bar lives on
               the history list, where there is no step list to read. */}
-          <span className="text-base font-semibold tabular-nums">{completedCount}<span className="text-muted-foreground font-normal text-xs">/{children.length}</span></span>
+          <span className="tabular-nums">
+            {completedCount}
+            <span className="text-sm font-normal text-muted-foreground"> of {children.length} completed</span>
+          </span>
         </SummaryCard>
       )}
       {!isExec && node.model && <SummaryCard label="Model" value={node.model.replace('claude-', '')} mono />}
@@ -620,12 +408,14 @@ function SummaryCard({ label, value, accent, mono, children: ch }: {
   label: string; value?: string; accent?: boolean; mono?: boolean; children?: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-border/50 bg-card px-3 py-2">
-      <div className="text-[9px] uppercase tracking-wider text-muted-foreground/50">{label}</div>
-      {ch ?? (
-        <div className={cn('text-base font-semibold tabular-nums mt-0.5',
-          accent && 'text-emerald-600 dark:text-emerald-400',
-          mono && 'font-mono text-sm',
+    <div className="rounded-lg border bg-card px-4 py-3">
+      {/* 11px at full muted — the 9px label at half opacity was below what
+          reads comfortably, on the four numbers people come here for. */}
+      <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</div>
+      {ch ? <div className="mt-0.5 text-lg font-semibold">{ch}</div> : (
+        <div className={cn('text-lg font-semibold tabular-nums mt-0.5',
+          accent && 'text-success',
+          mono && 'font-mono text-base',
         )}>
           {value}
         </div>
@@ -637,220 +427,6 @@ function SummaryCard({ label, value, accent, mono, children: ch }: {
 // ═══════════════════════════════════════════════════════════════
 // Content: Action List (for agents) or Logs (for actions)
 // ═══════════════════════════════════════════════════════════════
-
-// Color treatment per action type — kept in sync with the agent editor's
-// step cards so operators see the same hue for the same action kind in
-// both places. Five distinct hues so the action list reads at a glance.
-const ACTION_TYPE_STYLES: Record<string, { bg: string; fg: string; border: string }> = {
-  approval:       { bg: 'bg-orange-100 dark:bg-orange-900/30', fg: 'text-orange-700 dark:text-orange-400', border: 'border-orange-200/60 dark:border-orange-800/40 hover:border-orange-300 hover:bg-orange-50/30 dark:hover:bg-orange-950/10' },
-  login:          { bg: 'bg-sky-100 dark:bg-sky-900/30',       fg: 'text-sky-700 dark:text-sky-400',       border: 'border-sky-200/60 dark:border-sky-800/40 hover:border-sky-300 hover:bg-sky-50/30 dark:hover:bg-sky-950/10' },
-  browser_script: { bg: 'bg-violet-100 dark:bg-violet-900/30', fg: 'text-violet-700 dark:text-violet-400', border: 'border-violet-200/60 dark:border-violet-800/40 hover:border-violet-300 hover:bg-violet-50/30 dark:hover:bg-violet-950/10' },
-  sub_agent:      { bg: 'bg-amber-100 dark:bg-amber-900/30',   fg: 'text-amber-700 dark:text-amber-400',   border: 'border-amber-200/60 dark:border-amber-800/40 hover:border-amber-300 hover:bg-amber-50/30 dark:hover:bg-amber-950/10' },
-  agent:          { bg: 'bg-blue-100 dark:bg-blue-900/30',     fg: 'text-blue-700 dark:text-blue-400',     border: 'border-blue-200/60 dark:border-blue-800/40 hover:border-blue-300 hover:bg-blue-50/30 dark:hover:bg-blue-950/10' },
-};
-const ACTION_TYPE_FALLBACK = { bg: 'bg-muted/60', fg: 'text-muted-foreground', border: 'border-border/50 hover:border-border hover:bg-muted/20' };
-
-/**
- * The run's steps, with a sub-agent's runs expanded inline beneath it.
- *
- * Sub-agents used to open a dialog: click the step, read a list in a modal,
- * click a run, lose the modal and land somewhere else. Three clicks and a
- * context switch to see something that is just... the next level of the same
- * tree. Indented rows say the same thing in place, and the step stays on screen
- * next to them, so "which step did these come from" needs no memory.
- *
- * Expanded by default when anything inside failed — the reason someone opens a
- * run at all is usually the thing that went wrong, and making them hunt for it
- * behind a toggle is the same mistake the modal made.
- */
-function ActionList({ actions, onSelect, loginsFor }: {
-  actions: FullTreeNode[];
-  onSelect: (a: FullTreeNode) => void;
-  loginsFor?: Map<string, FullTreeNode[]>;
-}) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const isOpen = (action: FullTreeNode, kids: FullTreeNode[]) => {
-    if (action.id in collapsed) return !collapsed[action.id];
-    return kids.some((k) => k.status === 'failed' || k.status === 'aborted');
-  };
-
-  return (
-    <div className="space-y-1">
-      {actions.map((action) => {
-        const Icon = action.action_type === 'sub_agent' ? GitBranch : ICONS[action.action_type ?? ''] ?? Zap;
-        // A declared step the run never reached. It has no action_log behind
-        // it, so there is nothing to drill into and nothing to expand — it is
-        // here purely so the list has the routine's shape.
-        const notRun = action.status === 'not_run';
-        const isSub = action.action_type === 'sub_agent' && !notRun;
-        const childExecs = action.children?.filter((c) => c.type === 'execution') ?? [];
-        const logins = loginsFor?.get(action.id) ?? [];
-        const style = ACTION_TYPE_STYLES[action.action_type ?? ''] ?? ACTION_TYPE_FALLBACK;
-
-        const open = isSub && isOpen(action, childExecs);
-
-        return (
-          <div key={action.id}>
-          <button
-            onClick={() => {
-              if (notRun) return;
-              // A sub-agent step expands in place; everything else drills in.
-              if (isSub) setCollapsed((c) => ({ ...c, [action.id]: open }));
-              else onSelect(action);
-            }}
-            disabled={notRun}
-            aria-expanded={isSub ? open : undefined}
-            className={cn(
-              'w-full flex items-center gap-3 rounded-lg border p-3 text-left transition-all',
-              style.border,
-              // Faded and inert: reads as part of the routine without
-              // inviting a click that would open an empty page.
-              notRun && 'opacity-45 border-dashed cursor-default bg-muted/20',
-            )}
-          >
-            <div className={cn('p-1.5 rounded-md shrink-0', notRun ? 'bg-muted' : style.bg)}>
-              <Icon className={cn('h-4 w-4', notRun ? 'text-muted-foreground' : style.fg)} />
-            </div>
-
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2">
-                <Dot status={action.status} />
-                <span className="text-sm font-medium truncate">
-                  {/* Sub-agent actions: show the target agent's name from the first child execution */}
-                  {isSub && childExecs.length > 0 ? childExecs[0].agent_name ?? childExecs[0].label : action.label}
-                </span>
-                <SBadge status={action.status} />
-                {/* Execution-options breadcrumbs — small chip when the
-                    action_log error_message says the step was skipped or
-                    only partly ran. Lets the operator distinguish
-                    "actually completed" from "completed via gate" at a
-                    glance. Cause-specific chip text reveals whether the
-                    skip was conditional or cascade. */}
-                {action.error_message?.startsWith('Conditional gate:') && (
-                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
-                    Gated
-                  </Badge>
-                )}
-                {action.error_message?.startsWith('Cascade:') && (
-                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
-                    Cascade
-                  </Badge>
-                )}
-                {action.error_message?.startsWith('Skipped:') && (
-                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
-                    Skipped
-                  </Badge>
-                )}
-                {action.error_message?.includes('Partition:') && !action.error_message?.startsWith('Partition:') && (
-                  // Mixed-partition row — overall status is completed/failed
-                  // but some items were gated or cascaded. The breadcrumb is
-                  // appended to whatever the handler wrote, so we match
-                  // `includes()` rather than `startsWith()`.
-                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
-                    Partial
-                  </Badge>
-                )}
-                {action.error_message?.startsWith('Partition:') && (
-                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-slate-400 text-slate-600 dark:text-slate-400" title={action.error_message}>
-                    Partial
-                  </Badge>
-                )}
-                {action.error_message?.startsWith('Tolerated ') && (
-                  <Badge variant="outline" className="text-[10px] h-5 px-1.5 border-yellow-400 text-yellow-600 dark:text-yellow-400" title={action.error_message}>
-                    Tolerated
-                  </Badge>
-                )}
-              </div>
-              <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
-                <span>{AT[action.action_type ?? ''] ?? action.action_type}</span>
-                <span className="tabular-nums">{fmtDur(action.duration_ms)}</span>
-                {/* Same correction as the summary card: input alone is the
-                    uncached remainder, so a real AI step read "9 / 1.5K". */}
-                <TokenUsage
-                  variant="inline"
-                  tokens={{
-                    fresh:      action.tokens_input ?? 0,
-                    cacheRead:  action.tokens_cache_read ?? 0,
-                    cacheWrite: action.tokens_cache_write ?? 0,
-                    output:     action.tokens_output ?? 0,
-                  }}
-                />
-                {isSub && childExecs.length > 0 && <span className="text-amber-700 dark:text-amber-400">{childExecs.length} run{childExecs.length !== 1 ? 's' : ''}</span>}
-              </div>
-            </div>
-
-            {isSub
-              ? <ChevronDown className={cn('h-4 w-4 shrink-0 text-muted-foreground/50 transition-transform', !open && '-rotate-90')} />
-              : <ChevronRight className="h-4 w-4 text-muted-foreground/30 shrink-0" />}
-          </button>
-
-          {/* The sub-agent's runs, indented under the step that spawned them.
-              Failed first, then by item index — the same order the dialog used,
-              kept because a long fan-out is read for its failures. The rail on
-              the left is what carries "these belong to the step above". */}
-          {isSub && open && childExecs.length > 0 && (
-            <div className="ml-6 mt-1 space-y-1 border-l-2 border-amber-200/60 dark:border-amber-800/40 pl-3">
-              {[...childExecs]
-                .sort((a, b) => {
-                  const aFail = a.status === 'failed' || a.status === 'aborted' ? 0 : 1;
-                  const bFail = b.status === 'failed' || b.status === 'aborted' ? 0 : 1;
-                  return aFail !== bFail ? aFail - bFail : (a.item_index ?? 0) - (b.item_index ?? 0);
-                })
-                .map((child) => (
-                  <button
-                    key={child.id}
-                    onClick={() => onSelect(child)}
-                    className="w-full flex items-center gap-2.5 rounded-md border border-transparent px-2.5 py-2 text-left transition-colors hover:border-border hover:bg-muted/30"
-                  >
-                    <Dot status={child.status} />
-                    <span className="text-xs font-medium truncate flex-1 min-w-0">
-                      {child.agent_name ?? child.label}
-                    </span>
-                    {child.item_index !== null && child.item_index !== undefined && (
-                      <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
-                        item {child.item_index + 1}
-                      </span>
-                    )}
-                    <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">
-                      {fmtDur(child.duration_ms)}
-                    </span>
-                    <SBadge status={child.status} />
-                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 shrink-0" />
-                  </button>
-                ))}
-            </div>
-          )}
-
-          {/* The identity this step ran as.
-              Always visible rather than behind a disclosure: there is at most
-              one or two, and the question it answers — which account touched
-              the remote system — is one you want answered without clicking.
-              Its own log is drillable, because a login records one. */}
-          {logins.length > 0 && (
-            <div className="ml-6 mt-1 space-y-1 border-l-2 border-sky-200/60 dark:border-sky-800/40 pl-3">
-              {logins.map((lg) => (
-                <button
-                  key={lg.id}
-                  onClick={() => onSelect(lg)}
-                  className="w-full flex items-center gap-2.5 rounded-md border border-transparent px-2.5 py-2 text-left transition-colors hover:border-border hover:bg-muted/30"
-                >
-                  <Dot status={lg.status} />
-                  <LogIn className="h-3.5 w-3.5 shrink-0 text-sky-600 dark:text-sky-400" />
-                  <span className="text-xs font-medium truncate flex-1 min-w-0">{lg.label}</span>
-                  <span className="text-[10px] text-muted-foreground shrink-0">signed in as</span>
-                  <span className="text-[10px] text-muted-foreground tabular-nums shrink-0">{fmtDur(lg.duration_ms)}</span>
-                  <SBadge status={lg.status} />
-                  <ChevronRight className="h-3.5 w-3.5 text-muted-foreground/30 shrink-0" />
-                </button>
-              ))}
-            </div>
-          )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 /**
  * Tabbed payload viewer used inside the Input / Output / Logs tabs. Pretty-
@@ -875,25 +451,26 @@ function PayloadView({
 
   if (!pretty) {
     return (
-      <div className="rounded-lg border border-border/50 bg-card px-4 py-6">
-        <p className="text-xs text-muted-foreground italic">{empty}</p>
+      <div className="px-5 py-8">
+        <p className="text-sm text-muted-foreground italic">{empty}</p>
       </div>
     );
   }
 
   return (
-    <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden min-h-0 h-[28rem]">
-      <div className="flex items-center justify-end px-3 py-1.5 bg-muted/20 border-b border-border/30 shrink-0">
-        <button
-          type="button"
-          className="text-[10px] text-muted-foreground hover:text-foreground flex items-center gap-1"
-          onClick={() => { navigator.clipboard.writeText(pretty); toast.success('Copied'); }}
-        >
-          <Copy className="h-3 w-3" /> Copy
-        </button>
-      </div>
-      <pre className="px-3 py-2 text-[11px] font-mono whitespace-pre-wrap break-words leading-relaxed overflow-auto flex-1 min-h-0">
-        {pretty}
+    // Copy floats over the content on hover rather than living in a toolbar
+    // band — the band was a second surface inside the panel, and it read as
+    // a gap between the tabs and the payload.
+    <div className="group/payload relative flex flex-col min-h-0 h-[28rem]">
+      <button
+        type="button"
+        className="absolute right-3 top-2.5 z-10 inline-flex items-center gap-1 rounded-md border bg-card/90 px-2 py-1 text-[11px] text-muted-foreground opacity-0 shadow-sm backdrop-blur transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover/payload:opacity-100"
+        onClick={() => { navigator.clipboard.writeText(pretty); toast.success('Copied'); }}
+      >
+        <Copy className="h-3 w-3" /> Copy
+      </button>
+      <pre className="px-4 py-3 text-xs font-mono whitespace-pre-wrap break-words leading-relaxed overflow-auto flex-1 min-h-0">
+        {isJsonText(pretty) ? <JsonHighlight text={pretty} /> : pretty}
       </pre>
     </div>
   );
@@ -1326,25 +903,22 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
   return (
     <div className="space-y-3">
       <Tabs defaultValue="input">
-        <TabsList variant="line">
+        <TabsList>
           <TabsTrigger value="input">Input</TabsTrigger>
           <TabsTrigger value="output">Output</TabsTrigger>
           <TabsTrigger value="logs">
             Logs
-            {hasLogs && steps.length > 0 && (
-              <span className="ml-1.5 text-[10px] text-muted-foreground tabular-nums">
-                {steps.length}
-              </span>
-            )}
+            {hasLogs && steps.length > 0 && <TabsCount>{steps.length}</TabsCount>}
           </TabsTrigger>
           {hasScreenshot && (
             <TabsTrigger value="screenshot">
-              <ImageIcon className="h-3 w-3 mr-1" />
+              <ImageIcon className="h-3.5 w-3.5" />
               Screenshot
             </TabsTrigger>
           )}
         </TabsList>
 
+        <TabsPanel flush>
         <TabsContent value="input">
           <PayloadView
             value={action.input}
@@ -1358,14 +932,14 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
 
         <TabsContent value="logs">
           {hasLogs ? (
-            <div className="flex flex-col rounded-lg border border-border/50 overflow-hidden h-[28rem]">
+            <div className="flex flex-col h-[28rem]">
               <div className="flex-1 min-h-0 overflow-auto">
                 <LogViewer steps={steps} loading={loadingSteps} />
               </div>
             </div>
           ) : (
-            <div className="rounded-lg border border-border/50 bg-card px-4 py-6">
-              <p className="text-xs text-muted-foreground italic">{logsEmpty}</p>
+            <div className="px-5 py-8">
+              <p className="text-sm text-muted-foreground italic">{logsEmpty}</p>
             </div>
           )}
         </TabsContent>
@@ -1381,13 +955,13 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
           >
             {isBatchParent ? (
               batchShotsLoading ? (
-                <div className="flex items-center justify-center h-[28rem] rounded-lg border border-border/50 bg-card">
+                <div className="flex items-center justify-center h-[28rem] ">
                   <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
                 </div>
               ) : batchShots && batchShots.length > 0 ? (
                 <ScreenshotGallery shots={batchShots} actionLabel={action.label} />
               ) : batchShots && batchShots.length === 0 ? (
-                <div className="rounded-lg border border-border/50 bg-card px-4 py-6">
+                <div className=" px-4 py-6">
                   <p className="text-xs text-muted-foreground italic">
                     No screenshots captured for the items in this batch.
                   </p>
@@ -1395,7 +969,7 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
               ) : (
                 // batchShots === null and not loading — kick the fetch
                 // on next render (clicking the tab triggers onMouseEnter).
-                <div className="flex items-center justify-center h-[28rem] rounded-lg border border-border/50 bg-card">
+                <div className="flex items-center justify-center h-[28rem] ">
                   <button
                     type="button"
                     onClick={loadBatchShots}
@@ -1412,6 +986,7 @@ function ActionLogs({ action, orgId, executionId }: { action: FullTreeNode; orgI
             )}
           </TabsContent>
         )}
+        </TabsPanel>
       </Tabs>
     </div>
   );
@@ -1588,75 +1163,112 @@ export default function ExecutionDetailPage() {
       <Breadcrumb crumbs={crumbs} currentId={id} onNavigate={navigateTo} />
 
       {/* ── Page header ────────────────────────────────────────── */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <div className={cn('p-2 rounded-lg shrink-0 mt-0.5',
-            isExecution ? 'bg-blue-100 dark:bg-blue-900/30' : 'bg-muted',
-          )}>
-            <NodeIcon node={current} className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold tracking-tight">{current.label}</h1>
-            <p className="text-sm text-muted-foreground mt-0.5">
-              {nodeTypeLabel(current)}
-              {current.started_at && ` · ${fmtDate(current.started_at)}`}
-              {current.item_index != null && ` · Item #${current.item_index}`}
-              {isExecution && ` · ${id.slice(-8).toUpperCase()}`}
-            </p>
-            {/* The routine behind this run. Looking at what happened and then
-                wanting to see the steps that caused it is the common next move;
-                without this the operator goes back to the list and searches by
-                name. Only on an execution node — an action node inherits its
-                parent routine and would just repeat the link. */}
-            {isExecution && current.agent_id && (
-              <Link
-                href={`/agents/${current.agent_id}`}
-                className="mt-1 inline-flex items-center gap-1 text-xs text-brand hover:underline"
-              >
-                Open routine <ChevronRight className="h-3 w-3" />
-              </Link>
+      {/* Status rides beside the title — once. The run's own type tile on
+          an execution, the step's type tile on a step, so a step page wears
+          the same colour and glyph as its row in the list above it. */}
+      <PageHeader
+        icon={isExecution
+          ? Bot
+          : current.type === 'batch_item'
+            ? <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-muted text-muted-foreground"><Hash className="h-[18px] w-[18px]" /></span>
+            : current.action_type === 'outcome'
+              ? <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-brand-soft text-brand-soft-fg"><Gavel className="h-[18px] w-[18px]" /></span>
+              : <StepTypeIcon type={current.action_type ?? ''} size="lg" />}
+        title={current.label}
+        badge={<StatusBadge status={current.status} />}
+        meta={
+          <>
+            <span>{nodeTypeLabel(current)}</span>
+            {current.started_at && <><MetaSep /><span className="tabular-nums">{fmtDate(current.started_at)}</span></>}
+            {current.item_index != null && <><MetaSep /><span>Item #{current.item_index}</span></>}
+            {isExecution && (
+              <>
+                <MetaSep />
+                <button
+                  type="button"
+                  title="Copy run id"
+                  onClick={() => navigator.clipboard.writeText(id).then(() => toast.success('Run id copied'))}
+                  className="font-mono text-xs transition-colors hover:text-foreground"
+                >
+                  {id.slice(-8).toUpperCase()}
+                </button>
+              </>
             )}
-          </div>
-        </div>
-        <SBadge status={current.status} />
-      </div>
+          </>
+        }
+        actions={isAction && current.action_type === 'outcome' && readOutcome(current).deskId ? (
+          <Button size="sm" asChild>
+            <Link href={`/decisions/${readOutcome(current).deskId}`}>
+              <Gavel className="h-4 w-4" />
+              Open decision desk
+            </Link>
+          </Button>
+        ) : isExecution && current.agent_id ? (
+          // The agent behind this run. Reading what happened and then wanting
+          // the steps that caused it is the common next move.
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/agents/${current.agent_id}`}>
+              <Bot className="h-4 w-4" />
+              Open agent
+            </Link>
+          </Button>
+        ) : undefined}
+      />
+
+      {/* ── Why it failed ──────────────────────────────────────── */}
+      {isExecution && <FailureSummary node={current} steps={visibleActions} onOpen={drillInto} />}
 
       {/* ── Summary cards (same format for everything) ─────────── */}
       <SummaryCards node={current} />
 
       {/* ── Error / breadcrumb message ──────────────────────────── */}
-      {current.error_message && <ActionMessageBanner message={current.error_message} />}
+      {current.error_message
+        && !(current.error_message.startsWith('Waiting for ') && current.status !== 'queued')
+        && <ActionMessageBanner message={current.error_message} />}
 
       {/* ── Content ────────────────────────────────────────────── */}
-      {/* Agent → show action list */}
       {/* Trigger → Steps → On completion: the same three zones the editor
-          shows, in the same order, so the run reads as the routine you
-          authored. The middle one used to be headed "Actions" over a list
-          that also held on-completion rows and hid logins; it now names one
-          thing. */}
-      {isExecution && <TriggerZone node={current} />}
-
-      {isExecution && visibleActions.length > 0 && (
-        <div>
-          <h2 className="text-sm font-semibold mb-3">Steps</h2>
-          <ActionList actions={visibleActions} onSelect={drillInto} loginsFor={zones.loginsFor} />
-        </div>
+          shows, in the same order, as one timeline of one kind of row. See
+          components/execution/RunTimeline for the two rules every row obeys. */}
+      {isExecution && (
+        <RunTimeline>
+          <TriggerZone node={current} />
+          {visibleActions.length > 0 ? (
+            <StepsZone steps={visibleActions} loginsFor={zones.loginsFor} onOpen={drillInto} />
+          ) : (
+            <Zone title="Steps">
+              <p className="pl-10 text-sm text-muted-foreground">No steps recorded.</p>
+            </Zone>
+          )}
+          {zones.outcomes.length > 0 && <OutcomeZone rows={zones.outcomes} orgId={selectedOrgId!} onOpen={drillInto} />}
+        </RunTimeline>
       )}
-      {isExecution && visibleActions.length === 0 && (
-        <Card><CardContent className="py-8 text-center text-sm text-muted-foreground">No steps recorded.</CardContent></Card>
-      )}
 
-      {isExecution && zones.outcomes.length > 0 && <OutcomeZone rows={zones.outcomes} />}
-
-      {/* Regular action → input/output/logs/screenshot (sub_agent actions open
-          modal instead, don't drill here).
-
-          Deliberately unheaded. It used to carry an <h2>Logs</h2>, which named
-          the whole panel after one of its four tabs — and the panel opens on
-          Input, so the heading disagreed with what was on screen. The tab strip
-          is its own label. */}
-      {isAction && !isSubAgent && (
+      {/* A step's record: input / output / logs / screenshot. Unheaded — the
+          tab strip is its own label. */}
+      {isAction && (
         <ActionLogs action={current} orgId={selectedOrgId!} executionId={id} />
+      )}
+
+      {/* A sub-agent step's record ends with the runs it spawned, each of
+          which drills in — the same rows as under the step on the run page,
+          so the two views of one step agree. */}
+      {isSubAgent && (current.children ?? []).some((c) => c.type === 'execution') && (
+        <RunTimeline>
+          <Zone title="Runs" hint={`${(current.children ?? []).filter((c) => c.type === 'execution').length}`}>
+            {(current.children ?? []).filter((c) => c.type === 'execution').map((run) => (
+              <RunRow
+                key={run.id}
+                icon={<span className="grid h-7 w-7 place-items-center rounded-md bg-step-agent/12 text-step-agent"><GitBranch className="h-3.5 w-3.5" /></span>}
+                title={run.agent_name ?? run.label}
+                badge={<StatusBadge status={run.status} size="sm" />}
+                meta={<>{run.item_index != null && <span>item {run.item_index + 1}</span>}<span className="tabular-nums">{fmtDur(run.duration_ms)}</span></>}
+                tone={run.status === 'failed' || run.status === 'aborted' ? 'danger' : 'default'}
+                onOpen={() => drillInto(run)}
+              />
+            ))}
+          </Zone>
+        </RunTimeline>
       )}
 
     </div>

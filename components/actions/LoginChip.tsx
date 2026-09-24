@@ -111,12 +111,12 @@ function LoginEditSheet({ orgId, login, onClose, onChanged }: {
 
   return (
     <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col gap-0 p-0">
-        <SheetHeader className="border-b px-4 py-4 sm:px-6"><SheetTitle>Edit login</SheetTitle></SheetHeader>
-        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
+      <SheetContent side="right" width={520} className="flex flex-col gap-0 p-0">
+        <SheetHeader className="border-b px-6 py-5"><SheetTitle>Edit login</SheetTitle></SheetHeader>
+        <div className="flex-1 overflow-y-auto px-6 py-5">
           <LoginFormBody form={form} setForm={setForm} />
         </div>
-        <SheetFooter className="border-t px-4 py-4 sm:px-6">
+        <SheetFooter className="border-t bg-surface-2/50 px-6 py-3">
           <Button variant="outline" onClick={onClose} disabled={saving}>Cancel</Button>
           <Button onClick={save} disabled={saving || !valid}>{saving ? 'Saving…' : 'Save'}</Button>
         </SheetFooter>

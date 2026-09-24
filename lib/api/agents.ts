@@ -553,8 +553,13 @@ export interface AgentOutcome {
   updated_at?: string;
 }
 
-/** What the editor sends. outcome_type is the server's to decide. */
+/**
+ * What the editor sends. A rule with config.on_approve is always a decision;
+ * `outcome_type: 'decision'` additionally allows a decision that runs nothing
+ * on Approve (a recorded judgement). Anything else is a notification.
+ */
 export type OutcomeRuleInput = {
+  outcome_type?: 'notify' | 'decision';
   name?: string | null;
   sort_order?: number;
   conditional_execution?: Record<string, unknown>;
@@ -562,7 +567,7 @@ export type OutcomeRuleInput = {
   is_active?: boolean;
 };
 
-export type DecisionStatus = 'pending' | 'decided' | 'expired' | 'not_actioned';
+export type DecisionStatus = 'pending' | 'decided' | 'expired';
 
 export interface Decision {
   id: string;
@@ -740,11 +745,6 @@ export async function answerDecisionDesk(
     ok: true; answered: number; launched: number; failed: number;
     remaining: number; summary: string;
   }>(`/api/admin/${orgId}/decision-desks/${deskId}/answer`, data);
-  return res.data;
-}
-
-export async function dismissDecisionDesk(orgId: string, deskId: string) {
-  const res = await agentClient.post<{ ok: true }>(`/api/admin/${orgId}/decision-desks/${deskId}/dismiss`);
   return res.data;
 }
 
@@ -937,6 +937,21 @@ export interface FullTreeNode {
   triggered_by_name?: string | null;
   /** Raw handle — e.g. "mcp:someone@example.com". Not always a user id. */
   triggered_by?: string | null;
+  /**
+   * The decision that launched this run, when trigger_type is 'decision'.
+   * Links the run back to the desk and to the run that raised it.
+   */
+  origin_decision?: {
+    decision_id: string;
+    desk_id: string | null;
+    chosen_option: string | null;
+    decided_at: string | null;
+    decided_by_name: string | null;
+    item_index: number | null;
+    execution_id: string | null;
+    agent_name: string | null;
+    rule_name: string | null;
+  } | null;
   // Action-specific
   action_type?: string;
   tokens_input?: number | null;

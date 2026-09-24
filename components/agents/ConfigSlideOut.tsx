@@ -158,10 +158,11 @@ export function ConfigSlideOut({
       <SheetContent
         side="right"
         // Wide enough for a JSON payload or a webhook URL without wrapping,
-        // capped so it never swallows the flow it is meant to sit beside.
-        className="w-full sm:max-w-xl flex flex-col gap-0 p-0"
+        // capped so it never swallows the flow it is docked beside.
+        width={600}
+        className="flex flex-col gap-0 p-0"
       >
-        <SheetHeader className={cn('border-b px-5 pt-4', tabs ? 'gap-3 pb-0' : 'pb-4')}>
+        <SheetHeader className={cn('border-b px-6 pt-5', tabs ? 'gap-3 pb-0' : 'pb-4')}>
           <SheetTitle>{title}</SheetTitle>
           {description && <SheetDescription>{description}</SheetDescription>}
           {/* -mx-0.5 so the first tab's padding lines up with the title
@@ -171,12 +172,12 @@ export function ConfigSlideOut({
 
         {/* The only scrolling region — the header and footer stay put, so
             Save never scrolls out of reach on a long form. */}
-        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
+        <div className="flex-1 overflow-y-auto px-6 py-5">
           {children}
         </div>
 
         {onSave && (
-          <SheetFooter className="border-t px-5 py-3 flex-row justify-end gap-2">
+          <SheetFooter className="border-t bg-surface-2/50 px-6 py-3 flex-row justify-end gap-2">
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)} disabled={saving}>
               Cancel
             </Button>

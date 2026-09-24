@@ -5,10 +5,10 @@ import type { Metadata } from 'next'
  *
  * app/(dashboard)/agents/[id]/page.tsx is a client component, and a "use client" module cannot
  * export `metadata`. Next composes this against the root layout's
- * `%s | <Company> <Center>` template, so the tab reads "Routine | ...".
+ * `%s | <Company> <Center>` template, so the tab reads "Agent | ...".
  */
 export const metadata: Metadata = {
-  title: 'Routine',
+  title: 'Agent',
 }
 
 export default function Layout({ children }: { children: React.ReactNode }) {

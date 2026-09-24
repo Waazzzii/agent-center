@@ -13,7 +13,9 @@ import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Play, RefreshCw, Bot, Copy, Search, Tag as TagIcon, Sparkles } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, Pause, RefreshCw, Bot, Copy, Search, Tag as TagIcon, Sparkles } from 'lucide-react';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { StatTile } from '@/components/ui/stat-tile';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { useTags } from '@/lib/hooks/use-tags';
@@ -170,6 +172,9 @@ export default function AgentsPage() {
   // substring) so operators can find "the agent that does X" by typing
   // a fragment of either. Sort by name (lexicographic), status (active
   // first), or created (newest first when desc).
+  // Active / Inactive tiles filter the list, the way the feeds' tiles do.
+  const [statusFilter, setStatusFilter] = useState<'active' | 'inactive' | null>(null);
+
   const visibleAgents = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = q
@@ -178,7 +183,10 @@ export default function AgentsPage() {
           (a.description?.toLowerCase().includes(q) ?? false),
         )
       : agents;
-    const sorted = [...filtered].sort((a, b) => {
+    const byStatus = statusFilter
+      ? filtered.filter((a) => statusFilter === 'active' ? a.is_active : !a.is_active)
+      : filtered;
+    const sorted = [...byStatus].sort((a, b) => {
       let cmp = 0;
       if (sortKey === 'name') {
         cmp = a.name.localeCompare(b.name);
@@ -191,7 +199,7 @@ export default function AgentsPage() {
       return sortDir === 'asc' ? cmp : -cmp;
     });
     return sorted;
-  }, [agents, search, sortKey, sortDir]);
+  }, [agents, search, sortKey, sortDir, statusFilter]);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -214,16 +222,49 @@ export default function AgentsPage() {
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><Bot className="h-5 w-5 text-brand" /> Agents</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Automated workflows powered by LLMs and your connected systems</p>
+      <PageHeader
+        icon={Bot}
+        title="Agents"
+        description="Automated workflows powered by LLMs and your connected systems"
+        actions={
+          <Button disabled={!selectedOrgId} onClick={() => router.push('/agents/create')}>
+            <Plus className="h-4 w-4" />
+            New agent
+          </Button>
+        }
+      />
+
+      {/* The shape of the fleet at a glance — the same tiles the Executions
+          and Decisions feeds use. Total, and how it splits. */}
+      {selectedOrgId && agents.length > 0 && (
+        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile label="Agents" value={agents.length} icon={Bot} tone="neutral" selected={false} onClick={() => setStatusFilter(null)} />
+          <StatTile
+            label="Active"
+            value={agents.filter((a) => a.is_active).length}
+            icon={Play}
+            tone="success"
+            selected={statusFilter === 'active'}
+            onClick={() => setStatusFilter(statusFilter === 'active' ? null : 'active')}
+          />
+          <StatTile
+            label="Inactive"
+            value={agents.filter((a) => !a.is_active).length}
+            icon={Pause}
+            tone="warning"
+            selected={statusFilter === 'inactive'}
+            onClick={() => setStatusFilter(statusFilter === 'inactive' ? null : 'inactive')}
+          />
+            <StatTile
+              label="New in 30 days"
+              value={agents.filter((a) => a.created_at && Date.now() - new Date(a.created_at).getTime() < 30 * 86_400_000).length}
+              icon={Sparkles}
+              tone="brand"
+              selected={false}
+              onClick={() => {}}
+            />
         </div>
-        <Button disabled={!selectedOrgId} onClick={() => router.push('/agents/create')}>
-          <Plus className="mr-2 h-4 w-4" />
-          New Workflow
-        </Button>
-      </div>
+      )}
 
       {!selectedOrgId ? (
         <Card>

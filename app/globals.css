@@ -57,6 +57,13 @@
   --color-surface-2:        var(--surface-2);
   --color-text-dim:         var(--text-dim);
   --color-border-strong:    var(--border-strong);
+
+  /* Step types — categorical, one per action_type */
+  --color-step-ai:          var(--step-ai);
+  --color-step-review:      var(--step-review);
+  --color-step-login:       var(--step-login);
+  --color-step-script:      var(--step-script);
+  --color-step-agent:       var(--step-agent);
 }
 
 /* ─── Light mode ──────────────────────────────────────────────── */
@@ -146,6 +153,17 @@
   --sidebar-accent-foreground: oklch(0.30 0.06 285);
   --sidebar-border:           var(--border);
   --sidebar-ring:             var(--brand);
+
+  /* Step types. Categorical, so they must not collide with a meaning:
+     hues sit clear of brand (295), admin (45), danger (25), warning (55-70)
+     and success (150). Login and script are neighbours (cyan / teal) on
+     purpose — both drive a browser, and they are usually paired.
+     Used through components/execution/step-types.tsx, never directly. */
+  --step-ai:     oklch(0.55 0.15 258);
+  --step-review: oklch(0.56 0.17 350);
+  --step-login:  oklch(0.58 0.11 212);
+  --step-script: oklch(0.56 0.11 180);
+  --step-agent:  oklch(0.60 0.13 88);
 }
 
 /* ─── Dark mode ───────────────────────────────────────────────── */
@@ -216,6 +234,12 @@
   --sidebar-accent-foreground: oklch(0.82 0.08 285);
   --sidebar-border:           var(--border);
   --sidebar-ring:             var(--brand);
+
+  --step-ai:     oklch(0.72 0.13 258);
+  --step-review: oklch(0.74 0.14 350);
+  --step-login:  oklch(0.76 0.10 212);
+  --step-script: oklch(0.76 0.10 180);
+  --step-agent:  oklch(0.80 0.12 88);
 }
 
 /* ─── Base styles ─────────────────────────────────────────────── */

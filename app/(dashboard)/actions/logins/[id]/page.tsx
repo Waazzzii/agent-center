@@ -1,17 +1,15 @@
 'use client';
 
 import { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import Link from 'next/link';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
-  getLogin, updateLogin, deleteLogin, startLogout,
-  setLoginCredentials, clearLoginCredentials, testAutoLogin, clearLoginSession,
+  getLogin, listLogins, updateLogin, deleteLogin, startLogout, setPoolSize, setPoolCredentialMode, previewPoolCredentialMode,
+  setLoginCredentials, clearLoginCredentials, testAutoLogin,
   getLoginCredentialKeys, deleteLoginCredentialKey,
   setLoginTotp, clearLoginTotp, previewLoginTotp,
-  listLoginRuns,
-  type Login, type LoginRunAudit, type TotpPreview,
+  type Login, type TotpPreview,
 } from '@/lib/api/logins';
 import { isReservedParam } from '@/lib/script-params';
 import { getBrowserRunStatus } from '@/lib/api/agents';
@@ -31,21 +29,26 @@ import {
   type ActiveVerifySession,
 } from '@/lib/hooks/use-active-verify-sessions';
 import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
+import { PoolStepper, PoolSizeControl, poolParentOf, poolOf } from '@/components/logins/PoolSelector';
+import { ProxyCard } from '@/components/logins/ProxyCard';
+import { Checkbox } from '@/components/ui/checkbox';
+import { InfoBubble } from '@/components/actions/login-fields';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Tabs, TabsList, TabsTrigger, TabsContent, TabsPanel, TabsCount } from '@/components/ui/tabs';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import { MultiSelectTags } from '@/components/ui/multi-select-tags';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  Loader2, LogIn, LogOut, Save, Trash2, Eraser,
+  Loader2, LogIn, LogOut, Save, Trash2,
   CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
   Sparkles, X as XIcon, Eye, EyeOff, KeyRound, Pencil,
-  Settings2, History, Camera, Image as ImageIcon,
+  Settings2, Camera, Lock, Image as ImageIcon,
 } from 'lucide-react';
 import { decodeQrFromFile, imageFromTransfer, cameraSupported } from '@/lib/qr-decode';
 import { QrScannerDialog } from '@/components/actions/QrScannerDialog';
@@ -118,20 +121,164 @@ function formatRelative(iso: string | null): string {
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
 
+/**
+ * Body padding for every card inside the Setup and Access tabs.
+ *
+ * One value, because the tabs used three: the two Setup cards did not match
+ * each other (py-3 vs p-5) and Access matched neither, so switching tabs made
+ * the content jump and Access read as cramped next to the roomy credentials
+ * card. A constant rather than a convention because the convention is what
+ * drifted.
+ */
+/** The API's own error message off an axios rejection, without reaching for `any`. */
+function apiError(err: unknown): string | undefined {
+  return (err as { response?: { data?: { error?: string } } } | null)?.response?.data?.error;
+}
+
+const TAB_CARD_BODY = 'p-5 space-y-4';
+
+/**
+ * A card that sits INSIDE the tab panel.
+ *
+ * The panel is the tab's own surface (bg-card, the same colour the active tab
+ * is cut from), so a stock Card — also bg-card — vanished into it, leaving only
+ * a border. The tint is the app's in-panel shade (the one ConfigRow uses), so
+ * it reads as a section of the tab in both themes: recessed on light, raised on
+ * dark.
+ *
+ * py-0 because Card's own py-6 stacked on top of the body padding: the
+ * constant above should be the one place a card's padding is decided.
+ */
+const TAB_CARD = 'bg-muted/40 shadow-none py-0';
+
+/**
+ * What this page last showed, kept across remounts.
+ *
+ * Stepping to another browser navigates to another [id], and Next mounts a
+ * fresh page for it. Starting that page empty put a full-page spinner in place
+ * of everything for the length of seven requests, so the whole page vanished
+ * and came back on every step — for a view that differs only in the one
+ * browser's status and credentials.
+ *
+ * Seeded from here, the next browser renders at once from the pool the page
+ * already had, and the fetch refreshes it quietly behind. Only seeded within
+ * the SAME pool: arriving at an unrelated login from the list must not flash
+ * the previous login's groups and scripts.
+ */
+type PageSnapshot = {
+  orgId: string;
+  poolId: string;
+  allLogins: Login[];
+  groups: AgentAccessGroup[];
+  loginGroupIds: string[];
+  scripts: BrowserScript[];
+  /** Credential names on file, by browser — fetched for the whole pool. */
+  credKeys: Record<string, string[]>;
+};
+let lastSnapshot: PageSnapshot | null = null;
+
+function seedFor(orgId: string | null | undefined, id: string) {
+  const s = lastSnapshot;
+  if (!s || !orgId || s.orgId !== orgId) return null;
+  const login = s.allLogins.find((l) => l.id === id);
+  if (!login || poolParentOf(login, s.allLogins).id !== s.poolId) return null;
+  return { ...s, login };
+}
+
+/**
+ * The read-only view of a browser that borrows Browser 1's credentials.
+ *
+ * In a shared pool every browser points at Browser 1's secret rows, so on
+ * Browser 2..N the credentials and 2FA are shown but cannot be edited here.
+ * That used to be a line of text inserted above the cards plus a disabled
+ * attribute on each field. The line pushed everything down whenever it
+ * appeared (stepping from Browser 1 to 2), and a page of individually greyed
+ * fields read as half-broken rather than deliberately locked.
+ *
+ * Now the whole block dims as one — no brightness, no colour, no pointer, and
+ * `inert` so nothing inside can be focused or tabbed to — and the explanation
+ * floats OVER it. Nothing is added to the flow, so nothing moves.
+ */
+function SharedCredentialsMask({
+  locked, editHref, children,
+}: {
+  locked: boolean;
+  editHref: string | null;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="relative">
+      <div
+        inert={locked}
+        className={cn(
+          'space-y-3 transition-[opacity,filter] duration-200',
+          locked && 'pointer-events-none select-none opacity-40 grayscale',
+        )}
+      >
+        {children}
+      </div>
+      {locked && (
+        // Spans the block so the notice can stay in view (sticky) while the
+        // dimmed cards scroll beneath it. mt-32 sets it over the credential
+        // rows — the part that is actually locked — rather than over the card
+        // title and login script, which stay readable above it.
+        <div className="pointer-events-none absolute inset-0 z-10 flex justify-center">
+          <div className="pointer-events-auto sticky top-24 mt-32 flex h-fit max-w-md items-center gap-3 rounded-lg border bg-card px-4 py-3 shadow-lg">
+            <Lock className="h-4 w-4 shrink-0 text-muted-foreground" />
+            <p className="text-xs leading-snug text-muted-foreground">
+              <span className="block text-sm font-medium text-foreground">Read-only on this browser</span>
+              Every browser in this pool signs in with Browser 1&apos;s credentials and two-factor.
+            </p>
+            {editHref && (
+              <Button asChild size="sm" variant="outline" className="shrink-0 text-xs">
+                <Link href={editHref}>Edit on Browser 1</Link>
+              </Button>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function EditLoginPage() {
   const { id } = useParams() as { id: string };
   const { selectedOrgId } = useAdminViewStore();
   const allowed = useRequirePermission('agent_center_user');
   const router = useRouter();
   const { confirm } = useConfirmDialog();
+  // Read once, at mount — see PageSnapshot.
+  const [seed] = useState(() => seedFor(selectedOrgId, id));
 
-  const [login, setLogin] = useState<Login | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [login, setLogin] = useState<Login | null>(seed?.login ?? null);
+  // Every login in the org, so the pool panel can find this one's siblings.
+  // Members are ordinary rows linked by pool_parent_id; there is no
+  // "get the pool" endpoint and one list call is cheaper than adding one.
+  const [allLogins, setAllLogins] = useState<Login[]>(seed?.allLogins ?? []);
+  // The login this page represents to the operator. On Browser 2's page it is
+  // still the pool's parent — name, script, Slack override and access groups
+  // all live there, because to the operator it is one login with N browsers.
+  const poolParent = login ? poolParentOf(login, allLogins) : null;
+  const loginLevelId = poolParent?.id ?? id;
+  const pooled = !!login && poolOf(login, allLogins).length > 1;
+  const sharedCreds = poolParent?.pool_shared_credentials ?? true;
+  // Read-only here, editable on Browser 1. In a shared pool every browser
+  // points at ONE secret row, so an edit from Browser 2 would rewrite it for
+  // all of them — the backend refuses that with a 409 (see assertOwnsCredentials),
+  // and this makes the page say so up front instead of failing on Save.
+  const identityLocked = pooled && sharedCreds && !!login?.pool_parent_id;
+  // The full-page spinner is for a page with NOTHING to show yet. Once a
+  // login is on screen a reload — a mode change, a save, stepping to another
+  // browser — refreshes it in place instead of blanking it.
+  const [loading, setLoading] = useState(!seed);
+  const hasShown = useRef(!!seed);
   const [saving, setSaving] = useState(false);
-  const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
-  const [loginGroupIds, setLoginGroupIds] = useState<string[]>([]);
+  const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>(seed?.groups ?? []);
+  const [loginGroupIds, setLoginGroupIds] = useState<string[]>(seed?.loginGroupIds ?? []);
 
-  const [form, setForm] = useState<LoginFormData>({ name: '' });
+  const [form, setForm] = useState<LoginFormData>({
+    name: seed ? poolParentOf(seed.login, seed.allLogins).name : '',
+  });
 
   // Login session state. `startingAction` tracks WHICH button was just
   // clicked so we only spin the one that's actually starting up — a single
@@ -155,20 +302,43 @@ export default function EditLoginPage() {
   // `scripts` = the 'login' pool (auto-login slot). There is no second slot:
   // the verify script is gone, and proving the session is a step of the
   // business script now ("Proves we are signed in", in the script editor).
-  const [scripts, setScripts] = useState<BrowserScript[]>([]);
-  const [scriptId, setScriptId] = useState<string | null>(null);
+  const [scripts, setScripts] = useState<BrowserScript[]>(seed?.scripts ?? []);
+  const [scriptId, setScriptId] = useState<string | null>(seed?.login.auto_login_script_id ?? null);
   // Credential KEYS are no longer typed by hand — they're the login script's
   // declared inputs. `storedCredKeys` is what's actually on file (names only,
   // never values) so each row can show Set / Not set. `credDrafts` holds
   // values the operator has typed but not yet submitted.
-  const [storedCredKeys, setStoredCredKeys] = useState<string[]>([]);
+  const [storedCredKeys, setStoredCredKeys] = useState<string[]>(seed?.credKeys[id] ?? []);
   const [credDrafts, setCredDrafts] = useState<Record<string, string>>({});
   const [revealedCred, setRevealedCred] = useState<Record<string, boolean>>({});
   const [savingCreds, setSavingCreds] = useState(false);
   // Login scripts are no longer listed on the general Scripts page — this
   // login IS their home, so the page has to be able to open one for editing.
   // '2fa' is gone — two-factor lives inside Setup now.
-  const [tab, setTab] = useState<'setup' | 'runs' | 'access'>('setup');
+  // The tab lives in the URL (?tab=credentials). That tab holds the Log In button,
+  // so a "needs login" link from Slack has to be able to land on it, and
+  // stepping between browsers has to keep you there rather than dropping you
+  // back on Setup at every step.
+  const searchParams = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  // 'pool' is the tab's old name. Slack messages already sent link to it, so
+  // it stays an alias for good.
+  const credsParam = tabParam === 'credentials' || tabParam === 'pool';
+  const [tab, setTab] = useState<'setup' | 'credentials'>(credsParam ? 'credentials' : 'setup');
+  const tabChosen = useRef(credsParam || tabParam === 'setup');
+  const changeTab = (v: 'setup' | 'credentials') => {
+    tabChosen.current = true;
+    setTab(v);
+    router.replace(`/actions/logins/${id}?tab=${v}`, { scroll: false });
+  };
+  // Nothing asked for, and this login needs signing in: open where Log In is,
+  // not on Setup with the button one tab away.
+  useEffect(() => {
+    if (!tabChosen.current && login?.status === 'needs_login') {
+      tabChosen.current = true;
+      setTab('credentials');
+    }
+  }, [login?.status]);
   const [editingName, setEditingName] = useState(false);
 
   // ── TOTP (authenticator 2FA) state ───────────────────────────────
@@ -210,7 +380,7 @@ export default function EditLoginPage() {
   // Tracked separately from `login.notification_slack_channel_id` so the
   // operator can type freely without an immediate PATCH; persisted by the
   // existing main Save button alongside the other login fields.
-  const [slackChannelId, setSlackChannelId] = useState<string>('');
+  const [slackChannelId, setSlackChannelId] = useState<string>(seed?.login.notification_slack_channel_id ?? '');
 
   // Auto-login TEST state — driven by `login.test_phase` SSE events. No
   // browser viewer; the operator gets live status text + a final outcome
@@ -231,62 +401,6 @@ export default function EditLoginPage() {
     message: string;
   } | null>(null);
 
-  // Recent run audit rows — sourced from agent_login_run_log. Paginated
-  // 10-per-page server-side so the table stays small regardless of how
-  // many historical runs a login has accumulated.
-  //
-  // SSE-triggered refreshes re-fetch the CURRENT page. New rows always
-  // land on page 0 (newest-first ordering) — if the operator is browsing
-  // an older page we leave them where they are; only their view of that
-  // older page refreshes (which won't actually change).
-  const RUNS_PER_PAGE = 10;
-  const [recentRuns, setRecentRuns] = useState<LoginRunAudit[]>([]);
-  const [recentRunsPage, setRecentRunsPage] = useState(0);
-  const [recentRunsTotal, setRecentRunsTotal] = useState(0);
-  const recentRunsTotalPages = Math.max(1, Math.ceil(recentRunsTotal / RUNS_PER_PAGE));
-  const loadRecentRuns = useCallback(async (page = recentRunsPage) => {
-    if (!selectedOrgId || !id) return;
-    try {
-      const res = await listLoginRuns(selectedOrgId, id, {
-        limit:  RUNS_PER_PAGE,
-        offset: page * RUNS_PER_PAGE,
-      });
-      setRecentRunsTotal((prev) => (prev === res.total ? prev : res.total));
-      // If the total shrank below the current page (rare — cascade delete
-      // or admin cleanup), snap back to the last valid page. Skip the
-      // rows update so we don't briefly flash an empty table; the snap
-      // will retrigger this callback with the right page.
-      const maxPage = Math.max(0, Math.ceil(res.total / RUNS_PER_PAGE) - 1);
-      if (page > maxPage) {
-        setRecentRunsPage(maxPage);
-        return;
-      }
-      // Reference-stable update — SSE breadcrumbs during a long run cause
-      // this to refetch repeatedly even though the audit list rarely
-      // changes mid-run. Replacing the array on every fetch was forcing
-      // the table to re-render and the page to "bounce". Only swap in
-      // the new array when the shape OR content of any row differs.
-      setRecentRuns((prev) => {
-        if (prev.length !== res.rows.length) return res.rows;
-        for (let i = 0; i < prev.length; i++) {
-          const a = prev[i];
-          const b = res.rows[i];
-          if (
-            a.id !== b.id
-            || a.status !== b.status
-            || a.outcome !== b.outcome
-            || a.error_message !== b.error_message
-            || a.started_at !== b.started_at
-          ) {
-            return res.rows;
-          }
-        }
-        return prev;
-      });
-    } catch {
-      // Best-effort — don't toast on this one, it's a secondary panel.
-    }
-  }, [selectedOrgId, id, recentRunsPage]);
 
   // Subscribe to active session changes
   useEffect(() => {
@@ -382,7 +496,7 @@ export default function EditLoginPage() {
           // Pull the latest login row + audit list so the status pill and
           // recent-runs table reflect reality. Silent: don't blow away
           // the form.
-          if (selectedOrgId) { load(true); loadRecentRuns(); }
+          if (selectedOrgId) { load(true); }
         }
       } catch {
         // Treat fetch failures as terminal — better to unstick the UI and
@@ -426,7 +540,7 @@ export default function EditLoginPage() {
                     ? 'Test was aborted.'
                     : 'Auto-login test failed.',
             });
-            if (selectedOrgId) { load(true); loadRecentRuns(); }
+            if (selectedOrgId) { load(true); }
           }
         }).catch(() => {});
       }
@@ -449,7 +563,7 @@ export default function EditLoginPage() {
    */
   const load = useCallback(async (silent = false) => {
     if (!selectedOrgId || !id) return;
-    if (!silent) setLoading(true);
+    if (!silent && !hasShown.current) setLoading(true);
     try {
       if (silent) {
         // Lightweight refresh — just pull the login row. Status / pill /
@@ -462,34 +576,43 @@ export default function EditLoginPage() {
         // closes over `login`) and produced a "bouncing page" feel. Only
         // swap in the new object when a display-relevant field actually
         // changed.
-        const loginData = await getLogin(selectedOrgId, id);
-        setLogin((prev) => {
-          if (!prev) return loginData;
-          const changed =
-            prev.status !== loginData.status
-            || prev.last_checked_at !== loginData.last_checked_at
-            || prev.last_logged_in_at !== loginData.last_logged_in_at
-            || prev.credentials_secret_id !== loginData.credentials_secret_id
-            || prev.auto_login_script_id !== loginData.auto_login_script_id
-            || prev.notification_slack_channel_id !== loginData.notification_slack_channel_id
-            || prev.name !== loginData.name
-            || prev.url !== loginData.url;
-          return changed ? loginData : prev;
-        });
+        //
+        // Compared by VALUE, not by a hand-picked list of fields. The list this
+        // replaced (status, name, url and five more) went stale every time a
+        // column was added: proxy_enabled, proxy_ip_id, pool_shared_credentials
+        // and every MFA field were missing, so a save that changed only those
+        // left the page showing the old value until a hard refresh.
+        //
+        // The pool is refreshed too. The stepper shows every browser's status,
+        // and the silent path used to leave the siblings as they were at first
+        // load — Browser 2 signing in behind you never showed.
+        const [loginData, everyLogin] = await Promise.all([
+          getLogin(selectedOrgId, id),
+          listLogins(selectedOrgId).catch(() => null),
+        ]);
+        const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+        setLogin((prev) => (prev && same(prev, loginData) ? prev : loginData));
+        if (everyLogin) setAllLogins((prev) => (same(prev, everyLogin) ? prev : everyLogin));
         return;
       }
       // The auto-login picker offers only 'login' scripts (migration 283),
       // so the kind filter is the server's definition rather than a
       // client-side guess.
-      const [loginData, groups, loginGroups, loginScriptsData, credKeys] = await Promise.all([
+      const [loginData, groups, loginGroups, loginScriptsData, credKeys, everyLogin] = await Promise.all([
         getLogin(selectedOrgId, id),
         getAgentAccessGroups(selectedOrgId),
         getLoginAccessGroups(selectedOrgId, id),
         listScripts(selectedOrgId, { kinds: ['login'] }).catch(() => ({ scripts: [] as BrowserScript[] })),
         getLoginCredentialKeys(selectedOrgId, id).catch(() => [] as string[]),
+        // Non-fatal: the pool panel simply does not render without it.
+        listLogins(selectedOrgId).catch(() => [] as Login[]),
       ]);
       setLogin(loginData);
-      setForm({ name: loginData.name });
+      setAllLogins(everyLogin);
+      // The title is the LOGIN's name, never the browser's. Members are stored
+      // as "<login> #2", "#3", but to the operator this is one login with N
+      // browsers, so the header must not change as they step between them.
+      setForm({ name: poolParentOf(loginData, everyLogin).name });
       setAllGroups(groups);
       setLoginGroupIds(loginGroups.map((g) => g.id));
       setScripts(loginScriptsData.scripts ?? []);
@@ -502,6 +625,29 @@ export default function EditLoginPage() {
       // wiped mid-edit.
       setCredDrafts({});
       setRevealedCred({});
+      hasShown.current = true;
+
+      // Remember it for the next browser's page, and fetch every sibling's
+      // credential names now, so stepping to one does not flash "Not set" on
+      // credentials it has. A pool is at most ten small requests.
+      const poolId = poolParentOf(loginData, everyLogin).id;
+      const prevKeys = lastSnapshot?.poolId === poolId ? lastSnapshot.credKeys : {};
+      const snap: PageSnapshot = {
+        orgId: selectedOrgId,
+        poolId,
+        allLogins: everyLogin,
+        groups,
+        loginGroupIds: loginGroups.map((g) => g.id),
+        scripts: loginScriptsData.scripts ?? [],
+        credKeys: { ...prevKeys, [id]: credKeys },
+      };
+      lastSnapshot = snap;
+      for (const m of poolOf(loginData, everyLogin)) {
+        if (m.id === id) continue;
+        getLoginCredentialKeys(selectedOrgId, m.id)
+          .then((keys) => { snap.credKeys[m.id] = keys; })
+          .catch(() => { /* the page fetches its own on arrival anyway */ });
+      }
     } catch {
       if (!silent) toast.error('Failed to load login');
     } finally {
@@ -525,7 +671,7 @@ export default function EditLoginPage() {
   // operator sees start + terminal states — the intermediate phase
   // granularity was nice-to-have. All refreshes stay silent
   // (load(silent=true)) so the form/credentials editor never flickers,
-  // and the reference-stable setLogin/setRecentRuns updates mean a
+  // and the reference-stable setLogin update means a
   // refetch with unchanged data re-renders nothing.
   const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const versionTopics = useMemo(
@@ -548,7 +694,7 @@ export default function EditLoginPage() {
   // What that costs: the status badge can sit stale while you edit if an agent
   // signs in behind you. It refreshes the moment you open Runs, start anything,
   // or reload — and it was never the reason this page was open.
-  const watchable = !!activeSession || tab === 'runs';
+  const watchable = !!activeSession;
   useTopicVersions({
     topics: versionTopics,
     enabled: !!selectedOrgId && watchable,
@@ -556,12 +702,11 @@ export default function EditLoginPage() {
       // Debounce so a burst of near-simultaneous changes (login_run
       // completed + login status flip) coalesces into a single fetch.
       if (refreshTimer.current) clearTimeout(refreshTimer.current);
-      refreshTimer.current = setTimeout(() => { load(true); loadRecentRuns(); }, 300);
+      refreshTimer.current = setTimeout(() => { load(true); }, 300);
     },
   });
 
-  // Initial + reload-driven fetch of the recent runs.
-  useEffect(() => { loadRecentRuns(); }, [loadRecentRuns]);
+
 
   const handleSave = async () => {
     if (!selectedOrgId || !id) return;
@@ -577,13 +722,18 @@ export default function EditLoginPage() {
       // (explicit clear); only send the field if it actually changed.
       const normalizedSlack = slackChannelId.trim() || null;
       const slackChanged = normalizedSlack !== (login?.notification_slack_channel_id ?? null);
-      await updateLogin(selectedOrgId, id, {
+      // Name, login script and the Slack override belong to the LOGIN, so they
+      // go to the pool parent even from Browser 2's page. Writing them to the
+      // member would rename just that browser — and the pool trigger rejects a
+      // script change on a member outright, since every browser in a pool has
+      // to sign in the same way.
+      await updateLogin(selectedOrgId, loginLevelId, {
         name: form.name.trim(),
 
         ...(scriptChanged ? { auto_login_script_id: scriptId } : {}),
         ...(slackChanged ? { notification_slack_channel_id: normalizedSlack } : {}),
       });
-      await setLoginAccessGroups(selectedOrgId, id, loginGroupIds).catch(() => {});
+      await setLoginAccessGroups(selectedOrgId, loginLevelId, loginGroupIds).catch(() => {});
       toast.success('Login saved');
       // Refresh to get latest data
       const updated = await getLogin(selectedOrgId, id);
@@ -934,19 +1084,43 @@ export default function EditLoginPage() {
   };
 
 
+  // On Browser 2..N this removes THAT BROWSER (the pool gets one smaller);
+  // on Browser 1 it deletes the login and every browser in its pool.
+  const browserPosition = login && pooled
+    ? poolOf(login, allLogins).findIndex((m) => m.id === login.id) + 1
+    : 1;
+  const removesBrowser = !!login?.pool_parent_id;
+
   const handleDelete = async () => {
     if (!selectedOrgId || !id) return;
-    const ok = await confirm({
-      title: 'Delete login?',
-      description: `"${login?.name}" will be removed. Any agent actions referencing it will break.`,
-      confirmText: 'Delete',
-      variant: 'destructive',
-    });
+    const poolSize = login ? poolOf(login, allLogins).length : 1;
+    const ok = await confirm(removesBrowser
+      ? {
+          title: `Remove Browser ${browserPosition}?`,
+          description:
+            'It is removed from the pool with its saved sign-in, and the pool size drops by one. '
+            + 'If a run is using it, that run finishes first. Credentials Browser 1 still uses are kept.',
+          confirmText: 'Remove browser',
+          variant: 'destructive',
+        }
+      : {
+          title: 'Delete login?',
+          description:
+            `"${form.name || login?.name}"${poolSize > 1 ? ` and all ${poolSize} of its browsers` : ''} will be removed. `
+            + 'Any agent actions referencing it will break.',
+          confirmText: 'Delete',
+          variant: 'destructive',
+        });
     if (!ok) return;
     try {
       await deleteLogin(selectedOrgId, id);
-      toast.success('Deleted');
-      router.push('/actions/logins');
+      if (removesBrowser && poolParent) {
+        toast.success(`Browser ${browserPosition} removed`);
+        router.push(`/actions/logins/${poolParent.id}?tab=credentials`);
+      } else {
+        toast.success('Deleted');
+        router.push('/actions/logins');
+      }
     } catch (err: any) {
       toast.error(err.response?.data?.error || 'Failed to delete');
     }
@@ -978,40 +1152,108 @@ export default function EditLoginPage() {
   // spinner + "Logging out..." while active and the toast in that
   // effect surfaces any failure.
   /**
-   * Wipe the saved browser state for this login — cookies + localStorage in
-   * the profile Chrome actually runs against, plus the stored storage_state.
+   * One set of credentials for the whole pool, or one per browser.
    *
-   * NOT the same as Log Out. Logging out uses the site's own sign-out UI,
-   * and a "trust this device / remember me for 30 days" cookie is designed
-   * to SURVIVE that — so a logout leaves 2FA suppressed on the next sign-in.
-   * This clears the jar outright, so the site treats the next visit as a
-   * brand-new device and challenges for 2FA again.
+   * Browser 1's credentials are never touched in either direction, so
+   * unchecking and rechecking is always a clean round trip.
    *
-   * Destructive and rarely needed, hence a confirm: the next run has to do a
-   * full sign-in, which for a 2FA site means either an enrolled secret or a
-   * human.
+   * Going SEPARATE loses nothing — each browser gets its own copy of Browser
+   * 1's — so it gets a light confirm. Going SHARED deletes each browser's own
+   * credentials, but that only loses anything if they DIFFER from Browser 1's.
+   * The backend checks (the page never sees secret values): when nothing
+   * differs — undoing an accidental uncheck, say — it just applies, because a
+   * "this can't be undone" warning there would be false and would land on
+   * exactly the person trying to undo a mistake.
    */
-  const handleClearSession = async () => {
+  const handleCredentialMode = async (shared: boolean) => {
     if (!selectedOrgId || !id) return;
-    const ok = await confirm({
-      title: 'Clear saved browser session?',
-      description:
-        'Deletes the cookies and local storage this login has saved, including any '
-        + '"remember this device" cookie that suppresses 2FA. The next run must sign in '
-        + 'from scratch. Use this when you need the site to challenge for 2FA again.',
-      confirmText: 'Clear session',
-      variant: 'destructive',
-    });
+    let ok = true;
+    if (shared) {
+      const { wouldDiscard } = await previewPoolCredentialMode(selectedOrgId, id)
+        .catch(() => ({ wouldDiscard: -1 }));       // unknown → assume the worst
+      if (wouldDiscard !== 0) {
+        const n = wouldDiscard > 0 ? wouldDiscard : null;
+        ok = await confirm({
+          title: 'Use the same credentials for every browser?',
+          description:
+            (n
+              ? `${n} browser${n === 1 ? ' has' : 's have'} credentials of ${n === 1 ? 'its' : 'their'} own, `
+                + "different from Browser 1's. They will be deleted"
+              : "Every browser's own credentials and authenticator setup will be deleted")
+            + ", and all browsers will sign in with Browser 1's. This can't be undone — you would "
+            + 'have to enter them again.',
+          confirmText: "Use Browser 1's for all",
+          variant: 'destructive',
+        });
+      }
+    } else {
+      ok = await confirm({
+        title: 'Give each browser its own credentials?',
+        description:
+          "Each browser starts with a copy of Browser 1's, so nothing stops working. Then change each "
+          + 'one to its own account. Browsers added later start blank and need theirs entered. '
+          + "Browser 1's credentials stay as they are, so re-checking this later loses nothing.",
+        confirmText: 'Separate credentials',
+      });
+    }
     if (!ok) return;
-    setStartingAction('clear_session');
     try {
-      await clearLoginSession(selectedOrgId, id);
-      toast.success('Saved session cleared — the next sign-in starts clean');
+      await setPoolCredentialMode(selectedOrgId, id, shared);
       await load();
-    } catch (err: any) {
-      toast.error(err?.response?.data?.error || err?.message || 'Failed to clear the session');
-    } finally {
-      setStartingAction(null);
+      toast.success(shared
+        ? 'Every browser now uses the same credentials'
+        : 'Each browser now has its own credentials');
+    } catch (err) {
+      toast.error(apiError(err) || 'Failed to change how this pool shares credentials');
+    }
+  };
+
+  /**
+   * Change how many browsers this login may use at once.
+   *
+   * Lowering it removes the highest-numbered browsers, so it asks first — their
+   * saved sign-ins go with them. Nothing is interrupted: a browser in use
+   * finishes its current run and is removed after.
+   */
+  const handlePoolSize = async (n: number) => {
+    if (!selectedOrgId || !id || !login) return;
+    const inService = poolOf(login, allLogins).filter((m) => !m.pool_removing_at).length;
+    if (n < inService) {
+      const going = Array.from({ length: inService - n }, (_, i) => n + i + 1);
+      const names = going.length === 1 ? `Browser ${going[0]}` : `Browsers ${going.join(', ')}`;
+      const ok = await confirm({
+        title: `Lower the pool to ${n}?`,
+        description:
+          `${names} ${going.length === 1 ? 'is' : 'are'} removed, with ${going.length === 1 ? 'its' : 'their'} saved sign-in. `
+          + 'A browser in use finishes its current run first. Credentials Browser 1 still uses are kept.',
+        confirmText: `Remove ${going.length === 1 ? 'it' : 'them'}`,
+        variant: 'destructive',
+      });
+      if (!ok) return;
+    }
+    try {
+      const r = await setPoolSize(selectedOrgId, id, n);
+      const list = (xs: number[]) => xs.map((x) => `Browser ${x}`).join(', ');
+      const parts = [
+        r.removed.length ? `${list(r.removed)} removed` : '',
+        r.draining.length ? `${list(r.draining)} will be removed when its run finishes` : '',
+        r.restored.length ? `${list(r.restored)} kept — its removal was cancelled` : '',
+      ].filter(Boolean);
+      toast.success(parts.length
+        ? `Pool size ${n}. ${parts.join('. ')}.`
+        : n === 1
+          ? 'One browser — runs on this login now take turns'
+          : `Up to ${n} browsers — added as concurrent runs need them`);
+      // This page's browser may be the one that just went.
+      const everyLogin = await listLogins(selectedOrgId);
+      setAllLogins(everyLogin);
+      if (!everyLogin.some((l) => l.id === id) && poolParent) {
+        router.push(`/actions/logins/${poolParent.id}?tab=credentials`);
+      } else {
+        await load(true);
+      }
+    } catch (err) {
+      toast.error(apiError(err) || 'Failed to update the number of browsers');
     }
   };
 
@@ -1165,8 +1407,12 @@ export default function EditLoginPage() {
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <Button variant="outline" size="sm" onClick={handleDelete} className="text-destructive hover:text-destructive">
-            <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
+          <Button
+            variant="outline" size="sm" onClick={handleDelete}
+            disabled={!!login.pool_removing_at}
+            className="text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-3.5 w-3.5 mr-1" /> {removesBrowser ? 'Remove browser' : 'Delete'}
           </Button>
           {/* A login script is required, not optional.
               Nothing works without one: the agent path signs in by running it,
@@ -1185,9 +1431,152 @@ export default function EditLoginPage() {
         </div>
       </div>
 
+      <Tabs value={tab} onValueChange={(v) => changeTab(v as typeof tab)}>
+        {/* Two tabs, split by WHO a setting belongs to.
+
+            Setup — the LOGIN: who can complete it, how many browsers it may
+            use, whether they share one set of credentials, and whether it goes
+            out through the proxy. Identical from every browser's page.
+
+            Credentials — ONE BROWSER: which one you are on, its sign-in state and
+            Log In, and its credentials, 2FA and (in a separate-credentials
+            pool) its own proxy IP.
+
+            To the operator this is one login with a pool of credentials, so
+            the login-wide things are never repeated per browser. */}
+        <TabsList>
+          <TabsTrigger value="setup">
+            <Settings2 className="h-3.5 w-3.5" /> Setup
+          </TabsTrigger>
+          <TabsTrigger value="credentials">
+            <KeyRound className="h-3.5 w-3.5" /> Credentials
+            {pooled && login && <TabsCount>{poolOf(login, allLogins).length}</TabsCount>}
+          </TabsTrigger>
+        </TabsList>
+
+        {/* The body the active tab opens into — same surface and border, so
+            the tab reads as the lid of this panel rather than a label floating
+            above loose cards. Same pattern as the agent page. */}
+        <TabsPanel className="p-4">
+        <TabsContent value="setup" className="space-y-3 mt-0">
+
+      {/* The pool, as the login sees it: how big, and one account or many. */}
+      {login && (
+        <Card className={TAB_CARD}>
+          <CardContent className={TAB_CARD_BODY}>
+            <PoolSizeControl
+              maxBrowsers={poolParent?.max_browsers ?? 1}
+              onChange={handlePoolSize}
+            />
+            {pooled && (
+              <div className="flex items-center justify-between gap-3 border-t pt-4">
+                <label className="flex cursor-pointer items-center gap-3">
+                  <Checkbox
+                    checked={sharedCreds}
+                    onCheckedChange={(v) => handleCredentialMode(v === true)}
+                  />
+                  <span>
+                    <span className="block text-sm font-medium">Same credentials for every browser</span>
+                    <span className="block text-xs text-muted-foreground">
+                      {sharedCreds
+                        ? 'One account for the whole pool. Browsers sign in one at a time.'
+                        : 'Each browser signs in with its own account, in parallel.'}
+                    </span>
+                  </span>
+                </label>
+                <InfoBubble>
+                  Shared: every browser uses Browser 1&apos;s credentials, authenticator and 2FA
+                  settings, edited on Browser 1&apos;s Credentials tab. Separate: each browser has its own —
+                  use this for sites that allow only one session per account. Switching to shared
+                  deletes each browser&apos;s own credentials.
+                </InfoBubble>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Whether the login goes out through the proxy, and — when the IP is the
+          login's rather than each browser's — which IP. */}
+      {login && selectedOrgId && (
+        <ProxyCard
+          mode="login"
+          className={TAB_CARD}
+          orgId={selectedOrgId}
+          login={login}
+          pooled={pooled}
+          sharedCredentials={sharedCreds}
+          onSaved={() => load(true)}
+        />
+      )}
+
+      {/* Groups and channel in ONE card, because they are one decision.
+          The channel is not general-purpose notification: it is resolved for
+          exactly two events, notifyHitlPause ("this login needs a human") and
+          notifyLoginAutoResolved ("it recovered, stand down"). Both are
+          addressed to the same people the groups authorise, so splitting them
+          across two cards asked the same question twice. */}
+      <Card className={TAB_CARD}>
+        <CardContent className={TAB_CARD_BODY}>
+          <Field
+            label="Who can complete this login"
+            info="The groups allowed to finish a sign-in when an agent pauses for a human. Shared across every agent that uses this login profile."
+          >
+          <div className={cn('space-y-2', CONTROL_W)}>
+          <MultiSelectTags
+            options={allGroups.map((g) => ({ value: g.id, label: `${g.name} (${g.member_count})` }))}
+            selected={loginGroupIds}
+            onChange={setLoginGroupIds}
+            placeholder="Select access groups..."
+          />
+          {loginGroupIds.length === 0 ? (
+            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
+              <Globe className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                <strong>Open to everyone.</strong> With no groups selected, any user with Agent Center access in this organization can complete this login when an agent pauses. Add one or more groups to restrict it.
+              </span>
+            </div>
+          ) : (
+            <div className="flex items-start gap-2 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
+              <Users className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+              <span>
+                <strong>Restricted.</strong> Only members of the {loginGroupIds.length === 1 ? 'selected group' : `${loginGroupIds.length} selected groups`} can complete this login.
+              </span>
+            </div>
+          )}
+          </div>
+          </Field>
+
+          {/* Where those people are told.
+              Blank DOES mean silent. There is no org-default channel — it was
+              retired in migration 200 — so the cascade is: this field, then the
+              run's program channel if it is a submissions run, then nothing.
+              SlackChannelInput says so itself; this description only covers
+              what the channel is used for. */}
+          <div className="border-t pt-4">
+            <SlackChannelInput
+              scope="login"
+              label="Slack alert when a person needs to sign in"
+              purpose="If an agent can't sign in on its own — the login script fails, or the site asks for something only a person can give — it pauses and posts here asking someone to finish the sign-in. A follow-up is posted if the login recovers by itself before anyone does."
+              value={slackChannelId}
+              onChange={setSlackChannelId}
+              description="Click Save at the top of the page to keep a change."
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+        </TabsContent>
+
+        <TabsContent value="credentials" className="space-y-3 mt-0">
+
+      {/* Which browser, then everything about it below — so it is explicit that
+          the status, Log In and credentials that follow belong to THIS browser. */}
+      {login && <PoolStepper login={login} all={allLogins} />}
+
       {/* Status + actions card */}
-      <Card>
-        <CardContent className="py-2 px-4">
+      <Card className={TAB_CARD}>
+        <CardContent className="py-3 px-4">
           <div className="flex items-center justify-between gap-3 flex-wrap">
             <div className="flex items-center gap-3 flex-wrap">
               <StatusPill status={login.status} />
@@ -1201,7 +1590,12 @@ export default function EditLoginPage() {
               )}
             </div>
             <div className="flex items-center gap-2">
-              {needsLogin ? (
+              {login.pool_removing_at ? (
+                // Taking no new runs or sign-ins; the backend refuses both.
+                <span className="text-xs text-muted-foreground">
+                  Being removed — finishes its current run, then goes
+                </span>
+              ) : needsLogin ? (
                 // Spinner while the request to /startLogin is in flight —
                 // brief, and before the dialog opens.
                 <Button size="sm" onClick={handleLogin} disabled={isStarting || !!activeSession}
@@ -1231,22 +1625,6 @@ export default function EditLoginPage() {
                       {activeSession && activeSession.kind === 'login_logout' ? 'Logging out...' : 'Log Out'}
                     </span>
                   </Button>
-                  {/* Clear session — the only way to drop a "remember this
-                      device" cookie, which a site-side logout deliberately
-                      keeps. Sits next to Log Out because that's where people
-                      look for it, styled quieter since it's rarely right. */}
-                  <Button
-                    variant="ghost" size="sm"
-                    onClick={handleClearSession}
-                    disabled={isStarting || !!activeSession}
-                    className="text-xs text-muted-foreground hover:text-destructive"
-                    title="Delete saved cookies for this login, including any 2FA 'remember this device' cookie"
-                  >
-                    {startingAction === 'clear_session'
-                      ? <Loader2 className="h-3 w-3 animate-spin" />
-                      : <Eraser className="h-3 w-3" />}
-                    <span className="ml-1">Clear session</span>
-                  </Button>
                 </>
               )}
               {/* Watch button for in-flight verify / manual login sessions —
@@ -1263,31 +1641,13 @@ export default function EditLoginPage() {
         </CardContent>
       </Card>
 
-      <Tabs value={tab} onValueChange={(v) => setTab(v as typeof tab)} className="space-y-3">
-        {/* Equal min-width on every trigger so the pill group doesn't
-            resize as labels change length — a ragged tab bar is the first
-            thing that makes a page look unfinished. */}
-        <TabsList className="h-10">
-          <TabsTrigger value="setup" className="min-w-[148px] gap-1.5">
-            <Settings2 className="h-3.5 w-3.5" /> Setup
-          </TabsTrigger>
-          <TabsTrigger value="runs" className="min-w-[148px] gap-1.5">
-            <History className="h-3.5 w-3.5" /> Runs
-          </TabsTrigger>
-          {/* Was "Handoff", which named the moment rather than the setting —
-              nothing in it said this is where you authorise people. Everything
-              on the tab answers one question, WHO: which groups may complete
-              this login, and where they get told to. So: Access. */}
-          <TabsTrigger value="access" className="min-w-[148px] gap-1.5">
-            <Users className="h-3.5 w-3.5" /> Access
-          </TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="setup" className="space-y-3 mt-0">
-
+      <SharedCredentialsMask
+        locked={identityLocked}
+        editHref={poolParent ? `/actions/logins/${poolParent.id}?tab=credentials` : null}
+      >
       {/* Login */}
-      <Card>
-        <CardContent className="py-3 px-5 space-y-3">
+      <Card className={TAB_CARD}>
+        <CardContent className={TAB_CARD_BODY}>
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-0.5">
               <Label className="flex items-center gap-1.5">
@@ -1406,7 +1766,7 @@ Agents sign in unattended when the script and its values are set.
             </p>
           )}
 
-          {/* Credentials — rows derived from the login script's inputs.
+              {/* Credentials — rows derived from the login script's inputs.
               Keys are no longer typed by hand: a misspelled key used to
               substitute blank at runtime with no visible cause, which was
               the most common auto-login failure. The script declares what
@@ -1530,7 +1890,6 @@ Agents sign in unattended when the script and its values are set.
         </CardContent>
       </Card>
 
-
       {/* Two-factor — was its own tab.
           It moved here because Setup had shrunk to a script picker and a
           credentials list, and because the split was misleading: a 2FA source
@@ -1543,8 +1902,8 @@ Agents sign in unattended when the script and its values are set.
           once that source is chosen. A login with no second factor sees one
           dropdown. */}
 
-      <Card>
-        <CardContent className="p-5 space-y-4">
+      <Card className={TAB_CARD}>
+        <CardContent className={TAB_CARD_BODY}>
           {/* Which source supplies {{_mfa}}. Above the enrolment UI because it
               decides whether that UI is relevant at all — an authenticator
               secret is meaningless on a login that reads its codes from Slack. */}
@@ -1751,205 +2110,24 @@ Agents sign in unattended when the script and its values are set.
           )}
         </CardContent>
       </Card>
+      </SharedCredentialsMask>
+
+      {/* This browser's own proxy IP — separate-credentials pools only. Renders
+          nothing otherwise: the IP is then the login's, and lives in Setup. */}
+      {login && selectedOrgId && (
+        <ProxyCard
+          mode="browser"
+          className={TAB_CARD}
+          orgId={selectedOrgId}
+          login={login}
+          pooled={pooled}
+          sharedCredentials={sharedCreds}
+          onSaved={() => load(true)}
+        />
+      )}
 
         </TabsContent>
-
-        <TabsContent value="access" className="space-y-3 mt-0">
-
-      {/* Groups and channel in ONE card, because they are one decision.
-          The channel is not general-purpose notification: it is resolved for
-          exactly two events, notifyHitlPause ("this login needs a human") and
-          notifyLoginAutoResolved ("it recovered, stand down"). Both are
-          addressed to the same people the groups authorise, so splitting them
-          across two cards asked the same question twice. */}
-      <Card>
-        <CardContent className="py-3 px-5 space-y-4">
-          <Field
-            label="Who can complete this login"
-            info="The groups allowed to finish a sign-in when an agent pauses for a human. Shared across every agent that uses this login profile."
-          >
-          <div className={cn('space-y-2', CONTROL_W)}>
-          <MultiSelectTags
-            options={allGroups.map((g) => ({ value: g.id, label: `${g.name} (${g.member_count})` }))}
-            selected={loginGroupIds}
-            onChange={setLoginGroupIds}
-            placeholder="Select access groups..."
-          />
-          {loginGroupIds.length === 0 ? (
-            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
-              <Globe className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-              <span>
-                <strong>Open to everyone.</strong> With no groups selected, any user with Agent Center access in this organization can complete this login when an agent pauses. Add one or more groups to restrict it.
-              </span>
-            </div>
-          ) : (
-            <div className="flex items-start gap-2 rounded-md border border-emerald-200 dark:border-emerald-800 bg-emerald-50/50 dark:bg-emerald-950/20 px-3 py-2 text-xs text-emerald-700 dark:text-emerald-400">
-              <Users className="h-3.5 w-3.5 shrink-0 mt-0.5" />
-              <span>
-                <strong>Restricted.</strong> Only members of the {loginGroupIds.length === 1 ? 'selected group' : `${loginGroupIds.length} selected groups`} can complete this login.
-              </span>
-            </div>
-          )}
-          </div>
-          </Field>
-
-          {/* Where those people are told.
-              Blank DOES mean silent. There is no org-default channel — it was
-              retired in migration 200 — so the cascade is: this field, then the
-              run's program channel if it is a submissions run, then nothing.
-              SlackChannelInput says so itself; this description only covers
-              what the channel is used for. */}
-          <div className="border-t pt-4">
-            <SlackChannelInput
-              scope="login"
-              value={slackChannelId}
-              onChange={setSlackChannelId}
-              description="Used for two things only: this login needs a human to sign in, and this login recovered on its own. Click Save at the top of the page to persist."
-            />
-          </div>
-        </CardContent>
-      </Card>
-
-        </TabsContent>
-
-        <TabsContent value="runs" className="space-y-3 mt-0">
-
-      {/* Recent run history — covers manual login/logout, verify, auto-login
-          test, and the login action inside agent runs (linked back to the
-          agent execution log row). Single source of truth for "why did this
-          login fail an hour ago?". */}
-      <Card>
-        <CardContent className="py-3 px-5 space-y-2">
-          <div className="flex items-center justify-between">
-            <Label>Recent runs</Label>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => loadRecentRuns()}
-            >
-              Refresh
-            </Button>
-          </div>
-          {recentRuns.length === 0 ? (
-            <p className="text-xs text-muted-foreground">
-              No runs yet. Manual login, logout, verify, auto-login test, and agent-triggered logins will all appear here.
-            </p>
-          ) : (
-            <div className="rounded-md border overflow-hidden">
-              <table className="w-full text-xs">
-                <thead className="bg-muted/40 text-muted-foreground">
-                  <tr>
-                    <th className="text-left font-medium px-3 py-1.5">When</th>
-                    <th className="text-left font-medium px-3 py-1.5">Kind</th>
-                    <th className="text-left font-medium px-3 py-1.5">Result</th>
-                    <th className="text-left font-medium px-3 py-1.5">Detail</th>
-                    <th className="text-left font-medium px-3 py-1.5 w-32">Triggered by</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {recentRuns.map((r) => {
-                    // Map status → palette + label. Two are "yellow":
-                    //   executing → in flight
-                    //   completed but outcome='not_logged_in' or 'already_valid' → informational
-                    const pillCls =
-                      r.status === 'completed'
-                        ? r.outcome === 'not_logged_in'
-                          ? 'border-amber-400 text-amber-600 dark:text-amber-400'
-                          : r.outcome === 'already_valid'
-                            ? 'border-sky-300 text-sky-600 dark:text-sky-400'
-                            : 'border-green-500 text-green-600 dark:text-green-400'
-                        : r.status === 'executing'
-                          ? 'border-slate-300 text-slate-500'
-                          : r.status === 'aborted'
-                            ? 'border-slate-400 text-slate-500'
-                            : 'border-red-400 text-red-600 dark:text-red-400';
-                    const kindLabel: Record<typeof r.kind, string> = {
-                      verify:      'Verify',
-                      manual:      'Manual login',
-                      logout:      'Manual logout',
-                      auto_test:   'Auto-login test',
-                      agent_login: 'Agent login',
-                    };
-                    const detail =
-                      r.error_message ||
-                      (r.outcome ? r.outcome.replace(/_/g, ' ') : '') ||
-                      (r.status === 'executing' ? 'in progress…' : '—');
-                    return (
-                      <tr key={r.id} className="border-t hover:bg-muted/20">
-                        <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">
-                          {formatRelative(r.started_at)}
-                        </td>
-                        <td className="px-3 py-1.5 whitespace-nowrap">{kindLabel[r.kind] ?? r.kind}</td>
-                        <td className="px-3 py-1.5 whitespace-nowrap">
-                          <Badge variant="outline" className={`text-[10px] ${pillCls}`}>
-                            {r.status === 'completed' ? (r.outcome ?? 'completed') : r.status}
-                          </Badge>
-                        </td>
-                        <td className="px-3 py-1.5 text-muted-foreground" title={detail}>
-                          <div className="max-w-[420px] truncate">{detail}</div>
-                        </td>
-                        <td className="px-3 py-1.5 text-muted-foreground whitespace-nowrap">
-                          {r.agent_execution_log_id ? (
-                            <Link
-                              href={`/agent-history/${r.agent_execution_log_id}`}
-                              className="text-brand hover:underline"
-                            >
-                              Agent run
-                            </Link>
-                          ) : (
-                            r.triggered_by_email ?? '—'
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {/* Pagination — only render when there's more than one page of
-              data. Buttons are disabled at the boundaries; the page
-              indicator shows 1-based position to the operator. */}
-          {recentRunsTotal > RUNS_PER_PAGE && (
-            <div className="flex items-center justify-between pt-1 text-xs text-muted-foreground">
-              <span>
-                Showing {recentRunsPage * RUNS_PER_PAGE + 1}
-                –{Math.min((recentRunsPage + 1) * RUNS_PER_PAGE, recentRunsTotal)}
-                {' '}of {recentRunsTotal}
-              </span>
-              <div className="flex items-center gap-1">
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => setRecentRunsPage((p) => Math.max(0, p - 1))}
-                  disabled={recentRunsPage === 0}
-                >
-                  Previous
-                </Button>
-                <span className="px-2">
-                  Page {recentRunsPage + 1} of {recentRunsTotalPages}
-                </span>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="h-7 px-2 text-xs"
-                  onClick={() => setRecentRunsPage((p) => Math.min(recentRunsTotalPages - 1, p + 1))}
-                  disabled={recentRunsPage >= recentRunsTotalPages - 1}
-                >
-                  Next
-                </Button>
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
-        </TabsContent>
+        </TabsPanel>
       </Tabs>
 
       {/* Browser HITL dialog */}

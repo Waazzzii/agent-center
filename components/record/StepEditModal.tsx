@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -363,14 +364,18 @@ export function StepEditModal({
 
                 <div className="space-y-1.5">
                   <label className="text-[11px] font-medium text-muted-foreground">Run this branch when</label>
-                  <select
-                    className="w-full h-8 rounded-md border bg-background px-2 text-xs"
+                  <Select
                     value={g.expect ?? 'present'}
-                    onChange={(e) => patch({ guard: { ...g, expect: e.target.value as 'present' | 'absent' } })}
+                    onValueChange={(v) => patch({ guard: { ...g, expect: v as 'present' | 'absent' } })}
                   >
-                    <option value="present">this element IS on the page</option>
-                    <option value="absent">this element is NOT on the page</option>
-                  </select>
+                    <SelectTrigger size="sm" className="w-full text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent position="popper" align="start">
+                      <SelectItem value="present">this element IS on the page</SelectItem>
+                      <SelectItem value="absent">this element is NOT on the page</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
 
                 <div className="space-y-1.5">

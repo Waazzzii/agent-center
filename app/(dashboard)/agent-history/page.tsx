@@ -1,5 +1,6 @@
 'use client';
 
+import * as React from 'react';
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -20,9 +21,11 @@ import { FilterPicker } from '@/components/execution/FilterPicker';
 import { ActionProgress } from '@/components/execution/ActionProgress';
 import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
 import { TokenUsage } from '@/components/execution/TokenUsage';
+import { StatusBadge } from '@/components/execution/status';
+import { StatTile } from '@/components/ui/stat-tile';
+import { PageHeader } from '@/components/layout/PageHeader';
 import { useTags } from '@/lib/hooks/use-tags';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -38,7 +41,6 @@ import {
   Clock,
   CheckCircle2,
   XCircle,
-  PauseCircle,
   Loader2,
   Filter,
   X,
@@ -133,59 +135,7 @@ function formatShortDate(dateStr: string): string {
   return new Date(dateStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function ExecutingDots() {
-  return (
-    <span className="inline-flex items-center gap-[3px]">
-      <span className="w-1 h-1 rounded-full bg-current animate-bounce [animation-delay:0ms]" />
-      <span className="w-1 h-1 rounded-full bg-current animate-bounce [animation-delay:150ms]" />
-      <span className="w-1 h-1 rounded-full bg-current animate-bounce [animation-delay:300ms]" />
-    </span>
-  );
-}
 
-function StatusBadge({ status }: { status: string }) {
-  if (status === 'completed') return (
-    <Badge variant="success" className="gap-1.5">
-      <CheckCircle2 className="h-3 w-3" />Completed
-    </Badge>
-  );
-  if (status === 'failed') return (
-    <Badge variant="danger" className="gap-1.5">
-      <XCircle className="h-3 w-3" />Failed
-    </Badge>
-  );
-  if (status === 'aborted') return (
-    <Badge variant="danger" className="gap-1.5">
-      <XCircle className="h-3 w-3" />Aborted
-    </Badge>
-  );
-  if (status === 'executing') return (
-    <Badge variant="info" className="gap-2">
-      <ExecutingDots />Executing
-    </Badge>
-  );
-  if (status === 'awaiting_approval') return (
-    <Badge variant="brand" className="gap-1.5">
-      <PauseCircle className="h-3 w-3" />Awaiting Approval
-    </Badge>
-  );
-  if (status === 'awaiting_login') return (
-    <Badge variant="warning" className="gap-1.5">
-      <Monitor className="h-3 w-3" />Awaiting Login
-    </Badge>
-  );
-  if (status === 'provisioning') return (
-    <Badge variant="warning" className="gap-1.5">
-      <Loader2 className="h-3 w-3 animate-spin" />Starting
-    </Badge>
-  );
-  if (status === 'queued') return (
-    <Badge variant="warning" className="gap-1.5">
-      <Clock className="h-3 w-3" />Queued
-    </Badge>
-  );
-  return <Badge variant="neutral">{status}</Badge>;
-}
 
 // ─── Runs Table ───────────────────────────────────────────────
 
@@ -305,11 +255,16 @@ function RunsTable({
               <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_72px] gap-2 items-center px-3 py-2">
                 {/* Agent */}
                 <div className="flex items-center gap-2 min-w-0">
-                  <StatusGlyph status={displayStatus} />
-                  {run.depth > 0 && <GitBranch className="h-3 w-3 text-brand shrink-0" />}
-                  <span className={cn('text-sm font-medium truncate', run.depth > 0 && 'text-brand')}>{run.agent_name}</span>
+                  {/* A sub-agent run is marked by the branch glyph, not by
+                      colouring its name brand — purple names read as links
+                      and made half the list look clickable in a different
+                      way from the other half. */}
+                  {run.depth > 0 && <GitBranch className="h-3.5 w-3.5 text-step-agent shrink-0" aria-label="Sub-agent run" />}
+                  <span className="text-sm font-medium truncate">{run.agent_name}</span>
                   {childCount > 0 && (
-                    <span className="text-[9px] text-brand shrink-0">{childCount} sub</span>
+                    <span className="shrink-0 rounded-full bg-muted px-1.5 text-[10px] font-medium tabular-nums text-muted-foreground">
+                      {childCount} sub-run{childCount === 1 ? '' : 's'}
+                    </span>
                   )}
                   {run.has_active_browser && <Monitor className="h-3 w-3 text-info shrink-0" />}
                 </div>
@@ -363,7 +318,7 @@ function RunsTable({
                   {run.agent_id && (
                     <Link
                       href={`/agents/${run.agent_id}`}
-                      title="Open this routine"
+                      title="Open this agent"
                       className="rounded-md p-1.5 text-muted-foreground/70 opacity-0 transition-all hover:bg-muted hover:text-brand focus-visible:opacity-100 group-hover/row:opacity-100"
                     >
                       <SquareArrowOutUpRight className="h-4 w-4" />
@@ -392,7 +347,6 @@ function RunsTable({
               {/* Mobile: stacked */}
               <div className="md:hidden px-3 py-2 space-y-1">
                 <div className="flex items-center gap-2">
-                  <StatusGlyph status={displayStatus} />
                   <span className="font-medium text-sm truncate">{run.agent_name}</span>
                   {/* Straight to the routine that produced this run. Clicking the row
                       opens the EXECUTION, so this needs to be a separate target with
@@ -403,7 +357,7 @@ function RunsTable({
                     <Link
                       href={`/agents/${run.agent_id}`}
                       onClick={(ev) => ev.stopPropagation()}
-                      title="Open this routine"
+                      title="Open this agent"
                       className="shrink-0 text-muted-foreground/60 hover:text-brand transition-colors"
                     >
                       <ArrowUpRight className="h-3.5 w-3.5" />
@@ -418,29 +372,6 @@ function RunsTable({
         })}
       </div>
     </div>
-  );
-}
-
-/**
- * Leading glyph — makes status scannable even before reading the badge.
- */
-function StatusGlyph({ status }: { status: string }) {
-  const map: Record<string, { color: string; pulse: boolean; char: string }> = {
-    executing:         { color: 'bg-info',      pulse: true,  char: '●' },
-    provisioning:      { color: 'bg-text-dim',  pulse: true,  char: '●' },
-    queued:            { color: 'bg-text-dim',  pulse: false, char: '●' },
-    awaiting_approval: { color: 'bg-brand',     pulse: true,  char: '●' },
-    awaiting_login:    { color: 'bg-warning',   pulse: true,  char: '●' },
-    completed:         { color: 'bg-success',   pulse: false, char: '●' },
-    failed:            { color: 'bg-danger',    pulse: false, char: '●' },
-    aborted:           { color: 'bg-danger',    pulse: false, char: '●' },
-  };
-  const s = map[status] ?? map.executing;
-  return (
-    <span className="relative flex h-2 w-2 mt-1">
-      {s.pulse && <span className={cn('animate-ping absolute h-full w-full rounded-full opacity-75', s.color)} />}
-      <span className={cn('relative rounded-full h-2 w-2', s.color)} />
-    </span>
   );
 }
 
@@ -1085,31 +1016,31 @@ export default function AgentExecutionsPage() {
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      {/* Header + pagination */}
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2"><History className="h-5 w-5 text-brand" /> Executions</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">Live and historical agent runs</p>
-        </div>
-        <div className="flex items-center gap-2">
-          {/* Top right, away from the filter bar: this sets the window the
-              page is drawn from, which is a different question from which
-              runs within it you want to see. */}
-          {selectedOrgId && (
-            <TimeRangePicker
-              from={fromFilter}
-              to={toFilter}
-              presets={TIME_PRESETS}
-              label={timeRangeLabel(fromFilter, toFilter)}
-              onApply={applyTimeRange}
-              disabled={loading}
-            />
-          )}
-          <Button variant="outline" size="sm" onClick={handleRefresh} disabled={loading || !selectedOrgId}>
-            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={History}
+        title="Executions"
+        description="Live and historical agent runs"
+        actions={
+          <>
+            {/* Top right, away from the filter bar: this sets the window the
+                page is drawn from, which is a different question from which
+                runs within it you want to see. */}
+            {selectedOrgId && (
+              <TimeRangePicker
+                from={fromFilter}
+                to={toFilter}
+                presets={TIME_PRESETS}
+                label={timeRangeLabel(fromFilter, toFilter)}
+                onApply={applyTimeRange}
+                disabled={loading}
+              />
+            )}
+            <Button variant="outline" size="icon-sm" onClick={handleRefresh} disabled={loading || !selectedOrgId} aria-label="Refresh" title="Refresh">
+              <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+            </Button>
+          </>
+        }
+      />
 
       {!selectedOrgId ? (
         <Card>
@@ -1119,64 +1050,46 @@ export default function AgentExecutionsPage() {
         </Card>
       ) : (
         <>
-          {/* Summary Cards */}
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-            <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40 py-0', isGroupActive('active', statusFilters) && 'ring-2 ring-info/40 bg-info-soft')}
+          {/* Summary — each tile is also the filter for its group. The count
+              is the headline; it used to sit in a small chip at the far end
+              of the tile, the least prominent thing on the most scanned row. */}
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <StatTile
+              label="Active"
+              value={summaryActive}
+              icon={Zap}
+              tone="info"
+              live={summaryActive > 0}
+              selected={isGroupActive('active', statusFilters)}
               onClick={() => applyGroupFilter('active')}
-            >
-              <CardContent className="py-2.5 px-4">
-                <div className="flex items-center gap-2.5">
-                  <Zap className="h-4 w-4 text-info shrink-0" />
-                  <span className="text-sm font-medium">Active Runs</span>
-                  <Badge variant="info" className="ml-auto gap-1.5 text-xs">
-                    {summaryActive > 0 ? <><ExecutingDots />{summaryActive}</> : summaryActive}
-                  </Badge>
-                </div>
-              </CardContent>
-            </Card>
-            <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40 py-0', isGroupActive('queued', statusFilters) && 'ring-2 ring-warning/40 bg-warning-soft')}
+            />
+            <StatTile
+              label="Queued"
+              value={summaryQueued}
+              icon={Clock}
+              tone="neutral"
+              selected={isGroupActive('queued', statusFilters)}
               onClick={() => applyGroupFilter('queued')}
-            >
-              <CardContent className="py-2.5 px-4">
-                <div className="flex items-center gap-2.5">
-                  <Clock className="h-4 w-4 text-warning shrink-0" />
-                  <span className="text-sm font-medium">Queued</span>
-                  <Badge variant="warning" className="ml-auto text-xs">
-                    {summaryQueued}
-                  </Badge>
-                </div>
-              </CardContent>
-            </Card>
-            <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40 py-0', isGroupActive('completed', statusFilters) && 'ring-2 ring-success/40 bg-success-soft')}
+            />
+            <StatTile
+              label="Completed"
+              value={summaryCompleted}
+              icon={CheckCircle2}
+              tone="success"
+              hint={summaryCompleted + summaryFailed > 0
+                ? `${Math.round((summaryCompleted / (summaryCompleted + summaryFailed)) * 100)}% success`
+                : undefined}
+              selected={isGroupActive('completed', statusFilters)}
               onClick={() => applyGroupFilter('completed')}
-            >
-              <CardContent className="py-2.5 px-4">
-                <div className="flex items-center gap-2.5">
-                  <CheckCircle2 className="h-4 w-4 text-success shrink-0" />
-                  <span className="text-sm font-medium">Completed</span>
-                  <Badge variant="success" className="ml-auto text-xs">
-                    {summaryCompleted.toLocaleString()}
-                  </Badge>
-                </div>
-              </CardContent>
-            </Card>
-            <Card
-              className={cn('cursor-pointer transition-colors hover:bg-muted/40 py-0', isGroupActive('failed', statusFilters) && 'ring-2 ring-danger/40 bg-danger-soft')}
+            />
+            <StatTile
+              label="Failed"
+              value={summaryFailed}
+              icon={XCircle}
+              tone="danger"
+              selected={isGroupActive('failed', statusFilters)}
               onClick={() => applyGroupFilter('failed')}
-            >
-              <CardContent className="py-2.5 px-4">
-                <div className="flex items-center gap-2.5">
-                  <XCircle className="h-4 w-4 text-danger shrink-0" />
-                  <span className="text-sm font-medium">Failed</span>
-                  <Badge variant="danger" className="ml-auto text-xs">
-                    {summaryFailed.toLocaleString()}
-                  </Badge>
-                </div>
-              </CardContent>
-            </Card>
+            />
           </div>
 
           {/* Runs Table Card */}

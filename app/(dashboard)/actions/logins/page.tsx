@@ -204,13 +204,38 @@ export default function LoginsPage() {
     }
   };
 
+  // A POOL IS ONE LOGIN, NOT N OF THEM.
+  //
+  // Members are real agent_logins rows, so they arrive in this list as
+  // siblings — "Streamline Login", "Streamline Login #2", "#3" — which reads
+  // as three separate things to configure when it is one identity with three
+  // browsers. They are folded into their parent here and shown on its page.
+  const membersByParent = new Map<string, Login[]>();
+  for (const l of items) {
+    if (!l.pool_parent_id) continue;
+    const list = membersByParent.get(l.pool_parent_id) ?? [];
+    list.push(l);
+    membersByParent.set(l.pool_parent_id, list);
+  }
+  /** The pool as one unit: the parent plus its members, parent first. */
+  const poolOf = (parent: Login): Login[] =>
+    [parent, ...(membersByParent.get(parent.id) ?? [])];
+  /** Members of this pool that a person has to go and sign in to. */
+  const needingLogin = (parent: Login): Login[] =>
+    poolOf(parent).filter((m) => m.status === 'needs_login');
+
   const visible = items
     .filter((l) => {
+      // Folded into its parent's row.
+      if (l.pool_parent_id) return false;
       if (statusFilter === 'needs_creds' && l.credentials_secret_id) return false;
-      if (statusFilter === 'valid' && l.status !== 'valid') return false;
-      if (statusFilter === 'needs_login' && l.status !== 'needs_login') return false;
+      // Status filters ask about the POOL: a parent whose member is signed
+      // out is a login that needs attention, and hiding it under "Needs
+      // login" would hide the only row that leads to the fix.
+      if (statusFilter === 'valid' && !poolOf(l).some((m) => m.status === 'valid')) return false;
+      if (statusFilter === 'needs_login' && needingLogin(l).length === 0) return false;
       const q = search.trim().toLowerCase();
-      return !q || l.name.toLowerCase().includes(q);
+      return !q || poolOf(l).some((m) => m.name.toLowerCase().includes(q));
     })
     // Numeric-aware so "Market 2" sorts before "Market 10" — logins get named
     // in sequences per market often enough for that to matter.
@@ -353,7 +378,19 @@ export default function LoginsPage() {
                   return (
                     <tr key={item.id} className="border-t hover:bg-muted/30 cursor-pointer transition-colors"
                         onClick={() => router.push(`/actions/logins/${item.id}`)}>
-                      <td className="px-4 py-2.5 font-medium">{item.name}</td>
+                      <td className="px-4 py-2.5 font-medium">
+                        <span className="inline-flex items-center gap-2">
+                          {item.name}
+                          {poolOf(item).length > 1 && (
+                            <span
+                              className="rounded-full border px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground"
+                              title={`${poolOf(item).length} browsers, up to ${item.max_browsers}. Concurrent runs each take their own.`}
+                            >
+                              {poolOf(item).length} browsers
+                            </span>
+                          )}
+                        </span>
+                      </td>
                       <td className="px-4 py-2.5 text-xs">
                         {!item.auto_login_script_id ? (
                           <span className="text-amber-600 dark:text-amber-500">No login script</span>
@@ -368,7 +405,20 @@ export default function LoginsPage() {
                           ? MFA_LABELS[item.mfa_source] ?? item.mfa_source
                           : <span className="text-muted-foreground/50">None</span>}
                       </td>
-                      <td className="px-4 py-2.5"><StatusPill status={item.status} /></td>
+                      <td className="px-4 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <StatusPill status={item.status} />
+                          {/* Say WHICH sibling is out, not just that one is.
+                              "Needs login" on a pool tells an operator to go
+                              looking; the count tells them what they will
+                              find when they get there. */}
+                          {needingLogin(item).filter((m) => m.id !== item.id).length > 0 && (
+                            <span className="text-[11px] text-amber-600 dark:text-amber-500">
+                              +{needingLogin(item).filter((m) => m.id !== item.id).length} in pool
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(item.last_checked_at)}</td>
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>

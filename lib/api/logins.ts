@@ -79,6 +79,49 @@ export interface Login {
   /** Optional Slack channel override for HITL notifications when this
    *  login HITL-pauses. Falls through to program / org-default if null. */
   notification_slack_channel_id: string | null;
+  /**
+   * POOLING. A login can stand for several interchangeable browsers.
+   *
+   * A member is an ordinary login row whose pool_parent_id points at the
+   * login it stands in for. It shares the parent's url and scripts (the
+   * backend keeps those in step) but has its OWN profile directory, which is
+   * the entire point: one profile dir means one Chrome, one X display and one
+   * viewer, so without members two concurrent runs on a login share a screen
+   * and an operator cannot tell their window from an agent's.
+   *
+   * null on a parent and on any login that has not opted in. Nesting is one
+   * level only — a member can never itself be a parent.
+   */
+  pool_parent_id: string | null;
+  /** How many browsers this login may have at once. 1 = not pooled. Always
+   *  1 on a member; the cap lives on the parent. */
+  max_browsers: number;
+  /** Whether the pool may mint a new member on demand up to max_browsers. */
+  pool_autogrow: boolean;
+  /**
+   * Pool parent only — read it off the parent, never a member. true: every
+   * browser uses this login's credentials, TOTP and MFA settings, and they are
+   * edited on Browser 1 only. false: each browser has its own.
+   *
+   * Also decides sign-in concurrency: shared credentials sign in one browser
+   * at a time (one account, one MFA code); separate ones in parallel.
+   */
+  pool_shared_credentials: boolean;
+  /** Pool member only: when the pool was scaled down past this browser. It
+   *  takes no new runs and is deleted once its current run lets go. */
+  pool_removing_at: string | null;
+  /**
+   * PROXY. Whether this login goes out through the org's dedicated proxy, and
+   * which of its IPs.
+   *
+   * `proxy_enabled` is login-level: every browser in a pool follows the parent.
+   * `proxy_ip_id` follows the pool's CREDENTIAL MODE, like credentials do — in
+   * a shared pool every browser is on the login's IP (one account, one home);
+   * in a separate pool each browser chooses its own. Any number of logins may
+   * share an IP.
+   */
+  proxy_enabled: boolean;
+  proxy_ip_id: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -262,6 +305,96 @@ export type LoginWithWarning = Login & { warning?: string };
 
 export async function updateLogin(orgId: string, id: string, data: LoginPatch): Promise<LoginWithWarning> {
   const res = await agentClient.patch<Login>(`/api/admin/${orgId}/logins/${id}`, data);
+  return res.data;
+}
+
+/**
+ * How many browsers a login may use at once. Applies to the whole pool,
+ * whichever browser's id is passed — the backend routes it to the parent.
+ * Raising it does not create browsers; they are added as concurrent runs need
+ * them. Lowering it below the number in use is refused (409) with a message
+ * that says what to remove.
+ */
+/** What a pool-size change did, by browser position (Browser 2 = 2). */
+export interface PoolSizeResult {
+  id: string;
+  name: string;
+  max_browsers: number;
+  /** Idle, so deleted straight away. */
+  removed: number[];
+  /** In use: finishes its current run, then is deleted. */
+  draining: number[];
+  /** Was being removed; raising the size put it back in service. */
+  restored: number[];
+}
+
+export async function setPoolSize(
+  orgId: string, id: string, maxBrowsers: number,
+): Promise<PoolSizeResult> {
+  const res = await agentClient.patch(`/api/admin/${orgId}/logins/${id}/pool`, { max_browsers: maxBrowsers });
+  return res.data;
+}
+
+/**
+ * Switch a pool between one shared set of credentials and one per browser.
+ * Applies to the whole pool whichever browser's id is passed.
+ *
+ * Going SEPARATE copies Browser 1's credentials into each browser as its own
+ * record, so nothing stops working. Going SHARED deletes every browser's own
+ * credentials and TOTP — confirm with the user first.
+ */
+export async function setPoolCredentialMode(orgId: string, id: string, shared: boolean): Promise<Login> {
+  const res = await agentClient.patch<Login>(`/api/admin/${orgId}/logins/${id}/pool/credentials`, { shared });
+  return res.data;
+}
+
+/**
+ * How many browsers would lose credentials that DIFFER from Browser 1's if the
+ * pool went shared. 0 means switching is lossless — e.g. undoing an accidental
+ * uncheck, where every browser only holds a copy of Browser 1's. Returns a
+ * count only; no secret value ever reaches the browser.
+ */
+export async function previewPoolCredentialMode(
+  orgId: string, id: string,
+): Promise<{ browsers: number; wouldDiscard: number }> {
+  const res = await agentClient.get(`/api/admin/${orgId}/logins/${id}/pool/credentials/preview`);
+  return res.data;
+}
+
+export interface LoginProxyPatch {
+  enabled?: boolean;
+  /** One of the org's discovered IPs. null unassigns. */
+  ip_id?: string | null;
+}
+
+/**
+ * Proxy for a login. `enabled` applies to the whole pool; `ip_id` to the login
+ * in a shared pool and to this browser in a separate one.
+ */
+export async function setLoginProxy(orgId: string, id: string, patch: LoginProxyPatch): Promise<Login> {
+  const res = await agentClient.patch<Login>(`/api/admin/${orgId}/logins/${id}/proxy`, patch);
+  return res.data;
+}
+
+/** One of the org's dedicated proxy IPs, as a login's picker shows it. */
+export interface ProxyIpOption {
+  id: string;
+  ip: string;
+  port: number;
+  city: string | null;
+  region: string | null;
+  country: string | null;
+  isp: string | null;
+  available: boolean;
+  logins_using: number;
+}
+
+/**
+ * Whether the org has a proxy account (set in Agent settings), and the IPs a
+ * login can choose from. Never any credential.
+ */
+export async function getProxyAccountConfigured(orgId: string): Promise<{ configured: boolean; ips: ProxyIpOption[] }> {
+  const res = await agentClient.get<{ configured: boolean; ips: ProxyIpOption[] }>(`/api/admin/${orgId}/proxy-account`);
   return res.data;
 }
 

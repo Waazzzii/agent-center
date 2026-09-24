@@ -224,13 +224,13 @@ export default function AiAgentPage() {
         /* ── Enabled state ──────────────────────────────────────────────── */
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <div className="flex items-center justify-between">
-            <TabsList className="grid w-full max-w-xs grid-cols-2">
+            <TabsList>
               <TabsTrigger value="settings">
-                <Settings className="h-4 w-4 mr-2" />
+                <Settings />
                 Settings
               </TabsTrigger>
               <TabsTrigger value="connectors">
-                <Plug className="h-4 w-4 mr-2" />
+                <Plug />
                 Connectors
               </TabsTrigger>
             </TabsList>

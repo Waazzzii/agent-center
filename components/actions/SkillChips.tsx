@@ -211,10 +211,10 @@ function SkillManagerSheet({
 
   return (
     <Sheet open onOpenChange={(o) => { if (!o) onClose(); }}>
-      <SheetContent side="right" className="w-full sm:max-w-lg flex flex-col gap-0 p-0">
-        <SheetHeader className="border-b px-4 py-4 sm:px-6"><SheetTitle>Skills</SheetTitle></SheetHeader>
+      <SheetContent side="right" width={520} className="flex flex-col gap-0 p-0">
+        <SheetHeader className="border-b px-6 py-5"><SheetTitle>Skills</SheetTitle></SheetHeader>
 
-        <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6 space-y-4">
+        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           {/* Assigned-skill selector + add */}
           <div className="flex flex-wrap items-center gap-1.5">
             {selected.map((s) => (
@@ -262,7 +262,7 @@ function SkillManagerSheet({
           </div>
         </div>
 
-        <SheetFooter className="border-t px-4 py-4 sm:px-6 flex items-center">
+        <SheetFooter className="border-t bg-surface-2/50 px-6 py-3 flex items-center">
           {editing && (
             <Button variant="ghost" className="mr-auto text-destructive hover:text-destructive" onClick={() => remove(editing.id)} disabled={saving}>
               <Trash2 className="mr-1 h-4 w-4" /> Remove from step

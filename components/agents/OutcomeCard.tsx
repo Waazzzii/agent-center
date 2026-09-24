@@ -34,6 +34,7 @@
  */
 
 import * as React from 'react';
+import { ItemStepper } from '@/components/ui/item-stepper';
 import {
   getAgentOutcomes, createAgentOutcome, updateAgentOutcome, deleteAgentOutcome, getAgents,
   type Agent, type AgentOutcome,
@@ -41,12 +42,12 @@ import {
 import { Button } from '@/components/ui/button';
 import { ConfigRow, ConfigSlideOut } from '@/components/agents/ConfigSlideOut';
 import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { Field, FieldGroup, FieldRow } from '@/components/ui/field';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
-import { Switch } from '@/components/ui/switch';
-import { SearchableSelect } from '@/components/ui/searchable-select';
+import { AgentPickerField } from '@/components/agents/AgentPicker';
 import { toast } from 'sonner';
-import { Flag, Filter, X, Plus, Trash2, MessageSquare, Gavel } from 'lucide-react';
+import { Flag, Plus, Trash2, MessageSquare, Gavel } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
 /**
@@ -122,6 +123,13 @@ interface RuleDraft {
   template: string;
   expires: number;
   onApprove: string;
+  /**
+   * The rule's type AS STORED. The backend derives it from on_approve on
+   * save, but a rule written another way (MCP, SQL) can be a decision with
+   * no follow-on agent — and the list must say what it is, not what this
+   * form would make it.
+   */
+  kind: 'notify' | 'decision';
   isActive: boolean;
   hasCondition: boolean;
   condField: string;
@@ -143,6 +151,7 @@ function toDraft(o: AgentOutcome): RuleDraft {
     template: o.config?.message_template ?? '',
     expires: o.config?.expires_after_hours ?? 24,
     onApprove: o.config?.on_approve?.target_agent_id ?? '',
+    kind: o.outcome_type === 'decision' || o.config?.on_approve?.target_agent_id ? 'decision' : 'notify',
     isActive: o.is_active !== false,
     // A stored predicate always has a field — that is what the backend keys
     // on — so its presence is what decides whether the row starts open.
@@ -156,7 +165,7 @@ function toDraft(o: AgentOutcome): RuleDraft {
 function emptyDraft(): RuleDraft {
   return {
     key: newKey(), id: null, rawConfig: {}, name: '', channel: '', template: '',
-    expires: 24, onApprove: '', isActive: true,
+    expires: 24, onApprove: '', kind: 'notify', isActive: true,
     hasCondition: false, condField: '', condOp: 'eq', condValue: '',
   };
 }
@@ -253,6 +262,9 @@ export function OutcomeCard({
 
       for (const [i, r] of rules.entries()) {
         const body = {
+          // Stated, not left to derivation: a decision may run nothing on
+          // Approve and still be a decision.
+          outcome_type: r.kind,
           name: r.name.trim() || null,
           sort_order: i,
           is_active: r.isActive,
@@ -337,245 +349,262 @@ export function OutcomeCard({
         saving={saving}
       >
         <div className="space-y-4">
-          {/* The rule picker. A dropdown rather than a tab rail because nine
-              regional queues is the case this exists for, and nine tabs
-              either wrap into three rows or scroll sideways — both of which
-              hide the one you are looking for. */}
-          <div className="flex items-center gap-2">
-            <select
-              value={activeKey ?? ''}
-              onChange={(e) => setActiveKey(e.target.value)}
-              disabled={rules.length === 0}
-              className="h-8 flex-1 rounded-md border bg-background px-2 text-xs disabled:opacity-50"
-            >
-              {rules.length === 0 && <option value="">No rules yet</option>}
-              {rules.map((r, i) => (
-                <option key={r.key} value={r.key}>
-                  {draftLabel(r, i)}{r.isActive ? '' : ' (off)'}
-                </option>
-              ))}
-            </select>
-            <Button type="button" variant="outline" size="sm" onClick={addRule} className="h-8 gap-1.5 text-xs">
-              <Plus className="h-3 w-3" />
-              Add rule
-            </Button>
-          </div>
+          {/* Stepping between rules — the same ItemStepper the login pool uses
+              to step between browsers, so moving through a set of things
+              feels the same everywhere.
+
+              This replaced a list, which existed because "a dropdown shows one
+              rule and hides the rest". That concern is answered in the
+              options: each is labelled with its kind and whether it is off, so
+              opening the dropdown shows every rule at once. The arrows cover
+              the common walk-through-them-all case the list never did.
+
+              Not a tab rail: nine regional queues is the case this exists for,
+              and nine tabs wrap or scroll sideways. */}
+          {rules.length > 0 && (
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <ItemStepper
+                noun="rule"
+                showPosition
+                value={activeKey}
+                onChange={setActiveKey}
+                triggerClassName="min-w-[200px] max-w-[280px]"
+                items={rules.map((r, i) => {
+                  const isDecision = r.kind === 'decision';
+                  const Icon = isDecision ? Gavel : MessageSquare;
+                  return {
+                    value: r.key,
+                    label: draftLabel(r, i),
+                    icon: <Icon className={cn('h-3.5 w-3.5', isDecision ? 'text-brand' : 'text-muted-foreground')} />,
+                    hint: `${isDecision ? 'Decision' : 'Notify'}${r.isActive ? '' : ' · Off'}`,
+                    muted: !r.isActive,
+                  };
+                })}
+              />
+              <Button type="button" variant="outline" size="sm" onClick={addRule}>
+                <Plus className="h-3.5 w-3.5" />
+                Add rule
+              </Button>
+            </div>
+          )}
 
           {rules.length === 0 && (
-            <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
-              Nothing happens when this agent finishes. Add a rule to notify a channel or ask
-              someone to decide.
-            </p>
+            <>
+              <p className="rounded-md border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+                Nothing happens when this agent finishes. Add a rule to notify a channel or ask
+                someone to decide.
+              </p>
+              <Button type="button" variant="outline" size="sm" onClick={addRule} className="w-full border-dashed">
+                <Plus className="h-3.5 w-3.5" />
+                Add rule
+              </Button>
+            </>
+          )}
+
+          {/* A rule an older version switched off. There is no switch any more
+              — a rule is set up or removed — so this is the one way back on.
+              It used to be a chip on the rule's row in the list; with the list
+              gone it sits on the rule itself, where it is also clearer. */}
+          {active && !active.isActive && (
+            <div className="flex items-center justify-between gap-3 rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+              <span>This rule is switched off, so it never fires.</span>
+              <Button type="button" variant="outline" size="sm" onClick={() => patch(active.key, { isActive: true })}>
+                Turn on
+              </Button>
+            </div>
           )}
 
           {active && (
-            <div key={active.key} className="space-y-4">
-              {/* What this rule IS, stated rather than chosen. It follows from
-                  the follow-on agent below, so a picker for it could only
-                  contradict that field. */}
-              <div className="flex items-center justify-between gap-2 rounded-md border px-3 py-2">
-                <span className="flex items-center gap-2 text-xs">
-                  {active.onApprove ? (
-                    <><Gavel className="h-3.5 w-3.5 text-amber-600" /> Asks a human to decide</>
-                  ) : (
-                    <><MessageSquare className="h-3.5 w-3.5 text-blue-600" /> Posts a notification</>
-                  )}
-                </span>
-                <div className="flex items-center gap-2">
-                  <Label className="text-[11px] text-muted-foreground">Active</Label>
-                  <Switch
-                    checked={active.isActive}
-                    onCheckedChange={(v) => patch(active.key, { isActive: v })}
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => removeRule(active.key)}
-                    className="h-7 w-7 p-0 text-muted-foreground hover:text-destructive"
-                    aria-label="Delete rule"
-                  >
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Name</Label>
+            <div key={active.key} className="mt-6 border-t pt-6">
+              {/* Order follows how a rule gets set up: name it, say what it
+                  does, say when, then fill in the Slack details. The type
+                  bar that used to sit here ("Posts a notification" + an
+                  Active switch) is gone — the stepper above already says
+                  Notify or Decision per rule, and a rule is either set up
+                  or it isn't. */}
+              <FieldGroup title="Rule">
+                <FieldRow>
                   {/* Not decoration. Two rules firing on one run produce two
                       decisions that otherwise read identically, in the log
                       and in Slack, with nothing to tell them apart. */}
-                  <Input
-                    value={active.name}
-                    onChange={(e) => patch(active.key, { name: e.target.value })}
-                    placeholder="e.g. Tucson"
-                    className="h-8 text-xs"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Slack channel ID</Label>
-                  <Input
-                    value={active.channel}
-                    onChange={(e) => patch(active.key, { channel: e.target.value })}
-                    placeholder="C12345678"
-                    className="h-8 text-xs"
-                  />
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label className="text-xs">Message</Label>
-                <Textarea
-                  value={active.template}
-                  onChange={(e) => patch(active.key, { template: e.target.value })}
-                  placeholder="Supports {{field}} from the item, e.g. Appeal for {{unit_name}}"
-                  className="text-xs min-h-[70px]"
-                />
-              </div>
+                  <Field label="Name">
+                    <Input
+                      value={active.name}
+                      onChange={(e) => patch(active.key, { name: e.target.value })}
+                      placeholder="e.g. Tucson"
+                    />
+                  </Field>
+                  <Field
+                    label="Action type"
+                    hint={active.kind === 'decision'
+                      ? 'Someone reviews each item and answers Approve or Deny.'
+                      : 'Posts to Slack and records nothing to answer.'}
+                  >
+                    <Select
+                      value={active.kind}
+                      onValueChange={(v) => patch(active.key, v === 'decision'
+                        ? { kind: 'decision' }
+                        // Back to a notification: a notification cannot carry
+                        // a follow-on agent, so it is dropped with the type.
+                        : { kind: 'notify', onApprove: '' })}
+                    >
+                      <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="notify">Notification</SelectItem>
+                        <SelectItem value="decision">Decision</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                </FieldRow>
+                {active.kind === 'decision' && (
+                  <Field
+                    label="On approve, run"
+                    trailing="optional"
+                    hint={active.onApprove
+                      ? 'The approved item is handed to this agent as its input. Give it a first step that translates if it needs a different shape.'
+                      : 'Leave empty to record the judgement only.'}
+                  >
+                    <AgentPickerField
+                      agents={agents.filter((a) => a.id !== agentId)}
+                      value={active.onApprove}
+                      onChange={(v) => patch(active.key, { onApprove: v })}
+                      placeholder="Choose an agent to run on approve…"
+                      dialogTitle="Run on approve"
+                      dialogDescription="The agent an approved item is handed to."
+                    />
+                  </Field>
+                )}
+              </FieldGroup>
 
               {/* The predicate is what makes rules routing rather than
-                  repetition: nine of these differing only by region.
+                  repetition: nine of these differing only by region. "Always"
+                  is the stated default, so a rule with no condition says so
+                  instead of showing an empty box. */}
+              <FieldGroup title="Execute when">
+                <div className="space-y-2">
+                  <Select
+                    value={active.hasCondition ? 'when' : 'always'}
+                    onValueChange={(v) => patch(active.key, v === 'always'
+                      ? { hasCondition: false, condField: '', condOp: 'eq', condValue: '' }
+                      : { hasCondition: true, condOp: active.condOp || 'eq' })}
+                  >
+                    <SelectTrigger className="w-full sm:w-[260px]"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="always">Always</SelectItem>
+                      <SelectItem value="when">Only when a field matches</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {active.hasCondition && (
+                    <div className="grid grid-cols-[1fr_auto_1fr] gap-2">
+                      {/* autoFocus: the control that was here is gone, and a
+                          Radix dialog whose focused element disappears sees
+                          focus land on <body>, treats it as an outside
+                          interaction and closes the panel. */}
+                      <Input
+                        autoFocus
+                        value={active.condField}
+                        onChange={(e) => patch(active.key, { condField: e.target.value })}
+                        placeholder="field, e.g. region"
+                        className="font-mono"
+                      />
+                      <Select value={active.condOp} onValueChange={(v) => patch(active.key, { condOp: v })}>
+                        <SelectTrigger className="w-[130px]"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {operatorOptions(active.condOp).map((o) => (
+                            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={active.condValue}
+                        onChange={(e) => patch(active.key, { condValue: e.target.value })}
+                        placeholder="value"
+                      />
+                    </div>
+                  )}
+                </div>
+                {active.hasCondition && (
+                  <p className="text-xs text-muted-foreground">
+                    Items that do not match raise nothing from this rule; other rules still get their turn. Items that failed never raise anything.
+                  </p>
+                )}
+              </FieldGroup>
 
-                  ADD, THEN EDIT, THEN REMOVE — the same shape the action
-                  editor uses for its own conditional. Three inputs were on
-                  screen permanently for something many rules do not have, and
-                  "no condition" was expressed by leaving a box empty: an
-                  invisible state you had to read a caption to learn, and one
-                  you clear by deleting text rather than by saying so. An
-                  explicit affordance also makes removal a single obvious act,
-                  which matters because a half-cleared predicate (field blank,
-                  value still filled) looks configured and does nothing. */}
-              {!active.hasCondition ? (
+              <FieldGroup title="Slack">
+                <FieldRow>
+                  <Field label="Channel ID">
+                    <Input
+                      value={active.channel}
+                      onChange={(e) => patch(active.key, { channel: e.target.value })}
+                      placeholder="C12345678"
+                      className="font-mono"
+                    />
+                  </Field>
+                  {active.onApprove && (
+                    <Field label="Expires after" hint="Hours before an unanswered decision lapses.">
+                      <div className="relative">
+                        <Input
+                          type="number" min={1} value={active.expires}
+                          onChange={(e) => patch(active.key, { expires: Number(e.target.value) })}
+                          className="pr-14"
+                        />
+                        <span className="pointer-events-none absolute inset-y-0 right-3 flex items-center text-xs text-muted-foreground">hours</span>
+                      </div>
+                    </Field>
+                  )}
+                </FieldRow>
+                <Field
+                  label="Message"
+                  hint={<>Use <code className="rounded bg-muted px-1 py-0.5 font-mono text-[11px]">{'{{field}}'}</code> to pull a value from the item, e.g. Appeal for {'{{unit_name}}'}.</>}
+                >
+                  <Textarea
+                    value={active.template}
+                    onChange={(e) => patch(active.key, { template: e.target.value })}
+                    placeholder="Appeal for {{unit_name}} is ready for review"
+                    className="min-h-[76px]"
+                  />
+                </Field>
+
+                {(() => {
+                  // Surfaced, not editable. Preserving them silently is right;
+                  // hiding that they exist is not — an allowlist that quietly
+                  // governs what reaches a Slack channel should be visible to
+                  // whoever is editing the message it filters.
+                  const extras: string[] = [];
+                  const rc = active.rawConfig as Record<string, any>;
+                  if (Array.isArray(rc.recipient_user_ids) && rc.recipient_user_ids.length) {
+                    extras.push(`${rc.recipient_user_ids.length} @mention recipient(s)`);
+                  }
+                  if (Array.isArray(rc.field_allowlist) && rc.field_allowlist.length) {
+                    extras.push(`a ${rc.field_allowlist.length}-field Slack allowlist`);
+                  }
+                  if (!extras.length) return null;
+                  return (
+                    <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
+                      This rule also carries {extras.join(' and ')}, set outside this panel. Saving
+                      here keeps them.
+                    </p>
+                  );
+                })()}
+              </FieldGroup>
+
+              <div className="mt-6 flex justify-end border-t pt-4">
                 <Button
                   type="button"
-                  variant="outline"
+                  variant="ghost"
                   size="sm"
-                  onClick={() => patch(active.key, {
-                    hasCondition: true, condField: '', condOp: 'eq', condValue: '',
-                  })}
-                  className="h-7 w-fit gap-1.5 border-dashed text-xs"
+                  onClick={() => removeRule(active.key)}
+                  className="text-muted-foreground hover:text-destructive"
                 >
-                  <Filter className="h-3 w-3" />
-                  Only when…
+                  <Trash2 className="h-3.5 w-3.5" />
+                  Remove rule
                 </Button>
-              ) : (
-                <div className="space-y-2 rounded-md border border-amber-300/60 bg-amber-50/40 p-2.5 dark:border-amber-700/40 dark:bg-amber-950/20">
-                  <div className="flex items-center justify-between">
-                    <Label className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-amber-700 dark:text-amber-400">
-                      <Filter className="h-3 w-3" />
-                      Only when
-                    </Label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => patch(active.key, {
-                        hasCondition: false, condField: '', condValue: '',
-                      })}
-                      className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
-                      aria-label="Remove condition"
-                    >
-                      <X className="h-3 w-3" />
-                    </Button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {/* autoFocus is load-bearing, not a nicety. Clicking
-                        "Only when…" unmounts that button, and a Radix Sheet
-                        whose focused element disappears sees focus land on
-                        <body>, treats it as an interaction outside the panel,
-                        and closes the whole thing. Moving focus into the row
-                        that replaced it keeps focus inside — and lets you
-                        start typing, which is what you came to do anyway. */}
-                    <Input
-                      autoFocus
-                      value={active.condField}
-                      onChange={(e) => patch(active.key, { condField: e.target.value })}
-                      placeholder="field, e.g. region"
-                      className="h-8 text-xs flex-1 min-w-[120px]"
-                    />
-                    <select
-                      value={active.condOp}
-                      onChange={(e) => patch(active.key, { condOp: e.target.value })}
-                      className="h-8 rounded-md border bg-background px-2 text-xs"
-                    >
-                      {operatorOptions(active.condOp).map((o) => (
-                        <option key={o.value} value={o.value}>{o.label}</option>
-                      ))}
-                    </select>
-                    <Input
-                      value={active.condValue}
-                      onChange={(e) => patch(active.key, { condValue: e.target.value })}
-                      placeholder="value"
-                      className="h-8 text-xs flex-1 min-w-[120px]"
-                    />
-                  </div>
-                  <p className="text-[11px] text-muted-foreground">
-                    Items that do not match this rule raise nothing from it — other rules still
-                    get their turn. Items that failed never raise anything.
-                  </p>
-                </div>
-              )}
-
-              <div className="space-y-1.5">
-                <Label className="text-xs">On approve, run</Label>
-                <SearchableSelect
-                  value={active.onApprove}
-                  onChange={(v) => patch(active.key, { onApprove: v })}
-                  options={[{ value: '', label: 'Nothing — just post a notification' },
-                            ...agents.filter((a) => a.id !== agentId).map((a) => ({ value: a.id, label: a.name }))]}
-                  placeholder="Nothing — just post a notification"
-                />
               </div>
-
-              {(() => {
-                // Surfaced, not editable. Preserving them silently is right;
-                // hiding that they exist is not — an allowlist that quietly
-                // governs what reaches a Slack channel should be visible to
-                // whoever is editing the message it filters.
-                const extras: string[] = [];
-                const rc = active.rawConfig as Record<string, any>;
-                if (Array.isArray(rc.recipient_user_ids) && rc.recipient_user_ids.length) {
-                  extras.push(`${rc.recipient_user_ids.length} @mention recipient(s)`);
-                }
-                if (Array.isArray(rc.field_allowlist) && rc.field_allowlist.length) {
-                  extras.push(`a ${rc.field_allowlist.length}-field Slack allowlist`);
-                }
-                if (!extras.length) return null;
-                return (
-                  <p className="rounded-md border border-dashed px-3 py-2 text-[11px] text-muted-foreground">
-                    This rule also carries {extras.join(' and ')}, set outside this panel. Saving
-                    here keeps them.
-                  </p>
-                );
-              })()}
-
-              <div className="grid gap-3 sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label className="text-xs">Expires after (hours)</Label>
-                  <Input
-                    type="number" min={1} value={active.expires}
-                    onChange={(e) => patch(active.key, { expires: Number(e.target.value) })}
-                    className="h-8 text-xs"
-                  />
-                </div>
-              </div>
-
-              <p className={cn('text-[11px] text-muted-foreground')}>
-                {active.onApprove
-                  ? 'Reviewers get Approve and Deny, plus Review to open the desk and change the ' +
-                    'payload before answering. More than one item makes them Approve All and Deny ' +
-                    'All, with the answer still recorded per item. The reviewed item is handed to ' +
-                    'the next agent as its input — if it needs a different shape, give that agent ' +
-                    'a first step that translates; there is no field mapping here on purpose.'
-                  : 'Posts to the channel and records nothing to answer. Pick an agent above to ' +
-                    'turn this into a decision.'}
-              </p>
             </div>
           )}
 
           {rules.length > 1 && (
-            <p className="text-[11px] text-muted-foreground">
+            <p className="mt-6 text-xs text-muted-foreground">
               All {rules.length} rules are checked against every finished item, independently.
               An item matching two rules raises both.
             </p>

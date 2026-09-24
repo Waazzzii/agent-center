@@ -64,7 +64,13 @@ export default function DashboardLayout({
               <Menu className="h-5 w-5" />
             </Button>
           </header>
-          <main className="flex-1 overflow-y-auto bg-background">
+          {/* pr-[--inspector-w]: a docked Sheet (components/ui/sheet) publishes
+              its width while open, and the page slides over to make room
+              rather than being covered. Zero when nothing is docked. */}
+          <main
+            className="flex-1 overflow-y-auto bg-background transition-[padding] duration-300 ease-out"
+            style={{ paddingRight: 'var(--inspector-w, 0px)' }}
+          >
             <div className="mx-auto w-full h-full">
               {children}
             </div>

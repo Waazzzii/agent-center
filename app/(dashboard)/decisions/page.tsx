@@ -28,6 +28,9 @@ import {
 import { FilterPicker } from '@/components/execution/FilterPicker';
 import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
 import { Button } from '@/components/ui/button';
+import { PageHeader } from '@/components/layout/PageHeader';
+import { StatTile } from '@/components/ui/stat-tile';
+import type { StatusTone } from '@/components/execution/status';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
@@ -46,31 +49,21 @@ const STATUS_LABELS: Record<string, string> = {
   pending:      'Pending',
   decided:      'Decided',
   expired:      'Expired',
-  not_actioned: 'Not actioned',
 };
 
 const STATUS_VARIANT: Record<string, 'warning' | 'success' | 'danger' | 'secondary'> = {
   pending:      'warning',
   decided:      'success',
   expired:      'danger',
-  not_actioned: 'secondary',
 };
 
-const FILTERABLE_STATUSES: DecisionStatus[] = ['pending', 'decided', 'expired', 'not_actioned'];
+const FILTERABLE_STATUSES: DecisionStatus[] = ['pending', 'decided', 'expired'];
 
-/** The shortcut cards, in the order they matter. */
-const STATUS_CARDS: {
-  value: DecisionStatus;
-  icon: React.ElementType;
-  tint: string;
-  ring: string;
-  soft: string;
-  badge: 'warning' | 'success' | 'danger' | 'secondary';
-}[] = [
-  { value: 'pending',      icon: Clock,         tint: 'text-warning',          ring: 'ring-warning/40', soft: 'bg-warning-soft', badge: 'warning' },
-  { value: 'decided',      icon: CheckCircle2,  tint: 'text-success',          ring: 'ring-success/40', soft: 'bg-success-soft', badge: 'success' },
-  { value: 'expired',      icon: AlertTriangle, tint: 'text-danger',           ring: 'ring-danger/40',  soft: 'bg-danger-soft',  badge: 'danger'  },
-  { value: 'not_actioned', icon: X,             tint: 'text-muted-foreground', ring: 'ring-border',     soft: 'bg-muted/40',     badge: 'secondary' },
+/** The shortcut tiles, in the order they matter. */
+const STATUS_CARDS: { value: DecisionStatus; icon: React.ComponentType<{ className?: string }>; tone: StatusTone }[] = [
+  { value: 'pending',      icon: Clock,         tone: 'warning' },
+  { value: 'decided',      icon: CheckCircle2,  tone: 'success' },
+  { value: 'expired',      icon: AlertTriangle, tone: 'danger'  },
 ];
 
 /**
@@ -307,28 +300,25 @@ export default function DecisionsPage() {
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      <div className="flex items-start justify-between">
-        <div>
-          <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-            <Gavel className="h-5 w-5 text-brand" /> Decisions
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Human decisions raised when an agent finished
-          </p>
-        </div>
-        <div className="flex items-center gap-2">
-          {selectedOrgId && (
-            <TimeRangePicker
-              from={fromFilter} to={toFilter} presets={TIME_PRESETS}
-              label={timeRangeLabel(fromFilter, toFilter)}
-              onApply={applyTimeRange} disabled={loading}
-            />
-          )}
-          <Button variant="outline" size="sm" onClick={() => load(page)} disabled={loading || !selectedOrgId}>
-            <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
-          </Button>
-        </div>
-      </div>
+      <PageHeader
+        icon={Gavel}
+        title="Decisions"
+        description="Human decisions raised when an agent finished"
+        actions={
+          <>
+            {selectedOrgId && (
+              <TimeRangePicker
+                from={fromFilter} to={toFilter} presets={TIME_PRESETS}
+                label={timeRangeLabel(fromFilter, toFilter)}
+                onApply={applyTimeRange} disabled={loading}
+              />
+            )}
+            <Button variant="outline" size="icon-sm" onClick={() => load(page)} disabled={loading || !selectedOrgId} aria-label="Refresh" title="Refresh">
+              <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
+            </Button>
+          </>
+        }
+      />
 
       {!selectedOrgId ? (
         <Card>
@@ -346,28 +336,20 @@ export default function DecisionsPage() {
 
             Pending leads because it is the only row that is anyone's work;
             the rest are history. */}
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <div className="grid grid-cols-3 gap-3">
           {STATUS_CARDS.map((c) => {
             const active = statusFilters.length === 1 && statusFilters[0] === c.value;
             return (
-              <Card
+              <StatTile
                 key={c.value}
-                className={cn(
-                  'cursor-pointer py-0 transition-colors hover:bg-muted/40',
-                  active && `ring-2 ${c.ring} ${c.soft}`,
-                )}
+                label={STATUS_LABELS[c.value]}
+                value={counts[c.value] ?? 0}
+                icon={c.icon}
+                tone={c.tone}
+                live={c.value === 'pending' && (counts.pending ?? 0) > 0}
+                selected={active}
                 onClick={() => applyFilter('status', active ? '' : c.value)}
-              >
-                <CardContent className="px-4 py-2.5">
-                  <div className="flex items-center gap-2.5">
-                    <c.icon className={cn('h-4 w-4 shrink-0', c.tint)} />
-                    <span className="text-sm font-medium">{STATUS_LABELS[c.value]}</span>
-                    <Badge variant={c.badge} className="ml-auto text-xs">
-                      {(counts[c.value] ?? 0).toLocaleString()}
-                    </Badge>
-                  </div>
-                </CardContent>
-              </Card>
+              />
             );
           })}
         </div>

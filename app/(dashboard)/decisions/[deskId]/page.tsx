@@ -30,10 +30,13 @@ import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
-  getDecisionDesk, resolveDecision, answerDecisionDesk, dismissDecisionDesk,
+  getDecisionDesk, resolveDecision, answerDecisionDesk,
   type Decision, type DecisionDesk, type OutcomeOption,
 } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
+import { PageHeader, MetaSep } from '@/components/layout/PageHeader';
+import { PayloadBlock } from '@/components/execution/PayloadBlock';
+import { JsonEditor } from '@/components/execution/JsonEditor';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Textarea } from '@/components/ui/textarea';
@@ -41,7 +44,7 @@ import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
-  ArrowLeft, ChevronLeft, ChevronRight, Loader2, Gavel, ArrowUpRight,
+  ChevronLeft, ChevronRight, Loader2, Gavel, ArrowUpRight,
   RotateCcw, AlertTriangle, Clock, ListChecks,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -59,6 +62,38 @@ function stripRuntime(v: unknown): unknown {
 }
 
 const pretty = (v: unknown) => JSON.stringify(stripRuntime(v), null, 2);
+
+/**
+ * Whether a person changed the payload before it went downstream.
+ *
+ * `was_edited` is what the API says when it says anything; the desk
+ * endpoint returns raw rows without it, so fall back to the fact itself —
+ * a final_input that differs from what the agent proposed.
+ */
+function wasEdited(d: Decision): boolean {
+  if (typeof d.was_edited === 'boolean') return d.was_edited;
+  return d.final_input != null && pretty(d.final_input) !== pretty(d.proposed_input);
+}
+
+/**
+ * A message the author templated can run long. Six lines, then a toggle —
+ * the payload below it is the thing to read, and an unbounded paragraph
+ * pushed it off screen.
+ */
+function ClampedText({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  const long = text.length > 420 || text.split('\n').length > 6;
+  return (
+    <div>
+      <p className={cn('text-sm whitespace-pre-wrap text-muted-foreground', !open && long && 'line-clamp-6')}>{text}</p>
+      {long && (
+        <button type="button" onClick={() => setOpen((v) => !v)} className="mt-1 text-xs font-medium text-brand hover:underline">
+          {open ? 'Show less' : 'Show more'}
+        </button>
+      )}
+    </div>
+  );
+}
 
 export default function DecisionReviewPage() {
   const permitted = useRequirePermission('agent_center_user');
@@ -282,26 +317,6 @@ export default function DecisionReviewPage() {
     }
   };
 
-  const dismiss = async () => {
-    const ok = await confirm({
-      title: 'Dismiss without acting',
-      description: 'Closes the desk and records every unanswered decision as not actioned. Nothing is launched.',
-      confirmText: 'Dismiss',
-      cancelText: 'Cancel',
-      variant: 'destructive',
-    });
-    if (!ok) return;
-    try {
-      setBusy(true);
-      await dismissDecisionDesk(selectedOrgId!, deskId);
-      await load();
-    } catch (err) {
-      toast.error((err as Error).message || 'Could not dismiss');
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (!permitted) return <NoPermissionContent />;
   if (loading) {
     return <div className="flex h-60 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>;
@@ -316,39 +331,35 @@ export default function DecisionReviewPage() {
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1000px] mx-auto">
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <Button variant="ghost" size="sm" className="-ml-2 mb-1 text-muted-foreground" onClick={() => router.push('/decisions')}>
-            <ArrowLeft className="h-3.5 w-3.5 mr-1" /> Decisions
-          </Button>
-          <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
-            <Gavel className="h-5 w-5 shrink-0" />
-            <span className="truncate">{desk.agent_name}</span>
-          </h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            {decisions.length} decision{decisions.length === 1 ? '' : 's'}
+      <PageHeader
+        breadcrumbs={[{ label: 'Decisions', href: '/decisions' }, { label: desk.agent_name }]}
+        icon={Gavel}
+        title={desk.agent_name}
+        badge={
+          <Badge variant={isOpen ? 'brand' : desk.status === 'expired' ? 'danger' : 'neutral'} className="capitalize">
+            {desk.status}
+          </Badge>
+        }
+        meta={
+          <>
+            <span>{decisions.length} decision{decisions.length === 1 ? '' : 's'}</span>
             {/* WHICH RULE raised this. A run matching several rules produces
-                a desk each, all named after the same agent — without the rule
-                there is nothing on screen to tell you which queue you opened.
-                Null when the rule has since been deleted, which does not stop
-                the desk being answerable. */}
-            {desk.outcome_name ? ` · ${desk.outcome_name}` : ''}
-            {' · '}
-            <Link href={`/agent-history/${desk.execution_log_id}`} className="text-brand hover:underline">
-              view the run <ArrowUpRight className="inline h-3 w-3" />
+                a desk each, all named after the same agent. Null when the
+                rule has since been deleted. */}
+            {desk.outcome_name && <><MetaSep /><span>{desk.outcome_name}</span></>}
+            {isOpen && desk.expires_at && (
+              <><MetaSep /><span className="inline-flex items-center gap-1"><Clock className="h-3 w-3" /> expires {new Date(desk.expires_at).toLocaleString()}</span></>
+            )}
+          </>
+        }
+        actions={
+          <Button variant="outline" size="sm" asChild>
+            <Link href={`/agent-history/${desk.execution_log_id}`}>
+              <ArrowUpRight className="h-4 w-4" /> View the run
             </Link>
-          </p>
-        </div>
-
-        <div className="flex flex-col items-end gap-2 shrink-0">
-          <Badge variant={isOpen ? 'warning' : 'secondary'}>{desk.status}</Badge>
-          {isOpen && desk.expires_at && (
-            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <Clock className="h-3 w-3" /> expires {new Date(desk.expires_at).toLocaleString()}
-            </span>
-          )}
-        </div>
-      </div>
+          </Button>
+        }
+      />
 
       {!isOpen && (
         <Card className="border-muted">
@@ -437,66 +448,94 @@ export default function DecisionReviewPage() {
 
       {current && (
         <>
+          {/* ONE payload. "What the agent concluded" and "Input for the next
+              agent" were two cards showing the same JSON twice — the second
+              a copy of the first until you edited it. The block below IS the
+              agent's output, editable in place; Revert puts the agent's
+              version back, and an edit is recorded on the decision as
+              was_edited so the record says a person changed it. The run's
+              own logs keep the original regardless. */}
           <Card>
             <CardContent className="py-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <h2 className="text-sm font-medium">What the agent concluded</h2>
-                {/* Answered items lead with WHAT WAS DECIDED and who, in the
-                    past tense, and take that option's colour. The raw status
-                    plus a bare option key said "decided · deny", which is
-                    both tenseless and the storage key rather than English. */}
-                {current.status === 'pending' ? (
-                  <Badge variant="warning" className="text-xs">Pending</Badge>
-                ) : current.chosen_option ? (
-                  <Badge variant={choiceToneVariant(styleForOption(current.chosen_option))} className="text-xs">
-                    {describeChoice(
-                      current.chosen_option_label ?? current.chosen_option,
-                      [current.decided_by_first_name, current.decided_by_last_name]
-                        .filter(Boolean).join(' ') || null,
-                    )}
-                  </Badge>
-                ) : (
-                  <Badge variant="secondary" className="text-xs">{current.status}</Badge>
-                )}
-              </div>
-              {current.message_text && (
-                <p className="text-sm whitespace-pre-wrap text-muted-foreground">{current.message_text}</p>
-              )}
-              <pre className="max-h-64 overflow-auto rounded-md bg-muted/50 p-3 text-xs">
-                {pretty(current.source_output)}
-              </pre>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardContent className="py-4 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div>
-                  <h2 className="text-sm font-medium">Input for the next agent</h2>
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    This is exactly what will run. Editing is recorded — the original stays on the decision.
-                  </p>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <h2 className="text-sm font-medium">
+                    {/* A desk's decision rows do not carry the target's
+                        name; the rule on the desk says whether there is one. */}
+                    {current.target_agent_name
+                      ? <>Input for <span className="text-brand">{current.target_agent_name}</span></>
+                      : (desk.outcome_config?.on_approve?.target_agent_id || current.resulting_execution_id)
+                        ? 'Input for the next agent'
+                        : 'What the agent concluded'}
+                  </h2>
+                  {current.message_text && <div className="mt-1"><ClampedText text={current.message_text} /></div>}
                 </div>
-                {isEdited(current) && (
+                <div className="flex shrink-0 items-center gap-2">
+                  {/* Edited — live while drafting, and permanently once
+                      answered, from the record. */}
+                  {(current.status === 'pending' ? isEdited(current) : wasEdited(current)) && (
+                    <Badge variant="warning" className="text-xs" title="The payload was changed by a person before it went downstream.">
+                      Edited
+                    </Badge>
+                  )}
+                  {/* Answered items lead with WHAT WAS DECIDED and who, in
+                      the past tense, in that option's colour. */}
+                  {current.status === 'pending' ? (
+                    <Badge variant="brand" className="text-xs">Pending</Badge>
+                  ) : current.chosen_option ? (
+                    <Badge variant={choiceToneVariant(styleForOption(current.chosen_option))} className="text-xs">
+                      {describeChoice(
+                        current.chosen_option_label ?? current.chosen_option,
+                        [current.decided_by_first_name, current.decided_by_last_name]
+                          .filter(Boolean).join(' ') || null,
+                      )}
+                    </Badge>
+                  ) : (
+                    <Badge variant="neutral" className="text-xs capitalize">{current.status}</Badge>
+                  )}
+                </div>
+              </div>
+
+              {isOpen && current.status === 'pending' ? (
+                <JsonEditor
+                  value={payloadText(current)}
+                  onChange={(next) => setDrafts((d) => ({ ...d, [current.id]: next }))}
+                  disabled={busy}
+                />
+              ) : (
+                <PayloadBlock value={payloadText(current)} empty="No payload was recorded." />
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                <span>
+                  {isOpen && current.status === 'pending'
+                    ? (isEdited(current)
+                        ? 'Differs from what the agent produced. This version is what will run, and the edit is recorded.'
+                        : 'Exactly what the agent produced. Edit it here if it needs changing before it goes on.')
+                    : wasEdited(current)
+                      ? 'Changed by a person before it went downstream.'
+                      : 'Sent as the agent produced it.'}
+                </span>
+                {isOpen && current.status === 'pending' && isEdited(current) && (
                   <Button
-                    variant="ghost" size="sm" className="text-xs shrink-0"
+                    variant="ghost" size="sm" className="shrink-0 text-xs"
                     onClick={() => setDrafts((d) => { const n = { ...d }; delete n[current.id]; return n; })}
                   >
-                    <RotateCcw className="h-3 w-3 mr-1" /> Reset
+                    <RotateCcw className="h-3 w-3" /> Revert to agent output
                   </Button>
                 )}
               </div>
 
-              <Textarea
-                value={payloadText(current)}
-                onChange={(e) => setDrafts((d) => ({ ...d, [current.id]: e.target.value }))}
-                disabled={!isOpen || current.status !== 'pending' || busy}
-                spellCheck={false}
-                className="font-mono text-xs min-h-[180px]"
-              />
-
-              {isEdited(current) && (
-                <p className="text-xs text-warning">Edited — differs from what the agent proposed.</p>
+              {/* The note the decider left, once there is one. It was
+                  recorded on resolve and then shown nowhere — the one
+                  sentence explaining WHY, invisible on the record of what. */}
+              {current.status !== 'pending' && current.note && (
+                <blockquote className="rounded-md border-l-2 border-brand/50 bg-muted/40 px-3 py-2 text-sm">
+                  <span className="mb-0.5 block text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Note{[current.decided_by_first_name, current.decided_by_last_name].filter(Boolean).length ? ` · ${[current.decided_by_first_name, current.decided_by_last_name].filter(Boolean).join(' ')}` : ''}
+                  </span>
+                  <span className="whitespace-pre-wrap">{current.note}</span>
+                </blockquote>
               )}
 
               {current.launch_error && (
@@ -582,11 +621,11 @@ export default function DecisionReviewPage() {
         </>
       )}
 
+      {/* No "Dismiss without acting": Deny is the answer that acts on
+          nothing, so a second way to end a desk only asked which of two ends
+          to pick. */}
       {isOpen && (
-        <div className="flex items-center justify-between gap-2 border-t pt-4">
-          <Button variant="ghost" className="text-muted-foreground" onClick={dismiss} disabled={busy}>
-            Dismiss without acting
-          </Button>
+        <div className="flex items-center justify-end gap-2 border-t pt-4">
           <span className="text-xs text-muted-foreground">
             {pendingCount > 0
               ? `${pendingCount} still to answer`

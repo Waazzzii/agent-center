@@ -9,12 +9,10 @@
  */
 
 import { useState, useCallback } from 'react';
-import {
-  ChevronRight, ChevronDown, CheckCircle2, XCircle, Loader2,
-  PauseCircle, LogIn, Zap, GitBranch, Play, Clock, Hash,
-  AlertCircle, SkipForward,
-} from 'lucide-react';
+import { ChevronRight, ChevronDown, Loader2, GitBranch, Hash, SkipForward } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { statusDef, TONE_BG } from '@/components/execution/status';
+import { stepTypeDef } from '@/components/execution/step-types';
 import { getActionBatchItems, type FullTreeNode } from '@/lib/api/agents';
 
 /**
@@ -42,28 +40,20 @@ function fmtDuration(ms: number | null | undefined): string {
   return `${Math.floor(ms / 60_000)}m ${Math.round((ms % 60_000) / 1000)}s`;
 }
 
+// Status colour and step glyphs are shared (components/execution/status,
+// step-types) — this panel had its own map, where awaiting approval was
+// violet and queued amber, disagreeing with every other screen.
 function statusDot(status: string): string {
-  if (status === 'completed' || status === 'approved') return 'bg-emerald-500';
-  if (status === 'failed' || status === 'aborted' || status === 'denied') return 'bg-red-500';
-  if (status === 'executing') return 'bg-blue-500 animate-pulse';
-  if (status === 'awaiting_approval') return 'bg-violet-500 animate-pulse';
-  if (status === 'provisioning' || status === 'queued') return 'bg-amber-500';
-  return 'bg-slate-400';
+  const d = statusDef(status);
+  return cn(TONE_BG[d.tone], d.live && 'animate-pulse');
 }
 
-const ACTION_ICONS: Record<string, typeof Zap> = {
-  agent: Zap,
-  login: LogIn,
-  approval: PauseCircle,
-  browser_script: Play,
-  sub_agent: GitBranch,
-};
-
 function NodeIcon({ node }: { node: FullTreeNode }) {
-  if (node.type === 'execution') return <GitBranch className="h-3 w-3 text-blue-500 shrink-0" />;
+  if (node.type === 'execution') return <GitBranch className="h-3 w-3 text-step-agent shrink-0" />;
   if (node.type === 'batch_item') return <Hash className="h-3 w-3 text-muted-foreground shrink-0" />;
-  const Icon = ACTION_ICONS[node.action_type ?? ''] ?? Zap;
-  return <Icon className="h-3 w-3 text-muted-foreground shrink-0" />;
+  const d = stepTypeDef(node.action_type);
+  const Icon = d.icon;
+  return <Icon className={cn('h-3 w-3 shrink-0', d.text)} />;
 }
 
 // ─── Props ────────────────────────────────────────────────────
@@ -205,7 +195,7 @@ function TreeNodeRow({
             a skip-forward glyph so the eye picks out which rows are
             collateral vs. the root failure. */}
         {cascadeSkipped ? (
-          <SkipForward className="h-3 w-3 text-red-500 shrink-0" />
+          <SkipForward className="h-3 w-3 text-danger shrink-0" />
         ) : (
           <NodeIcon node={node} />
         )}
@@ -216,7 +206,7 @@ function TreeNodeRow({
           cascadeSkipped && 'text-muted-foreground italic',
         )}>
           {node.label}
-          {cascadeSkipped && <span className="ml-1 text-[10px] text-red-500">(skipped)</span>}
+          {cascadeSkipped && <span className="ml-1 text-[10px] text-danger">(skipped)</span>}
           {node.type === 'execution' && node.item_index != null && (
             <span className="text-muted-foreground ml-1">#{node.item_index}</span>
           )}
