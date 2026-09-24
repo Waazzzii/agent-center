@@ -10,6 +10,7 @@ import {
   getAgents,
   getExecutionHistory,
   abortBrowserRun,
+  forceResumeRun,
   isInertLoginRow,
   isOutcomeRow,
   type Agent,
@@ -52,7 +53,7 @@ import {
   SquareArrowOutUpRight,
   CircleStop,
   GitBranch,
-  Tag as TagIcon, Bot } from 'lucide-react';
+  Tag as TagIcon, Bot, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
@@ -150,6 +151,8 @@ function RunsTable({
   onOpenBrowser,
   onAbort,
   abortingRunId,
+  onResume,
+  resumingRunId,
   sortBy,
   sortDir,
   onSort,
@@ -158,6 +161,8 @@ function RunsTable({
   onOpenBrowser: (run: ExecutionRun) => void;
   onAbort?: (run: ExecutionRun) => void;
   abortingRunId?: string | null;
+  onResume?: (run: ExecutionRun) => void;
+  resumingRunId?: string | null;
   sortBy: SortKey;
   sortDir: SortDir;
   onSort: (key: SortKey) => void;
@@ -195,7 +200,7 @@ function RunsTable({
   return (
     <div>
       {/* Column headers */}
-      <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_72px] items-center gap-2 h-10 px-3 text-sm font-medium text-foreground border-b">
+      <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_100px] items-center gap-2 h-10 px-3 text-sm font-medium text-foreground border-b">
         <Th col="agent" label="Agent" />
         {/* One column, not two. A run is either in flight — where the bar is
             the useful thing — or finished, where the outcome is. Showing both
@@ -252,7 +257,7 @@ function RunsTable({
                  onClick={() => router.push(`/agent-history/${run.id}`)}>
 
               {/* Desktop: column layout */}
-              <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_72px] gap-2 items-center px-3 py-2">
+              <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_100px] gap-2 items-center px-3 py-2">
                 {/* Agent */}
                 <div className="flex items-center gap-2 min-w-0">
                   {/* A sub-agent run is marked by the branch glyph, not by
@@ -324,6 +329,24 @@ function RunsTable({
                       <SquareArrowOutUpRight className="h-4 w-4" />
                     </Link>
                   )}
+                  {/* Resume: the way out of a queued run that is not moving.
+                      Queued only — a run that says Running either is, or is
+                      failed as interrupted within minutes of its server
+                      going away. */}
+                  {onResume && run.status === 'queued' && (
+                    <button
+                      type="button"
+                      title="Resume this run"
+                      aria-label="Resume this run"
+                      disabled={resumingRunId === run.id}
+                      onClick={() => onResume(run)}
+                      className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-brand disabled:opacity-40"
+                    >
+                      {resumingRunId === run.id
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <Play className="h-4 w-4" />}
+                    </button>
+                  )}
                   {onAbort && (ABORTABLE_STATUSES as readonly string[]).includes(run.status) && (
                     <button
                       type="button"
@@ -364,6 +387,20 @@ function RunsTable({
                     </Link>
                   )}
                   <StatusBadge status={displayStatus} />
+                  {onResume && run.status === 'queued' && (
+                    <button
+                      type="button"
+                      title="Resume this run"
+                      aria-label="Resume this run"
+                      disabled={resumingRunId === run.id}
+                      onClick={(ev) => { ev.stopPropagation(); onResume(run); }}
+                      className="ml-auto shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-brand disabled:opacity-40"
+                    >
+                      {resumingRunId === run.id
+                        ? <Loader2 className="h-4 w-4 animate-spin" />
+                        : <Play className="h-4 w-4" />}
+                    </button>
+                  )}
                 </div>
                 <div className="text-xs text-muted-foreground">{formatDate(run.started_at)} · {durationMs != null ? formatDuration(durationMs) : '—'}</div>
               </div>
@@ -590,6 +627,7 @@ export default function AgentExecutionsPage() {
   const [loading, setLoading] = useState(false);
   const [browserHITL, setBrowserHITL] = useState<{ runId: string; agentId: string; agentName: string } | null>(null);
   const [abortingRunId, setAbortingRunId] = useState<string | null>(null);
+  const [resumingRunId, setResumingRunId] = useState<string | null>(null);
 
   // Summary card counts (unaffected by table filters)
   const [summaryActive, setSummaryActive]       = useState(0);
@@ -1010,6 +1048,31 @@ export default function AgentExecutionsPage() {
     }
   };
 
+  // ─── Resume ──────────────────────────────────────────────────
+  // For a queued run that is not moving. The backend refuses if the run is
+  // actually being dispatched right now.
+  const handleResume = async (run: ExecutionRun) => {
+    const confirmed = await confirm({
+      title:       'Resume Run',
+      description: `"${run.agent_name}" is queued. Put it back in line to continue after its last finished step? ` +
+                   'Items a batch step already finished are not run again.',
+      confirmText: 'Resume Run',
+      cancelText:  'Cancel',
+    });
+    if (!confirmed) return;
+    setResumingRunId(run.id);
+    try {
+      await forceResumeRun(run.id);
+      toast.success('Run resumed. It starts as soon as a browser is free.');
+      loadHistory(page);
+      loadSummary();
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error ?? 'Failed to resume run');
+    } finally {
+      setResumingRunId(null);
+    }
+  };
+
   if (!permitted) return <NoPermissionContent />;
 
   // Card-based feed — no grid header needed (info is inline per card).
@@ -1271,6 +1334,8 @@ export default function AgentExecutionsPage() {
                     onOpenBrowser={(run) => setBrowserHITL({ runId: run.id, agentId: run.agent_id, agentName: run.agent_name })}
                     onAbort={handleAbort}
                     abortingRunId={abortingRunId}
+                    onResume={handleResume}
+                    resumingRunId={resumingRunId}
                     sortBy={sortBy}
                     sortDir={sortDir}
                     onSort={toggleSort}

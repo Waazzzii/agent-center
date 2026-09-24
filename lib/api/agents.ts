@@ -853,6 +853,15 @@ export async function resumeBrowserRun(runId: string): Promise<void> {
 }
 
 /**
+ * Put a stuck run (says queued/executing, nothing working on it) back in the
+ * queue. It continues after its last finished step. The backend refuses
+ * while the run is genuinely still running.
+ */
+export async function forceResumeRun(runId: string): Promise<void> {
+  await agentClient.post(`/agent/run/${runId}/force-resume`);
+}
+
+/**
  * Abort a running or paused agent run immediately.
  */
 export async function abortBrowserRun(runId: string): Promise<void> {
