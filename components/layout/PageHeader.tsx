@@ -36,7 +36,7 @@ export function PageHeader({
   icon?: LucideIcon | React.ReactNode;
   /** Status or state, beside the title. */
   badge?: React.ReactNode;
-  /** One sentence under the title. */
+  /** One sentence under the title. Kept to one line; a longer one gets an inline "more". */
   description?: React.ReactNode;
   /** Facts under the title — timestamps, ids, links. Replaces description when both are wanted in one row. */
   meta?: React.ReactNode;
@@ -91,7 +91,7 @@ export function PageHeader({
               <h1 className="min-w-0 break-words text-xl font-semibold tracking-tight sm:truncate sm:text-2xl">{title}</h1>
               {badge}
             </div>
-            {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
+            {description && <HeaderDescription>{description}</HeaderDescription>}
             {meta && (
               <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
                 {meta}
@@ -102,6 +102,57 @@ export function PageHeader({
         {actions && <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">{actions}</div>}
       </div>
     </header>
+  );
+}
+
+/**
+ * The description line. One line by default; a description that does not fit
+ * is cut with an ellipsis and gets an inline "more" that expands it in place
+ * ("less" folds it back). Nothing moves until you ask — a long agent
+ * description no longer pushes the whole editor down on load — and it works
+ * the same by mouse, keyboard and touch. Short descriptions render exactly as
+ * before, with no control at all.
+ */
+function HeaderDescription({ children }: { children: React.ReactNode }) {
+  const ref = React.useRef<HTMLParagraphElement>(null);
+  const [cut, setCut] = React.useState(false);
+  const [expanded, setExpanded] = React.useState(false);
+
+  // Measured on the one-line form only (expanded text never overflows), and
+  // re-measured as the header resizes — window, sidebar collapse.
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || expanded) return;
+    const check = () => setCut(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [children, expanded]);
+
+  const toggle = (
+    <button
+      type="button"
+      onClick={() => setExpanded((e) => !e)}
+      aria-expanded={expanded}
+      className="shrink-0 text-sm font-medium text-brand hover:underline focus-visible:underline focus-visible:outline-none"
+    >
+      {expanded ? 'less' : 'more'}
+    </button>
+  );
+
+  if (expanded) {
+    return (
+      <p className="mt-0.5 whitespace-pre-line break-words text-sm text-muted-foreground">
+        {children} {toggle}
+      </p>
+    );
+  }
+  return (
+    <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5">
+      <p ref={ref} className="min-w-0 truncate text-sm text-muted-foreground">{children}</p>
+      {cut && toggle}
+    </div>
   );
 }
 

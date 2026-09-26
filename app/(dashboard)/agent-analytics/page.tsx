@@ -19,7 +19,11 @@ import {
   type ActionTypeStats,
   type FailureHotspot,
 } from '@/lib/api/agents';
-import { getAgentCapacity, getCapacityEvents, type AgentCapacity, type CapacityWorker, type CapacityEvent } from '@/lib/api/ai-agent';
+import {
+  getAgentCapacity, getCapacityEvents, getPodMetrics, getQueueWaits,
+  type AgentCapacity, type CapacityWorker, type CapacityEvent, type PodMetrics, type QueueWaits,
+} from '@/lib/api/ai-agent';
+import { PodResourcesCard, QueueWaitsCard } from '@/components/analytics/capacity-telemetry';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -91,6 +95,8 @@ export default function AnalyticsPage() {
   const [data, setData] = useState<ExecutionAnalytics | null>(null);
   const [capacity, setCapacity] = useState<AgentCapacity | null>(null);
   const [capacityEvents, setCapacityEvents] = useState<CapacityEvent[]>([]);
+  const [podMetrics, setPodMetrics] = useState<PodMetrics | null>(null);
+  const [queueWaits, setQueueWaits] = useState<QueueWaits | null>(null);
   const [loading, setLoading] = useState(true);
 
   const isCustom = ANALYTICS_RANGES[rangeIdx]?.label === 'Custom';
@@ -111,14 +117,18 @@ export default function AnalyticsPage() {
     try {
       const fromIso = new Date(range.from + 'T00:00:00').toISOString();
       const toIso   = new Date(range.to + 'T23:59:59').toISOString();
-      const [analytics, cap, events] = await Promise.all([
+      const [analytics, cap, events, pods, waits] = await Promise.all([
         getExecutionAnalytics(selectedOrgId, { from: fromIso, to: toIso, compare: true }),
         getAgentCapacity(selectedOrgId).catch(() => null),
         getCapacityEvents(selectedOrgId, { from: fromIso, to: toIso }).catch(() => []),
+        getPodMetrics(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
+        getQueueWaits(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
       ]);
       setData(analytics);
       setCapacity(cap);
       setCapacityEvents(events);
+      setPodMetrics(pods);
+      setQueueWaits(waits);
     } catch {
       toast.error('Failed to load analytics');
     } finally {
@@ -186,6 +196,10 @@ export default function AnalyticsPage() {
           {/* Availability timeline — capacity blockages / outage windows */}
           <AvailabilityCard events={capacityEvents} />
 
+          {/* Pod history (worker and runner apart) + how long runs waited */}
+          <PodResourcesCard metrics={podMetrics} />
+          <QueueWaitsCard waits={queueWaits} />
+
           {/* Stat cards */}
           <SummaryCards data={data} />
 
@@ -228,73 +242,39 @@ export default function AnalyticsPage() {
 // ─── Capacity cards ──────────────────────────────────────────────
 
 function CapacityCards({ capacity }: { capacity: AgentCapacity }) {
-  const agentPct = capacity.max_concurrent_agents && capacity.max_concurrent_agents > 0
-    ? Math.round((capacity.active_agents / capacity.max_concurrent_agents) * 100) : null;
-  const browserPct = capacity.max_concurrent_browsers && capacity.max_concurrent_browsers > 0
-    ? Math.round((capacity.active_browser_slots / capacity.max_concurrent_browsers) * 100) : null;
-
-  const barColor = (pct: number | null) =>
-    pct === null ? 'bg-emerald-500' : pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-400' : 'bg-emerald-500';
-  const textColor = (pct: number | null) =>
-    pct === null ? 'text-emerald-600 dark:text-emerald-400' : pct >= 90 ? 'text-red-500' : pct >= 70 ? 'text-amber-500' : 'text-emerald-600 dark:text-emerald-400';
-
+  // Live counts only — there are no per-org run or browser limits. What an
+  // org can carry is its pods' memory and CPU (the Infrastructure card).
   const workers = capacity.workers ?? [];
 
   return (
     <div className={cn('grid grid-cols-1 sm:grid-cols-2 gap-3', workers.length > 0 && 'lg:grid-cols-3')}>
-      {/* Agent capacity */}
+      {/* Runs */}
       <Card>
         <CardContent className="py-3 px-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <Server className="h-4 w-4 text-brand" />
-              <span className="text-xs font-medium text-muted-foreground">Agent Capacity</span>
-            </div>
-            {agentPct !== null && (
-              <span className={cn('text-sm font-bold tabular-nums', textColor(agentPct))}>{agentPct}%</span>
-            )}
+          <div className="mb-2 flex items-center gap-2">
+            <Server className="h-4 w-4 text-brand" />
+            <span className="text-xs font-medium text-muted-foreground">Agent Runs</span>
           </div>
           <div className="text-lg font-bold tabular-nums">
             {capacity.active_agents} active
             {capacity.queued_agents > 0 && <span className="text-amber-500 text-sm ml-1">· {capacity.queued_agents} queued</span>}
           </div>
-          {capacity.max_concurrent_agents != null && capacity.max_concurrent_agents > 0 && (
-            <>
-              <div className="text-[10px] text-muted-foreground">{capacity.active_agents} of {capacity.max_concurrent_agents} slots</div>
-              <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
-                <div className={cn('h-full rounded-full transition-all', barColor(agentPct))}
-                  style={{ width: `${Math.min(100, agentPct ?? 0)}%` }} />
-              </div>
-            </>
-          )}
         </CardContent>
       </Card>
 
-      {/* Browser capacity */}
+      {/* Browsers */}
       <Card>
         <CardContent className="py-3 px-4">
-          <div className="flex items-center justify-between mb-2">
-            <div className="flex items-center gap-2">
-              <Monitor className="h-4 w-4 text-blue-500" />
-              <span className="text-xs font-medium text-muted-foreground">Browser Capacity</span>
-            </div>
-            {browserPct !== null && (
-              <span className={cn('text-sm font-bold tabular-nums', textColor(browserPct))}>{browserPct}%</span>
-            )}
+          <div className="mb-2 flex items-center gap-2">
+            <Monitor className="h-4 w-4 text-blue-500" />
+            <span className="text-xs font-medium text-muted-foreground">Browsers</span>
           </div>
           <div className="text-lg font-bold tabular-nums">
             {capacity.active_browser_slots} active
           </div>
           <div className="text-[10px] text-muted-foreground">
             {capacity.active_agent_browser_slots} agent · {capacity.active_browser_slots - capacity.active_agent_browser_slots} session
-            {capacity.max_concurrent_browsers ? ` · ${capacity.max_concurrent_browsers} limit` : ''}
           </div>
-          {capacity.max_concurrent_browsers != null && capacity.max_concurrent_browsers > 0 && (
-            <div className="mt-1.5 h-1.5 rounded-full bg-muted overflow-hidden">
-              <div className={cn('h-full rounded-full transition-all', barColor(browserPct))}
-                style={{ width: `${Math.min(100, browserPct ?? 0)}%` }} />
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -389,6 +369,10 @@ const EVENT_KIND_META: Record<CapacityEvent['kind'], { label: string; hint: stri
     label: 'No pods online',
     hint:  'No worker pods were registered for your organization — an infrastructure outage (pod crash-loop or failed deploy), not load.',
   },
+  runner_gated: {
+    label: 'Runner at capacity',
+    hint:  'The runner’s own memory/CPU gate was tripped, so queued runs waited to start. They started automatically once it cooled down.',
+  },
 };
 
 function AvailabilityCard({ events }: { events: CapacityEvent[] }) {
@@ -400,7 +384,7 @@ function AvailabilityCard({ events }: { events: CapacityEvent[] }) {
         <CardContent className="py-2.5 px-4 flex items-center gap-2 text-xs text-muted-foreground">
           <span className="relative flex h-2 w-2"><span className="relative rounded-full h-2 w-2 bg-emerald-500" /></span>
           <span className="font-medium text-foreground">Availability</span>
-          No capacity blockages in this period — every browser request was placed immediately.
+          No capacity blockages in this period — every browser and run started when asked.
         </CardContent>
       </Card>
     );
@@ -416,7 +400,7 @@ function AvailabilityCard({ events }: { events: CapacityEvent[] }) {
               Availability
             </h3>
             <p className="text-xs text-muted-foreground">
-              Windows where browser requests could not be placed — new work queued until capacity recovered
+              Windows where new work could not start — browsers refused by a worker, or runs held by a runner — and queued until capacity recovered
             </p>
           </div>
           <Badge

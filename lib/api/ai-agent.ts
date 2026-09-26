@@ -45,8 +45,6 @@ export interface CapacityWorker {
 }
 
 export interface AgentCapacity {
-  max_concurrent_agents: number | null;
-  max_concurrent_browsers: number | null;
   active_agents: number;
   active_browser_slots: number;
   active_agent_browser_slots: number;
@@ -63,13 +61,15 @@ export async function getAgentCapacity(orgId: string): Promise<AgentCapacity> {
 }
 
 /**
- * One capacity-blockage window: opened on the first refused browser
- * allocation, extended while refusals continue, closed by the next
- * successful allocation. ongoing = blocked right now.
+ * One capacity-blockage window, opened on the first refusal, extended while
+ * refusals continue, closed when the org is served again. ongoing = now.
+ *   at_capacity / no_workers — the WORKER refused browsers (or had no pods);
+ *   runner_gated             — the RUNNER held queued runs back (its own
+ *                              memory/CPU gate).
  */
 export interface CapacityEvent {
   id: string;
-  kind: 'at_capacity' | 'no_workers';
+  kind: 'at_capacity' | 'no_workers' | 'runner_gated';
   reason: string | null;
   refusal_count: number;
   started_at: string;
@@ -90,4 +90,56 @@ export async function getCapacityEvents(
     `/admin/organizations/${orgId}/ai-agent/capacity-events${qs ? `?${qs}` : ''}`
   );
   return response.data.events ?? [];
+}
+
+// ─── Capacity telemetry (pod history, queue waits) ────────────────────────────
+
+export interface PodSeriesPoint {
+  t: string;
+  mem: number | null;      // mean over the bucket, 0..1 of the memory limit
+  mem_max: number | null;
+  cpu: number | null;      // mean over the bucket, 0..n of the CPU request
+  cpu_max: number | null;
+  gated: boolean;          // a gate was tripped at some point in the bucket
+  load: number | null;     // runs on it (max over the bucket)
+  draining: boolean;
+}
+
+export interface PodSeries {
+  organization_id: string | null;
+  organization_name: string | null;
+  pod: string;
+  role: 'worker' | 'runner';
+  points: PodSeriesPoint[];
+}
+
+export interface PodMetrics {
+  bucket_seconds: number;
+  thresholds: { memory_trip: number; memory_resume: number; cpu_trip: number; cpu_resume: number };
+  series: PodSeries[];
+}
+
+/** Worker and runner memory/CPU/gate history for the org's pods. */
+export async function getPodMetrics(orgId: string, range: { from: string; to: string }): Promise<PodMetrics> {
+  const qs = new URLSearchParams(range).toString();
+  const response = await apiClient.get<PodMetrics>(`/admin/organizations/${orgId}/ai-agent/pod-metrics?${qs}`);
+  return response.data;
+}
+
+export interface QueueWaits {
+  runs: number;
+  waited: number;          // runs that waited at least a second to start
+  total_wait_s: number;
+  p50_s: number;
+  p95_s: number;
+  max_s: number;
+  reasons: Array<{ reason: string; runs: number; total_wait_s: number }>;
+  series: Array<{ t: string; runs: number; waited: number; total_wait_s: number }>;
+}
+
+/** How long the org's runs waited to start, and why. */
+export async function getQueueWaits(orgId: string, range: { from: string; to: string }): Promise<QueueWaits> {
+  const qs = new URLSearchParams(range).toString();
+  const response = await apiClient.get<QueueWaits>(`/admin/organizations/${orgId}/ai-agent/queue-waits?${qs}`);
+  return response.data;
 }
