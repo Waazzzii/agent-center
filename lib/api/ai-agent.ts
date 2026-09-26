@@ -130,11 +130,15 @@ export async function getPodMetrics(orgId: string, range: { from: string; to: st
 
 export interface QueueWaits {
   runs: number;
-  waited: number;          // runs that waited at least a second to start
+  waited: number;          // runs that waited at least a second for CAPACITY
   total_wait_s: number;
   p50_s: number;
   p95_s: number;
   max_s: number;
+  // Hand-offs between pods (a draining pod passing a run on) — not capacity waits.
+  handed_off_runs?: number;
+  handoffs?: number;
+  handoff_wait_s?: number;
   reasons: Array<{ reason: string; runs: number; total_wait_s: number }>;
   series: Array<{ t: string; runs: number; waited: number; total_wait_s: number }>;
 }

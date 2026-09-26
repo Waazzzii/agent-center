@@ -189,12 +189,21 @@ export function QueueWaitsCard({ waits }: { waits: QueueWaits | null }) {
             <Hourglass className="h-4 w-4 text-amber-500" />
             Queue waits
           </h3>
-          <p className="text-xs text-muted-foreground">How long runs waited to start, and why.</p>
+          <p className="text-xs text-muted-foreground">How long runs waited for capacity to start, and why.</p>
         </div>
+
+        {(waits.handed_off_runs ?? 0) > 0 && (
+          <p className="mb-3 text-xs text-muted-foreground">
+            <span className="font-medium text-foreground">{waits.handed_off_runs} run{waits.handed_off_runs === 1 ? '' : 's'}</span>
+            {' '}handed off between pods ({waits.handoffs} hand-off{waits.handoffs === 1 ? '' : 's'}
+            {(waits.handoff_wait_s ?? 0) > 0 ? `, ${fmtSeconds(waits.handoff_wait_s ?? 0)} in transit` : ''}) — a draining pod
+            passing its runs on between steps. Not a capacity wait.
+          </p>
+        )}
 
         {waits.waited === 0 ? (
           <p className="py-4 text-xs text-muted-foreground">
-            No run waited to start in this period{waits.runs ? ` — all ${waits.runs} started immediately.` : '.'}
+            No run waited for capacity in this period{waits.runs ? ` — all ${waits.runs} started as soon as they were queued.` : '.'}
           </p>
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
