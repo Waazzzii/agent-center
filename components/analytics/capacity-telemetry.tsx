@@ -66,6 +66,17 @@ function Segmented<T extends string>({ value, options, onChange }: {
   );
 }
 
+/** Share of the period a pod was gated: gated samples over all its samples. */
+function gatedShareOf(points: { gated_share?: number; samples?: number; gated: boolean }[]) {
+  let gated = 0, total = 0;
+  for (const p of points) {
+    const n = p.samples ?? 1;
+    gated += (p.gated_share ?? (p.gated ? 1 : 0)) * n;
+    total += n;
+  }
+  return total ? gated / total : 0;
+}
+
 // ─── Pod resources ───────────────────────────────────────────────
 
 export function PodResourcesCard({ metrics }: { metrics: PodMetrics | null }) {
@@ -91,7 +102,7 @@ export function PodResourcesCard({ metrics }: { metrics: PodMetrics | null }) {
 
   const stats = series.map((s) => {
     const vals = s.points.map((p) => (metric === 'mem' ? p.mem_max : p.cpu_max)).filter((v): v is number => v != null);
-    const gatedShare = s.points.length ? s.points.filter((p) => p.gated).length / s.points.length : 0;
+    const gatedShare = gatedShareOf(s.points);
     return { pod: s.pod, peak: vals.length ? Math.max(...vals) * 100 : null, gatedShare };
   });
 

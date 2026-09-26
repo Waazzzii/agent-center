@@ -100,7 +100,9 @@ export interface PodSeriesPoint {
   mem_max: number | null;
   cpu: number | null;      // mean over the bucket, 0..n of the CPU request
   cpu_max: number | null;
-  gated: boolean;          // a gate was tripped at some point in the bucket
+  gated: boolean;
+  gated_share?: number;    // share of the bucket's samples that were gated
+  samples?: number;          // a gate was tripped at some point in the bucket
   load: number | null;     // runs on it (max over the bucket)
   draining: boolean;
 }
