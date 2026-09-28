@@ -192,6 +192,22 @@ export function QueueWaitsCard({ waits }: { waits: QueueWaits | null }) {
           <p className="text-xs text-muted-foreground">How long runs waited for capacity to start, and why.</p>
         </div>
 
+        {(waits.waiting_now?.length ?? 0) > 0 && (
+          <div className="mb-3 rounded-md border border-amber-500/30 bg-amber-500/5 p-2.5">
+            <p className="text-xs font-medium">
+              {waits.waiting_now!.length} run{waits.waiting_now!.length === 1 ? '' : 's'} waiting now
+            </p>
+            <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+              {waits.waiting_now!.slice(0, 5).map((w) => (
+                <li key={w.id} className="flex justify-between gap-2">
+                  <span className="truncate">{w.agent_name ?? w.id.slice(0, 8)}{w.reason ? ` — ${w.reason.replace(/^Waiting for /, 'waiting for ')}` : ''}</span>
+                  <span className="shrink-0 tabular-nums">{fmtSeconds(w.waited_s)}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+
         {(waits.handed_off_runs ?? 0) > 0 && (
           <p className="mb-3 text-xs text-muted-foreground">
             <span className="font-medium text-foreground">{waits.handed_off_runs} run{waits.handed_off_runs === 1 ? '' : 's'}</span>
@@ -203,7 +219,9 @@ export function QueueWaitsCard({ waits }: { waits: QueueWaits | null }) {
 
         {waits.waited === 0 ? (
           <p className="py-4 text-xs text-muted-foreground">
-            No run waited for capacity in this period{waits.runs ? ` — all ${waits.runs} started as soon as they were queued.` : '.'}
+            {(waits.waiting_now?.length ?? 0) > 0
+              ? 'No run that started in this period had to wait — the waits above are still in progress.'
+              : <>No run waited for capacity in this period{waits.runs ? ` — all ${waits.runs} started as soon as they were queued.` : '.'}</>}
           </p>
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">

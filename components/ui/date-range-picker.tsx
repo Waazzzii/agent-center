@@ -17,6 +17,12 @@ export interface DateRange {
 export interface RangePreset {
   label: string;
   getRange: () => DateRange | null; // null = custom sentinel
+  /**
+   * Exact instants, for windows that are not whole days ("24h" is the last
+   * 24 hours, not "since the start of yesterday"). Takes precedence over
+   * getRange for querying; getRange still drives the displayed dates.
+   */
+  getWindow?: () => { fromIso: string; toIso: string };
 }
 
 const DEFAULT_PRESETS: RangePreset[] = [

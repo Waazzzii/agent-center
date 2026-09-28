@@ -29,8 +29,7 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { DateRangePicker } from '@/components/ui/date-range-picker';
-import { useBillingRangePresets } from '@/lib/hooks/use-billing-ranges';
-import { getBillingCycle, type BillingCycle } from '@/lib/api/billing-cycles';
+import type { RangePreset } from '@/components/ui/date-range-picker';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { toast } from 'sonner';
 import {
@@ -72,8 +71,27 @@ function fmtRelative(iso: string): string {
   return `${Math.floor(ms / 86_400_000)}d ago`;
 }
 
-// Preset ranges now come from useBillingRangePresets — shared with Billing
-// so customers see the same timeframe chips on both pages.
+// Usage's own timeframes: rolling windows, default the last 24 hours. (It used
+// to share Billing's This cycle / Last cycle presets; billing is not in use.)
+const dateOnly = (d: Date) => d.toISOString().slice(0, 10);
+function lastDays(label: string, days: number): RangePreset {
+  return {
+    label,
+    getRange: () => { const n = new Date(); return { from: dateOnly(new Date(n.getTime() - days * 86_400_000)), to: dateOnly(n) }; },
+  };
+}
+const ANALYTICS_RANGES: RangePreset[] = [
+  {
+    label: '24h',
+    getRange: () => { const n = new Date(); return { from: dateOnly(new Date(n.getTime() - 86_400_000)), to: dateOnly(n) }; },
+    getWindow: () => { const n = Date.now(); return { fromIso: new Date(n - 86_400_000).toISOString(), toIso: new Date(n).toISOString() }; },
+  },
+  lastDays('7d', 7),
+  lastDays('14d', 14),
+  lastDays('30d', 30),
+  lastDays('90d', 90),
+  { label: 'Custom', getRange: () => null },
+];
 
 // ─── Page ─────────────────────────────────────────────────────────
 
@@ -82,14 +100,7 @@ export default function AnalyticsPage() {
   const allowed = useRequirePermission('agent_center_user');
   const router = useRouter();
 
-  // Billing cycles — shared presets with the Billing page so the two stay
-  // visually + behaviourally in sync. Falls back to calendar-month windows
-  // until the fetch lands.
-  const [activeCycle, setActiveCycle] = useState<BillingCycle | null>(null);
-  const [recentCycles, setRecentCycles] = useState<BillingCycle[]>([]);
-  const ANALYTICS_RANGES = useBillingRangePresets(activeCycle, recentCycles);
-
-  const [rangeIdx, setRangeIdx] = useState(2); // default "7d" (after This cycle / Last cycle)
+  const [rangeIdx, setRangeIdx] = useState(0); // default: the last 24 hours
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [data, setData] = useState<ExecutionAnalytics | null>(null);
@@ -104,19 +115,13 @@ export default function AnalyticsPage() {
     ? (customFrom && customTo ? { from: customFrom, to: customTo } : null)
     : ANALYTICS_RANGES[rangeIdx]?.getRange() ?? null;
 
-  useEffect(() => {
-    if (!selectedOrgId) return;
-    getBillingCycle(selectedOrgId)
-      .then((d) => { setActiveCycle(d.active); setRecentCycles(d.recent); })
-      .catch(() => { /* fallback presets are fine */ });
-  }, [selectedOrgId]);
-
   const load = useCallback(async () => {
     if (!selectedOrgId || !range) return;
     setLoading(true);
     try {
-      const fromIso = new Date(range.from + 'T00:00:00').toISOString();
-      const toIso   = new Date(range.to + 'T23:59:59').toISOString();
+      const exact = !isCustom ? ANALYTICS_RANGES[rangeIdx]?.getWindow?.() : undefined;
+      const fromIso = exact?.fromIso ?? new Date(range.from + 'T00:00:00').toISOString();
+      const toIso   = exact?.toIso   ?? new Date(range.to + 'T23:59:59').toISOString();
       const [analytics, cap, events, pods, waits] = await Promise.all([
         getExecutionAnalytics(selectedOrgId, { from: fromIso, to: toIso, compare: true }),
         getAgentCapacity(selectedOrgId).catch(() => null),
@@ -134,7 +139,7 @@ export default function AnalyticsPage() {
     } finally {
       setLoading(false);
     }
-  }, [selectedOrgId, rangeIdx, customFrom, customTo, activeCycle, recentCycles]);
+  }, [selectedOrgId, rangeIdx, customFrom, customTo]);
 
   useEffect(() => { load(); }, [load]);
 

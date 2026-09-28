@@ -141,6 +141,8 @@ export interface QueueWaits {
   handoff_wait_s?: number;
   reasons: Array<{ reason: string; runs: number; total_wait_s: number }>;
   series: Array<{ t: string; runs: number; waited: number; total_wait_s: number }>;
+  /** Runs in the queue right now (the figures above count a wait only once its run starts). */
+  waiting_now?: Array<{ id: string; agent_name: string | null; reason: string | null; since: string; waited_s: number }>;
 }
 
 /** How long the org's runs waited to start, and why. */
