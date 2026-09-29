@@ -853,6 +853,16 @@ export async function resumeBrowserRun(runId: string): Promise<void> {
 }
 
 /**
+ * Re-run the step a run is parked on for a sign-in, WITHOUT signing in — for a
+ * park that was a hiccup rather than a real sign-out. It retries on the pod and
+ * pool browser it parked on; if the session really is signed out it simply
+ * parks again.
+ */
+export async function retryParkedRun(runId: string): Promise<void> {
+  await agentClient.post(`/agent/run/${runId}/resume`, { retry: true });
+}
+
+/**
  * Put a stuck run (says queued/executing, nothing working on it) back in the
  * queue. It continues after its last finished step. The backend refuses
  * while the run is genuinely still running.

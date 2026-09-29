@@ -20,7 +20,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import agentClient from '@/lib/api/agent-client';
-import { isInertLoginRow } from '@/lib/api/agents';
+import { isInertLoginRow, retryParkedRun } from '@/lib/api/agents';
 import { TokenUsage } from '@/components/execution/TokenUsage';
 import { Button } from '@/components/ui/button';
 import { PageHeader, MetaSep } from '@/components/layout/PageHeader';
@@ -30,7 +30,7 @@ import { JsonHighlight, isJsonText } from '@/components/execution/JsonHighlight'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  Loader2, GitBranch, PauseCircle,
+  Loader2, GitBranch, PauseCircle, RotateCcw,
   AlertCircle, Copy, Hash, Bot, ChevronRight, ChevronLeft, Gavel,
   ImageIcon, ExternalLink, ChevronDown, ChevronUp, LogIn,
 } from 'lucide-react';
@@ -123,8 +123,20 @@ function fmtDate(iso: string): string {
  * it. Finishing that sign-in resumes every run waiting on the login, this one
  * included.
  */
-function SignInRecovery({ step }: { step: FullTreeNode }) {
+function SignInRecovery({ step, runId }: { step: FullTreeNode; runId: string }) {
+  const [retrying, setRetrying] = useState(false);
   if (!step.login_id) return null;
+  const retry = async () => {
+    setRetrying(true);
+    try {
+      await retryParkedRun(runId);
+      toast.success('Retrying — it runs the step again on the same browser');
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || 'Could not retry');
+    } finally {
+      setRetrying(false);
+    }
+  };
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning-soft/60 p-3">
       <LogIn className="h-4 w-4 shrink-0 text-warning" />
@@ -133,9 +145,15 @@ function SignInRecovery({ step }: { step: FullTreeNode }) {
           Waiting for a sign-in to {step.login_name ?? 'its login'}
         </span>
         <span className="block text-muted-foreground">
-          Signing in there resumes this run and every other run waiting on it.
+          Signing in there resumes this run and every other run waiting on it. If
+          it was a hiccup rather than a real sign-out, Retry runs the step again
+          without signing in.
         </span>
       </div>
+      <Button size="sm" variant="outline" className="shrink-0 text-xs" onClick={retry} disabled={retrying}>
+        {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+        <span className="ml-1">Retry</span>
+      </Button>
       <Button asChild size="sm" variant="outline" className="shrink-0 text-xs">
         <Link href={`/actions/logins/${step.login_id}?tab=credentials`}>
           Open {step.login_name ?? 'login'}
@@ -1283,7 +1301,7 @@ export default function ExecutionDetailPage() {
         const parked = isExecution
           ? visibleActions.find((a) => a.status === 'awaiting_approval' && a.login_id)
           : isAction && current.status === 'awaiting_approval' && current.login_id ? current : null;
-        return parked ? <SignInRecovery step={parked} /> : null;
+        return parked ? <SignInRecovery step={parked} runId={id} /> : null;
       })()}
 
       {/* ── Content ────────────────────────────────────────────── */}

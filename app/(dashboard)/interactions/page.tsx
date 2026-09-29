@@ -8,6 +8,7 @@ import {
   approveApproval,
   denyApproval,
   getBrowserRunStatus,
+  retryParkedRun,
   type AgentApprovalItem,
 } from '@/lib/api/agents';
 import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
@@ -18,7 +19,7 @@ import { Badge } from '@/components/ui/badge';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { toast } from 'sonner';
 import {
-  CheckCircle2, XCircle, Eye, Loader2, MessageSquare, LogIn, PauseCircle, Users, Search } from 'lucide-react';
+  CheckCircle2, XCircle, Eye, Loader2, MessageSquare, LogIn, PauseCircle, Users, Search, RotateCcw } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
@@ -142,6 +143,19 @@ export default function InteractionsPage() {
     } finally {
       setDeciding((d) => ({ ...d, [item.id]: false }));
     }
+  };
+
+  // Retry every run waiting on this login WITHOUT signing in — for a park
+  // that was a hiccup rather than a real sign-out. Each retries on the pod and
+  // pool browser it parked on; one still signed out simply parks again.
+  const [retrying, setRetrying] = useState<Record<string, boolean>>({});
+  const handleRetry = async (loginId: string, group: AgentApprovalItem[]) => {
+    setRetrying((s) => ({ ...s, [loginId]: true }));
+    const results = await Promise.allSettled(group.map((g) => retryParkedRun(g.execution_log_id)));
+    setRetrying((s) => ({ ...s, [loginId]: false }));
+    const failed = results.filter((r) => r.status === 'rejected').length;
+    if (failed === 0) toast.success(group.length === 1 ? 'Retrying the run' : `Retrying ${group.length} runs`);
+    else toast.error(`${failed} of ${group.length} could not be retried`);
   };
 
   const handleOpenBrowser = async (loginId: string, loginName: string) => {
@@ -303,7 +317,7 @@ export default function InteractionsPage() {
                 <th className="text-left font-medium px-4 py-2">Agent</th>
                 <th className="text-left font-medium px-4 py-2">Step</th>
                 <th className="text-left font-medium px-4 py-2 w-24">Waiting</th>
-                <th className="w-36" />
+                <th className="w-56" />
               </tr>
             </thead>
             <tbody>
@@ -346,11 +360,19 @@ export default function InteractionsPage() {
                             Logging in...
                           </Button>
                         ) : (
-                          <Button size="sm" onClick={() => handleOpenBrowser(loginId, primary.login_name ?? 'Login')}
-                            disabled={starting} className="bg-warning hover:bg-warning/90 text-white text-xs">
-                            {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
-                            <span className="ml-1">Log In</span>
-                          </Button>
+                          <div className="flex items-center justify-end gap-2">
+                            <Button size="sm" variant="outline" onClick={() => handleRetry(loginId, group)}
+                              disabled={!!retrying[loginId] || starting} className="text-xs"
+                              title="Run the waiting step again without signing in — for a hiccup, not a real sign-out">
+                              {retrying[loginId] ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                              <span className="ml-1">Retry</span>
+                            </Button>
+                            <Button size="sm" onClick={() => handleOpenBrowser(loginId, primary.login_name ?? 'Login')}
+                              disabled={starting} className="bg-warning hover:bg-warning/90 text-white text-xs">
+                              {starting ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
+                              <span className="ml-1">Log In</span>
+                            </Button>
+                          </div>
                         )}
                       </td>
                     </tr>
