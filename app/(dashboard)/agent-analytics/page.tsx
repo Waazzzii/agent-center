@@ -24,6 +24,7 @@ import {
   type AgentCapacity, type CapacityWorker, type CapacityEvent, type PodMetrics, type QueueWaits,
 } from '@/lib/api/ai-agent';
 import { PodResourcesCard, QueueWaitsCard } from '@/components/analytics/capacity-telemetry';
+import { chartTooltipProps, CHART_GRID_STROKE } from '@/components/analytics/chart-theme';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -596,7 +597,7 @@ function RunsOverTimeCard({ data, onBarClick }: {
               const p = (e as { activeLabel?: string })?.activeLabel;
               if (p) onBarClick(p);
             }} style={{ cursor: 'pointer' }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
+              <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_STROKE} opacity={0.4} />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} tickFormatter={(d) => new Date(d).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })} />
               <YAxis tick={{ fontSize: 11 }} />
               <Tooltip content={({ active, payload }) => {
@@ -656,7 +657,7 @@ function StatusMixCard({ data }: { data: ExecutionAnalytics }) {
               <Pie data={pie} dataKey="value" nameKey="name" innerRadius={60} outerRadius={90} paddingAngle={2}>
                 {pie.map((entry) => <Cell key={entry.name} fill={entry.color} />)}
               </Pie>
-              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 6 }} />
+              <Tooltip {...chartTooltipProps} />
               <Legend wrapperStyle={{ fontSize: 11 }} />
             </PieChart>
           </ResponsiveContainer>

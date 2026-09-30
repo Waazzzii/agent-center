@@ -20,6 +20,7 @@ import {
 } from 'recharts';
 import { Card, CardContent } from '@/components/ui/card';
 import { cn } from '@/lib/utils';
+import { chartTooltipProps, CHART_GRID_STROKE } from './chart-theme';
 import type { PodMetrics, QueueWaits } from '@/lib/api/ai-agent';
 
 const POD_COLORS = ['#6366f1', '#10b981', '#f59e0b', '#ef4444', '#0ea5e9', '#a855f7', '#14b8a6', '#f97316'];
@@ -140,13 +141,13 @@ export function PodResourcesCard({ metrics }: { metrics: PodMetrics | null }) {
           <>
             <ResponsiveContainer width="100%" height={220}>
               <LineChart data={rows} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_STROKE} opacity={0.4} />
                 <XAxis dataKey="t" tick={{ fontSize: 11 }} tickFormatter={(t) => fmtTick(t, bucket)} minTickGap={32} />
                 <YAxis tick={{ fontSize: 11 }} unit="%" domain={[0, (max: number) => Math.max(100, Math.ceil(max / 10) * 10)]} />
                 <Tooltip
                   labelFormatter={(t) => new Date(String(t)).toLocaleString()}
                   formatter={(v, name) => [`${v ?? '—'}%`, podLabel(String(name))]}
-                  contentStyle={{ fontSize: 12 }}
+                  {...chartTooltipProps}
                 />
                 {trip != null && <ReferenceLine y={trip} stroke="#ef4444" strokeDasharray="4 3" label={{ value: `stop ${Math.round(trip)}%`, fontSize: 10, fill: '#ef4444', position: 'insideTopRight' }} />}
                 {resume != null && <ReferenceLine y={resume} stroke="#9ca3af" strokeDasharray="2 3" />}
@@ -249,13 +250,13 @@ export function QueueWaitsCard({ waits }: { waits: QueueWaits | null }) {
             </div>
             <ResponsiveContainer width="100%" height={180}>
               <BarChart data={waits.series.map((p) => ({ ...p, minutes: Math.round((p.total_wait_s / 60) * 10) / 10 }))} margin={{ top: 8, right: 8, left: -16, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} />
+                <CartesianGrid strokeDasharray="3 3" stroke={CHART_GRID_STROKE} opacity={0.4} />
                 <XAxis dataKey="t" tick={{ fontSize: 11 }} tickFormatter={(t) => fmtTick(t, bucketHours >= 0.5 ? 1800 : 60)} minTickGap={32} />
                 <YAxis tick={{ fontSize: 11 }} unit="m" />
                 <Tooltip
                   labelFormatter={(t) => new Date(String(t)).toLocaleString()}
                   formatter={(v, _n, item) => [`${v ?? 0} min across ${(item as any)?.payload?.waited ?? 0} run(s)`, 'Waiting']}
-                  contentStyle={{ fontSize: 12 }}
+                  {...chartTooltipProps}
                 />
                 <Bar dataKey="minutes" fill="#f59e0b" radius={[3, 3, 0, 0]} isAnimationActive={false} />
               </BarChart>
