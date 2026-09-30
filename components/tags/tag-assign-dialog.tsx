@@ -69,9 +69,9 @@ export function TagAssignDialog({ open, onOpenChange, orgId, entityLabel, initia
           dialog rather than hanging off the bottom of it. */}
       <DialogContent className="sm:max-w-xl overflow-visible">
         <DialogHeader>
-          <DialogTitle>Tags{entityLabel ? ` · ${entityLabel}` : ''}</DialogTitle>
+          <DialogTitle>Groups{entityLabel ? ` · ${entityLabel}` : ''}</DialogTitle>
           <DialogDescription>
-            Type to search, or type a new name and press Enter to create one.
+            Type to search, or type a new name and press Enter to create a group.
           </DialogDescription>
         </DialogHeader>
         <div className="py-1 min-h-[18rem]">
@@ -80,7 +80,7 @@ export function TagAssignDialog({ open, onOpenChange, orgId, entityLabel, initia
             selected={selected}
             onChange={setSelected}
             onCreate={(name) => createTag({ name })}
-            placeholder="Search or create a tag…"
+            placeholder="Search or create a group…"
           />
         </div>
         <DialogFooter>

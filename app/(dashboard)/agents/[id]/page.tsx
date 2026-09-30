@@ -1764,10 +1764,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
 
           <FieldGroup title="Organise">
             <Field
-              label="Tags"
+              label="Groups"
               // The picker can create a tag but not rename or delete one, so
               // the link hands off to the page that can.
-              trailing={<Link href="/tags" className="text-brand hover:underline">Manage tags</Link>}
+              trailing={<Link href="/tags" className="text-brand hover:underline">Manage groups</Link>}
             >
               <TagPicker
                 tags={allTags}

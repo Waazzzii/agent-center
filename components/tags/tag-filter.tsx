@@ -51,7 +51,7 @@ export function TagFilter({ tags, selected, onChange, match, onMatchChange }: Ta
           className={cn('h-9 gap-1.5', count > 0 && 'border-brand/40 text-brand')}
         >
           <TagIcon className="h-3.5 w-3.5" />
-          Tags
+          Groups
           {count > 0 && (
             <span className="ml-0.5 rounded-full bg-brand px-1.5 text-[10px] font-semibold text-brand-fg">
               {count}
@@ -97,7 +97,7 @@ export function TagFilter({ tags, selected, onChange, match, onMatchChange }: Ta
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search tags…"
+              placeholder="Search groups…"
               className="h-8 pl-7 text-xs"
               autoFocus
             />
@@ -107,9 +107,9 @@ export function TagFilter({ tags, selected, onChange, match, onMatchChange }: Ta
         {/* Capped at ~10 rows or half the viewport, whichever is smaller. */}
         <div className="max-h-[min(20rem,50vh)] overflow-auto py-1">
           {tags.length === 0 ? (
-            <div className="px-3 py-2 text-xs italic text-muted-foreground">No tags yet.</div>
+            <div className="px-3 py-2 text-xs italic text-muted-foreground">No groups yet.</div>
           ) : visible.length === 0 ? (
-            <div className="px-3 py-2 text-xs italic text-muted-foreground">No tags match “{query}”.</div>
+            <div className="px-3 py-2 text-xs italic text-muted-foreground">No groups match “{query}”.</div>
           ) : (
             visible.map((t) => {
               const isSelected = selected.includes(t.id);

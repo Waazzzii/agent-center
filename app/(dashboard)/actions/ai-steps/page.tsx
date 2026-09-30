@@ -179,7 +179,7 @@ export default function AiStepsPage() {
                 },
                 {
                   key: 'tags',
-                  label: 'Tags',
+                  label: 'Groups',
                   // Same shape as the routines list: the actions column next to
                   // this one is w-px, so an unsized Tags column let a long tag
                   // truncate right up against the row menu and read as running
@@ -200,7 +200,7 @@ export default function AiStepsPage() {
                       <RowActionsMenu
                         actions={[
                           { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/actions/ai-steps/${i.id}`) },
-                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogStep(i) },
+                          { label: 'Groups', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogStep(i) },
                           { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(i) },
                         ]}
                       />
@@ -211,7 +211,7 @@ export default function AiStepsPage() {
                       <RowActionsMenu
                         actions={[
                           { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/actions/ai-steps/${i.id}`) },
-                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogStep(i) },
+                          { label: 'Groups', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogStep(i) },
                           { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(i) },
                         ]}
                       />

@@ -478,9 +478,9 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSea
                   key: 'tags',
                   label: (
                     <span className="inline-flex items-center gap-1">
-                      Tags
+                      Groups
                       <HeaderHelp>
-                        Free-form labels for grouping and filtering. Click a row&apos;s tag area
+                        Groups for organising and filtering. Click a row&apos;s group area
                         to edit them.
                       </HeaderHelp>
                     </span>

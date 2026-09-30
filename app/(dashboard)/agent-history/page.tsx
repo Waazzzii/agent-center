@@ -1195,10 +1195,10 @@ export default function AgentExecutionsPage() {
                       emptyHint: 'no agents',
                     },
                     {
-                      key: 'tag', label: 'Tag', icon: TagIcon,
+                      key: 'tag', label: 'Group', icon: TagIcon,
                       current: tagFilters.length === 1 ? tagFilters[0] : null,
                       options: tags.map((t) => ({ value: t.id, label: t.name })),
-                      emptyHint: 'no tags',
+                      emptyHint: 'no groups',
                     },
                   ]}
                 />

@@ -112,7 +112,7 @@ export default function CreateAiStepPage() {
               onSkillsChanged={() => { if (selectedOrgId) getSkills(selectedOrgId, { limit: 100 }).then((r) => setSkills(r.items ?? [])).catch(() => {}); }}
             />
             <div className="mt-4 space-y-1 border-t pt-4">
-              <Label>Tags</Label>
+              <Label>Groups</Label>
               <TagPicker tags={tags} selected={tagIds} onChange={setTagIds} onCreate={(name) => createTag({ name })} />
             </div>
           </CardContent>

@@ -1,7 +1,7 @@
 import agentClient from './agent-client';
 
 /**
- * A tag in the org-scoped vocabulary. Applied to agents, AI steps, and
+ * A tag in the org-scoped vocabulary (shown as a "group" in the UI). Applied to agents, AI steps, and
  * browser scripts via the polymorphic agent_tag_assignments table (backend
  * migration 222). `color` is one of the palette keys in
  * components/tags/tag-colors.ts (null → neutral fallback).
@@ -12,6 +12,8 @@ export interface Tag {
   name: string;
   color: string | null;
   description: string | null;
+  /** Knowledge Base article for this group (http(s)); null = none linked. */
+  kb_url?: string | null;
   created_at: string;
   updated_at: string;
   /** Total assignments across all entity types — only present on list(). */
@@ -31,6 +33,7 @@ export interface TagInput {
   name: string;
   color?: string | null;
   description?: string | null;
+  kb_url?: string | null;
 }
 
 export async function listTags(orgId: string): Promise<Tag[]> {

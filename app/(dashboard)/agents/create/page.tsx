@@ -57,7 +57,7 @@ export default function CreateAgentPage() {
             <Textarea id="description" placeholder="What does this agent do?" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} />
           </div>
           <div className="space-y-1">
-            <Label>Tags</Label>
+            <Label>Groups</Label>
             <TagPicker tags={tags} selected={tagIds} onChange={setTagIds} onCreate={(name) => createTag({ name })} />
           </div>
           <div className="flex justify-end gap-2 pt-2">

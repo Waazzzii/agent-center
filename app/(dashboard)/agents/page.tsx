@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState, useRef } from 'react';
+import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
@@ -13,7 +14,7 @@ import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Play, Pause, RefreshCw, Bot, Copy, Search, Tag as TagIcon, Sparkles } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, Pause, RefreshCw, Bot, Copy, Search, Tag as TagIcon, Sparkles, List, Layers, ChevronRight, BookOpen, ExternalLink } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { StatTile } from '@/components/ui/stat-tile';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
@@ -23,8 +24,21 @@ import { TagFilter } from '@/components/tags/tag-filter';
 import { TagList } from '@/components/tags/tag-badge';
 import { TagAssignDialog } from '@/components/tags/tag-assign-dialog';
 import { RowActionsMenu } from '@/components/ui/row-actions-menu';
+import { useAgentsViewStore, UNGROUPED_KEY } from '@/stores/agents-view.store';
+import { tagSectionClasses } from '@/components/tags/tag-colors';
+import { cn } from '@/lib/utils';
 
 type SortKey = 'name' | 'status' | 'created';
+
+/** One collapsible section of the grouped view. */
+interface AgentSection {
+  key: string;
+  name: string;
+  color: string | null;
+  description: string | null;
+  kbUrl: string | null;
+  agents: Agent[];
+}
 
 export default function AgentsPage() {
   const router = useRouter();
@@ -63,6 +77,8 @@ export default function AgentsPage() {
   // filter fight the link that set it.
   const searchParams = useSearchParams();
   const { tags } = useTags(selectedOrgId);
+  // List vs grouped, and which groups are collapsed — remembered across visits.
+  const { viewMode, setViewMode, collapsedGroups, toggleGroup } = useAgentsViewStore();
   const [tagFilter, setTagFilter] = useState<string[]>(
     () => (searchParams.get('tag_ids') ?? '').split(',').filter(Boolean),
   );
@@ -201,6 +217,29 @@ export default function AgentsPage() {
     return sorted;
   }, [agents, search, sortKey, sortDir, statusFilter]);
 
+  // Grouped view: one section per group that has a visible agent, plus an
+  // "Ungrouped" bucket. An agent with several groups appears under each — that
+  // is the point of multi-group, and the counts say so. When a group filter is
+  // active only the selected groups get sections (an agent's other groups would
+  // just be noise), and the Ungrouped bucket is dropped.
+  const sections = useMemo<AgentSection[]>(() => {
+    const filtering = tagFilter.length > 0;
+    const out: AgentSection[] = [];
+    for (const t of [...tags].sort((a, b) => a.name.localeCompare(b.name))) {
+      if (filtering && !tagFilter.includes(t.id)) continue;
+      const members = visibleAgents.filter((a) => a.tags?.some((x) => x.id === t.id));
+      if (members.length === 0) continue;
+      out.push({ key: t.id, name: t.name, color: t.color, description: t.description, kbUrl: t.kb_url ?? null, agents: members });
+    }
+    if (!filtering) {
+      const loose = visibleAgents.filter((a) => !a.tags || a.tags.length === 0);
+      if (loose.length > 0) {
+        out.push({ key: UNGROUPED_KEY, name: 'Ungrouped', color: null, description: null, kbUrl: null, agents: loose });
+      }
+    }
+    return out;
+  }, [tags, tagFilter, visibleAgents]);
+
   const handleSort = (key: string) => {
     if (sortKey === key) {
       setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'));
@@ -208,6 +247,236 @@ export default function AgentsPage() {
       setSortKey(key as SortKey);
       setSortDir('asc');
     }
+  };
+
+  // One table renderer for both views: the flat list renders it once, the
+  // grouped view once per group, so columns and row actions never drift apart.
+  const renderTable = (rows: Agent[], emptyMessage: string) => (
+      <ResponsiveTable
+        data={rows}
+        getRowKey={(a) => a.id}
+        onRowClick={(a) => router.push(`/agents/${a.id}`)}
+        emptyMessage={emptyMessage}
+        sortKey={sortKey}
+        sortDir={sortDir}
+        onSort={handleSort}
+        columns={[
+          {
+            key: 'name',
+            label: 'Name',
+            sortable: true,
+            // NO width — with table-fixed, the unsized columns split what
+            // the sized ones leave, so constraining the others is what
+            // gives the name room. It is the only column whose content is
+            // unbounded and the only one people scan by, so it gets the
+            // surplus.
+            render: (a) => (
+              <span
+                className="block truncate font-medium"
+                // Name FIRST, then the description under it. The title
+                // used to carry the description alone, so hovering a
+                // clipped name — the one reason you would hover it —
+                // answered a question you had not asked and left the
+                // name still unread.
+                title={a.description ? `${a.name}\n\n${a.description}` : a.name}
+              >
+                {a.name}
+              </span>
+            ),
+          },
+          {
+            key: 'status',
+            label: 'Status',
+            sortable: true,
+            // Sized to its content: the widest value is one "Inactive"
+            // badge. It was sharing the leftover space equally with the
+            // name, which is how a two-word column ended up wider than
+            // the one carrying the agent's identity.
+            thClassName: 'w-24',
+            render: (a) => a.is_active
+              ? <Badge variant="success">Active</Badge>
+              : <Badge variant="neutral">Inactive</Badge>,
+          },
+          {
+            key: 'created',
+            label: 'Created',
+            sortable: true,
+            // A locale date is ~10 characters and never grows.
+            thClassName: 'w-28',
+            tdClassName: 'whitespace-nowrap',
+            render: (a) => new Date(a.created_at).toLocaleDateString(),
+          },
+          {
+            // Still agents.client_id underneath; "Client" was the
+            // storage talking. Matches the agent editor's Product field.
+            key: 'client',
+            label: 'Product',
+            thClassName: 'w-40',
+            render: (a) => a.client_id
+              ? (
+                <Badge variant="outline" className="gap-1 border-brand/40 text-brand">
+                  <Sparkles className="h-3 w-3" />
+                  <span className="max-w-[120px] truncate">{clientsById[a.client_id] ?? 'Product'}</span>
+                </Badge>
+              )
+              : <span className="text-muted-foreground">—</span>,
+          },
+          {
+            // Tags is the last data column everywhere; not sortable
+            // (rows can carry several tags, so a-z has no meaning).
+            key: 'tags',
+            label: 'Tags',
+            // Wider than it looks like it needs to be, on purpose. The
+            // actions column next to it is w-px, so it sits flush
+            // against the Run button — a tag long enough to fill w-48
+            // truncated right up against that button and read as
+            // running underneath it. With table-fixed, whatever this
+            // column takes comes out of Name, which is the only unsized
+            // column and the one best able to spare it (it truncates
+            // with the full name on hover).
+            thClassName: 'w-64',
+            // pr-3 keeps the gap honest: the ellipsis of a clipped tag
+            // ends before the button starts, rather than touching it.
+            tdClassName: 'pr-3',
+            // Tags grow leftward into their own column instead of
+            // wrapping to a second line and heightening every row.
+            render: (a) => <TagList tags={a.tags} className="flex-nowrap" />,
+          },
+          {
+            key: 'actions',
+            // No label — actions are self-evident from the icons, and
+            // the th would just steal width on a column we want as
+            // narrow as possible.
+            label: '',
+            // w-px + whitespace-nowrap collapses the column to the
+            // intrinsic width of its content (the icon buttons) so
+            // the rest of the table gets the surplus.
+            thClassName: 'w-px whitespace-nowrap',
+            tdClassName: 'w-px whitespace-nowrap',
+            // Run stays as the primary inline action; edit / duplicate
+            // / delete / tag collapse into the ⋮ configure menu.
+            // Use desktopRender (not render) so the cell isn't wrapped in
+            // ResponsiveTable's truncate/overflow-hidden fallback, which
+            // would clip the ⋮ menu in this w-px column.
+            desktopRender: (a) => (
+              <div className="flex items-center justify-end gap-1">
+                <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
+                  {runningId === a.id
+                    ? <RefreshCw className="h-4 w-4 animate-spin" />
+                    : <Play className="h-4 w-4 text-success" />}
+                </Button>
+                <RowActionsMenu
+                  actions={[
+                    { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/agents/${a.id}`) },
+                    { label: 'Groups', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
+                    { label: duplicatingId === a.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === a.id, onSelect: () => handleDuplicate(a) },
+                    { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(a.id, a.name) },
+                  ]}
+                />
+              </div>
+            ),
+            // Mobile card view fallback — same Run + ⋮ menu.
+            render: (a) => (
+              <div className="flex items-center gap-1">
+                <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
+                  {runningId === a.id
+                    ? <RefreshCw className="h-4 w-4 animate-spin" />
+                    : <Play className="h-4 w-4 text-success" />}
+                </Button>
+                <RowActionsMenu
+                  actions={[
+                    { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/agents/${a.id}`) },
+                    { label: 'Groups', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
+                    { label: duplicatingId === a.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === a.id, onSelect: () => handleDuplicate(a) },
+                    { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(a.id, a.name) },
+                  ]}
+                />
+              </div>
+            ),
+          },
+        ]}
+      />
+  );
+
+  const renderGrouped = () => {
+    if (sections.length === 0) {
+      return (
+        <p className="py-12 text-center text-sm text-muted-foreground">
+          {search ? `No agents match "${search}".` : 'No agents yet. Create one to get started.'}
+        </p>
+      );
+    }
+    // Each group is its own bordered block with a coloured rail down the left
+    // edge and a tinted header in the same colour, so which rows belong together
+    // reads at a glance — and the gap between blocks marks where one ends.
+    return (
+      <div className="space-y-3 p-3">
+        {sections.map((sec) => {
+          // Searching overrides collapse: a match hidden inside a folded
+          // group would read as "no result".
+          const open = !!search.trim() || !collapsedGroups.includes(sec.key);
+          const c = tagSectionClasses(sec.color);
+          return (
+            <section key={sec.key} className={cn('overflow-hidden rounded-lg border border-l-4', c.rail)}>
+              <div className={cn('flex items-center gap-2 px-3 py-2', c.tint, open && 'border-b')}>
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(sec.key)}
+                  aria-expanded={open}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                >
+                  <ChevronRight className={cn('h-4 w-4 shrink-0 transition-transform', c.text, open && 'rotate-90')} />
+                  <span className={cn('truncate text-sm font-semibold', c.text)}>{sec.name}</span>
+                  <span className="shrink-0 rounded-full bg-background/70 px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                    {sec.agents.length} {sec.agents.length === 1 ? 'agent' : 'agents'}
+                  </span>
+                  {sec.description && (
+                    <span className="hidden truncate text-xs text-muted-foreground sm:inline" title={sec.description}>
+                      {sec.description}
+                    </span>
+                  )}
+                </button>
+                {sec.key !== UNGROUPED_KEY && (
+                  sec.kbUrl ? (
+                    <div className="flex shrink-0 items-center gap-1">
+                    <a
+                      href={sec.kbUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-md border bg-background px-2.5 py-1 text-xs font-medium hover:bg-muted"
+                      title="Open this group's Knowledge Base article"
+                    >
+                      <BookOpen className="h-3.5 w-3.5" /> Knowledge Base
+                      <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                    </a>
+                    <Link
+                      href={`/tags?edit=${sec.key}`}
+                      className="rounded-md p-1.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                      title="Edit this group and its Knowledge Base link"
+                      aria-label={`Edit ${sec.name}`}
+                    >
+                      <Pencil className="h-3.5 w-3.5" />
+                    </Link>
+                    </div>
+                  ) : (
+                    // No article yet: point at the one place it gets set,
+                    // instead of leaving a group that looks undocumented by design.
+                    <Link
+                      href={`/tags?edit=${sec.key}`}
+                      className="inline-flex shrink-0 items-center gap-1 text-xs text-muted-foreground hover:text-foreground hover:underline"
+                      title="Set this group's Knowledge Base link"
+                    >
+                      <Plus className="h-3 w-3" /> Add docs link
+                    </Link>
+                  )
+                )}
+              </div>
+              {open && renderTable(sec.agents, 'No agents.')}
+            </section>
+          );
+        })}
+      </div>
+    );
   };
 
   if (initialLoad && selectedOrgId) {
@@ -290,7 +559,28 @@ export default function AgentsPage() {
                   {visibleAgents.length} of {agents.length}
                 </span>
               )}
-              <div className="ml-auto">
+              <div className="ml-auto flex items-center gap-2">
+                <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="Agents view">
+                  {([
+                    { mode: 'list', label: 'List', icon: List },
+                    { mode: 'grouped', label: 'Grouped', icon: Layers },
+                  ] as const).map(({ mode, label, icon: Icon }) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setViewMode(mode)}
+                      aria-pressed={viewMode === mode}
+                      title={`${label} view`}
+                      className={cn(
+                        'inline-flex h-8 items-center gap-1.5 rounded px-2.5 text-xs transition-colors',
+                        viewMode === mode ? 'bg-brand text-brand-fg' : 'text-muted-foreground hover:bg-muted',
+                      )}
+                    >
+                      <Icon className="h-3.5 w-3.5" />
+                      <span className="hidden sm:inline">{label}</span>
+                    </button>
+                  ))}
+                </div>
                 <TagFilter
                   tags={tags}
                   selected={tagFilter}
@@ -300,154 +590,7 @@ export default function AgentsPage() {
                 />
               </div>
             </div>
-            <ResponsiveTable
-              data={visibleAgents}
-              getRowKey={(a) => a.id}
-              onRowClick={(a) => router.push(`/agents/${a.id}`)}
-              emptyMessage={
-                search
-                  ? `No agents match "${search}".`
-                  : 'No agents yet. Create one to get started.'
-              }
-              sortKey={sortKey}
-              sortDir={sortDir}
-              onSort={handleSort}
-              columns={[
-                {
-                  key: 'name',
-                  label: 'Name',
-                  sortable: true,
-                  // NO width — with table-fixed, the unsized columns split what
-                  // the sized ones leave, so constraining the others is what
-                  // gives the name room. It is the only column whose content is
-                  // unbounded and the only one people scan by, so it gets the
-                  // surplus.
-                  render: (a) => (
-                    <span
-                      className="block truncate font-medium"
-                      // Name FIRST, then the description under it. The title
-                      // used to carry the description alone, so hovering a
-                      // clipped name — the one reason you would hover it —
-                      // answered a question you had not asked and left the
-                      // name still unread.
-                      title={a.description ? `${a.name}\n\n${a.description}` : a.name}
-                    >
-                      {a.name}
-                    </span>
-                  ),
-                },
-                {
-                  key: 'status',
-                  label: 'Status',
-                  sortable: true,
-                  // Sized to its content: the widest value is one "Inactive"
-                  // badge. It was sharing the leftover space equally with the
-                  // name, which is how a two-word column ended up wider than
-                  // the one carrying the agent's identity.
-                  thClassName: 'w-24',
-                  render: (a) => a.is_active
-                    ? <Badge variant="success">Active</Badge>
-                    : <Badge variant="neutral">Inactive</Badge>,
-                },
-                {
-                  key: 'created',
-                  label: 'Created',
-                  sortable: true,
-                  // A locale date is ~10 characters and never grows.
-                  thClassName: 'w-28',
-                  tdClassName: 'whitespace-nowrap',
-                  render: (a) => new Date(a.created_at).toLocaleDateString(),
-                },
-                {
-                  // Still agents.client_id underneath; "Client" was the
-                  // storage talking. Matches the agent editor's Product field.
-                  key: 'client',
-                  label: 'Product',
-                  thClassName: 'w-40',
-                  render: (a) => a.client_id
-                    ? (
-                      <Badge variant="outline" className="gap-1 border-brand/40 text-brand">
-                        <Sparkles className="h-3 w-3" />
-                        <span className="max-w-[120px] truncate">{clientsById[a.client_id] ?? 'Product'}</span>
-                      </Badge>
-                    )
-                    : <span className="text-muted-foreground">—</span>,
-                },
-                {
-                  // Tags is the last data column everywhere; not sortable
-                  // (rows can carry several tags, so a-z has no meaning).
-                  key: 'tags',
-                  label: 'Tags',
-                  // Wider than it looks like it needs to be, on purpose. The
-                  // actions column next to it is w-px, so it sits flush
-                  // against the Run button — a tag long enough to fill w-48
-                  // truncated right up against that button and read as
-                  // running underneath it. With table-fixed, whatever this
-                  // column takes comes out of Name, which is the only unsized
-                  // column and the one best able to spare it (it truncates
-                  // with the full name on hover).
-                  thClassName: 'w-64',
-                  // pr-3 keeps the gap honest: the ellipsis of a clipped tag
-                  // ends before the button starts, rather than touching it.
-                  tdClassName: 'pr-3',
-                  // Tags grow leftward into their own column instead of
-                  // wrapping to a second line and heightening every row.
-                  render: (a) => <TagList tags={a.tags} className="flex-nowrap" />,
-                },
-                {
-                  key: 'actions',
-                  // No label — actions are self-evident from the icons, and
-                  // the th would just steal width on a column we want as
-                  // narrow as possible.
-                  label: '',
-                  // w-px + whitespace-nowrap collapses the column to the
-                  // intrinsic width of its content (the icon buttons) so
-                  // the rest of the table gets the surplus.
-                  thClassName: 'w-px whitespace-nowrap',
-                  tdClassName: 'w-px whitespace-nowrap',
-                  // Run stays as the primary inline action; edit / duplicate
-                  // / delete / tag collapse into the ⋮ configure menu.
-                  // Use desktopRender (not render) so the cell isn't wrapped in
-                  // ResponsiveTable's truncate/overflow-hidden fallback, which
-                  // would clip the ⋮ menu in this w-px column.
-                  desktopRender: (a) => (
-                    <div className="flex items-center justify-end gap-1">
-                      <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
-                        {runningId === a.id
-                          ? <RefreshCw className="h-4 w-4 animate-spin" />
-                          : <Play className="h-4 w-4 text-success" />}
-                      </Button>
-                      <RowActionsMenu
-                        actions={[
-                          { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/agents/${a.id}`) },
-                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
-                          { label: duplicatingId === a.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === a.id, onSelect: () => handleDuplicate(a) },
-                          { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(a.id, a.name) },
-                        ]}
-                      />
-                    </div>
-                  ),
-                  // Mobile card view fallback — same Run + ⋮ menu.
-                  render: (a) => (
-                    <div className="flex items-center gap-1">
-                      <Button variant="ghost" size="sm" disabled={runningId === a.id} title="Run now" onClick={(e) => { e.stopPropagation(); handleRun(a.id, a.name); }}>
-                        {runningId === a.id
-                          ? <RefreshCw className="h-4 w-4 animate-spin" />
-                          : <Play className="h-4 w-4 text-success" />}
-                      </Button>
-                      <RowActionsMenu
-                        actions={[
-                          { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/agents/${a.id}`) },
-                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
-                          { label: duplicatingId === a.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === a.id, onSelect: () => handleDuplicate(a) },
-                          { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(a.id, a.name) },
-                        ]}
-                      />
-                    </div>
-                  ),
-                },
-              ]}
-            />
+            {viewMode === "grouped" ? renderGrouped() : renderTable(visibleAgents, search ? `No agents match "${search}".` : "No agents yet. Create one to get started.")}
           </CardContent>
         </Card>
       )}

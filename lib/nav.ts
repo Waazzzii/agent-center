@@ -31,7 +31,7 @@ export interface NavItem {
  *                "Action Required" page, which is gone.
  *   ACTIVITY   — what already happened: runs, and what they cost.
  *   SETTINGS   — the org-wide vocabularies agents draw on: who may act on
- *                them (Authorization) and how they are labelled (Tags).
+ *                them (Authorization) and how they are grouped (Groups).
  *                Grouped because neither is a place you go to do work; they
  *                are where you go when something an agent REFERENCES needs
  *                changing, which is rare enough that two more top-level rows
@@ -94,7 +94,7 @@ export const orgMainNavItems: NavItem[] = [
     permissionKeys: ['agent_center_user'],
     children: [
       { label: 'Authorization', href: '/access', permissionKeys: ['agent_center_user'] },
-      { label: 'Tags',          href: '/tags',   permissionKeys: ['agent_center_user'] },
+      { label: 'Groups',        href: '/tags',   permissionKeys: ['agent_center_user'] },
     ],
   },
 ];
