@@ -11,7 +11,9 @@
  *
  * Keep in sync with the backend set. Deliberately duplicated rather than
  * fetched: it's a two-entry constant that gates rendering, and a network
- * round-trip to learn it would make the editor's variable list flicker.
+ * round-trip to learn it would make the editor's variable list flicker. What a
+ * particular login OFFERS (which secrets it stores) is fetched — see
+ * VariablesPanel's loginVariables.
  */
 
 export interface ReservedParam {
@@ -36,17 +38,57 @@ export const RESERVED_PARAMS: Record<string, ReservedParam> = {
   },
 };
 
+/**
+ * LOGIN SECRETS — mirror of isLoginSecretParam in step-schema.js.
+ *
+ * Every credential stored on the login a script runs as is available to it as
+ * {{_<key>}}: {{_password}}, {{_username}}, {{_account_number}}. The engine
+ * fills them from the login's encrypted store, so a signed-in flow that asks
+ * for the password again never needs a parameter someone types it into. Only
+ * ever the value of a fill or select.
+ */
+const NOT_LOGIN_SECRETS = new Set([
+  '_totp', '_input_id', '_status', '_error', '_disposition',
+  '_client_prompt', '_client_media', '_client_video', '_client_video_transcript',
+]);
+
+export function isLoginSecretParam(name: string): boolean {
+  return /^_[a-zA-Z][a-zA-Z0-9_]*$/.test(name)
+    && !Object.prototype.hasOwnProperty.call(RESERVED_PARAMS, name)
+    && !NOT_LOGIN_SECRETS.has(name);
+}
+
+/** Display metadata for a login-secret variable. */
+export function loginSecretMeta(name: string): ReservedParam {
+  const key = name.slice(1);
+  return {
+    name,
+    label: `auto — the login's stored ${key}`,
+    description:
+      `The "${key}" credential stored (encrypted) on the login this script runs as — `
+      + "under a pool with separate credentials, the browser's own. Use it as the value of a "
+      + 'fill, e.g. a "confirm with your password" dialog. It is never shown here and never '
+      + "saved in the script; set it on the login's Credentials tab.",
+  };
+}
+
 /** True when `name` is an engine-supplied reserved variable. */
 export function isReservedParam(name: string): boolean {
-  return Object.prototype.hasOwnProperty.call(RESERVED_PARAMS, name);
+  return Object.prototype.hasOwnProperty.call(RESERVED_PARAMS, name) || isLoginSecretParam(name);
+}
+
+/** Display metadata for any reserved variable, or null. */
+export function reservedParamMeta(name: string): ReservedParam | null {
+  if (Object.prototype.hasOwnProperty.call(RESERVED_PARAMS, name)) return RESERVED_PARAMS[name];
+  return isLoginSecretParam(name) ? loginSecretMeta(name) : null;
 }
 
 /** Reserved variables referenced by a set of variable names. */
 export function reservedParamsIn(names: Iterable<string>): ReservedParam[] {
   const out: ReservedParam[] = [];
   for (const n of names) {
-    const meta = RESERVED_PARAMS[n];
-    if (meta && !out.includes(meta)) out.push(meta);
+    const meta = reservedParamMeta(n);
+    if (meta && !out.some((m) => m.name === meta.name)) out.push(meta);
   }
   return out;
 }

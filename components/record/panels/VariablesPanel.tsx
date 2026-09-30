@@ -1,9 +1,9 @@
 'use client';
 
 import { useState } from 'react';
-import { Plus, Trash2, Lock } from 'lucide-react';
+import { Plus, Trash2, Lock, Copy, KeyRound } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { RESERVED_PARAMS, isReservedParam } from '@/lib/script-params';
+import { isReservedParam, isLoginSecretParam, reservedParamMeta } from '@/lib/script-params';
 import type { RecordedStep, SelectorCandidate } from '@/lib/api/scripts';
 
 export interface VariableRef {
@@ -26,22 +26,41 @@ interface VariablesPanelProps {
   /** Report the step indices a variable touches while it's hovered/edited, so
    *  the step list can highlight them (null clears the highlight). */
   onHoverVariable?: (steps: Set<number> | null) => void;
+  /**
+   * The reserved variables the login this session runs as OFFERS — its stored
+   * credentials as {{_password}} etc., plus {{_mfa}} with a 2FA source. Always
+   * listed, used or not, so an operator can see what is available without
+   * knowing the convention. null: no login is chosen. undefined: not known
+   * (still loading, or a host that does not say) — nothing is flagged.
+   */
+  loginVariables?: string[] | null;
+  /** That login's name, for the section heading and the warnings. */
+  loginName?: string | null;
 }
 
-export function VariablesPanel({ variables, params, onParamsChange, onRenameVariable, onDeleteVariable, hoveredStep, onHoverVariable }: VariablesPanelProps) {
+export function VariablesPanel({ variables, params, onParamsChange, onRenameVariable, onDeleteVariable, hoveredStep, onHoverVariable, loginVariables, loginName }: VariablesPanelProps) {
   const [editingName, setEditingName] = useState<string | null>(null);
   const [editingValue, setEditingValue] = useState('');
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState('');
 
   const allVarNames = new Set([...variables.keys(), ...Object.keys(params).filter((k) => !variables.has(k))]);
+  const offered = loginVariables ?? null;
+  // What the login offers that no step uses yet — listed below the script's own.
+  const unusedOffered = (offered ?? []).filter((n) => !allVarNames.has(n));
+  const loginLabel = loginName ? `"${loginName}"` : 'this login';
+  const copyTemplate = (name: string) => {
+    try { void navigator.clipboard?.writeText(`{{${name}}}`); } catch { /* clipboard is best-effort */ }
+  };
 
   const handleSubmitRename = (oldName: string) => {
     const safeName = editingValue.trim().replace(/\s+/g, '_').replace(/\W/g, '');
     // Renaming a normal variable INTO a reserved name would make the engine
     // start overwriting it at runtime. Reserved rows themselves aren't
     // renameable (they render without the rename affordance).
-    if (isReservedParam(safeName) || isReservedParam(oldName)) {
+    // Renaming INTO a login secret is allowed — {{password}} → {{_password}} is
+    // exactly how a script starts using the login's stored password.
+    if (isReservedParam(oldName) || (isReservedParam(safeName) && !isLoginSecretParam(safeName))) {
       setEditingName(null);
       return;
     }
@@ -51,7 +70,7 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
 
   return (
     <div className="px-2 py-1.5 space-y-1">
-      {allVarNames.size === 0 && !adding && (
+      {allVarNames.size === 0 && unusedOffered.length === 0 && !adding && (
         <p className="text-[10px] text-muted-foreground/60 py-3 text-center">
           No variables yet. Use <code className="bg-muted px-0.5 rounded font-mono">{'{{name}}'}</code> in any step.
         </p>
@@ -90,8 +109,12 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
         // here would invite an operator to paste a static 2FA code that
         // expires 30 seconds later, and a rename would silently sever the
         // engine's injection so the field fills blank at runtime.
-        const reserved = isReservedParam(name) ? RESERVED_PARAMS[name] : null;
+        const reserved = reservedParamMeta(name);
         if (reserved) {
+          // A login secret the chosen login does not store fills BLANK at run
+          // time — say so here rather than at the password prompt.
+          const secret = isLoginSecretParam(name);
+          const unavailable = secret && (loginVariables === null ? 'no-login' : offered && !offered.includes(name) ? 'not-stored' : null);
           return (
             <div
               key={name}
@@ -106,13 +129,25 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
               <span className="shrink-0 max-w-[50%] font-mono text-xs text-purple-400/80 truncate">
                 {`{{${name}}}`}
               </span>
-              <span className="flex-1 min-w-0 flex items-center gap-1.5 text-[10px] text-muted-foreground italic truncate">
+              <span className={cn(
+                'flex-1 min-w-0 flex items-center gap-1.5 text-[10px] italic truncate',
+                unavailable ? 'text-warning' : 'text-muted-foreground',
+              )}>
                 <Lock className="h-2.5 w-2.5 shrink-0" />
-                {reserved.label}
+                {unavailable === 'not-stored'
+                  ? `${loginLabel} stores no ${name.slice(1)} — fills blank`
+                  : unavailable === 'no-login'
+                    ? 'needs a login — pick one for this session'
+                    : reserved.label}
               </span>
             </div>
           );
         }
+
+        // A plain variable the login ALSO offers as a secret ({{password}} while
+        // the login stores a password): one click switches it over, so nobody
+        // types the password into an agent's inputs.
+        const secretTwin = offered?.includes(`_${name}`) && isLoginSecretParam(`_${name}`) ? `_${name}` : null;
 
         return (
           <div
@@ -156,6 +191,17 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
               onChange={(e) => onParamsChange((p) => ({ ...p, [name]: e.target.value }))}
             />
 
+            {secretTwin && (
+              <button
+                className="shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] text-purple-400 hover:bg-purple-500/10 transition-colors"
+                onClick={() => onRenameVariable(name, secretTwin)}
+                title={`Fill this from the ${name} stored on ${loginLabel} — renames it to {{${secretTwin}}} in every step`}
+              >
+                <KeyRound className="h-3 w-3" />
+                Use login&apos;s
+              </button>
+            )}
+
             {/* Delete — far right; only when the variable isn't referenced */}
             {onDeleteVariable && (
               <button
@@ -175,6 +221,40 @@ export function VariablesPanel({ variables, params, onParamsChange, onRenameVari
           </div>
         );
       })}
+
+      {/* What the login offers — always listed, used or not. */}
+      {unusedOffered.length > 0 && (
+        <div className="pt-1.5 mt-1 border-t border-border/30 space-y-0.5">
+          <p className="px-2 text-[9px] uppercase tracking-wide text-muted-foreground/70">
+            Available from {loginLabel}
+          </p>
+          {unusedOffered.map((name) => {
+            const meta = reservedParamMeta(name);
+            return (
+              <div
+                key={name}
+                className="group flex items-center gap-2 rounded px-2 py-1 border border-transparent hover:bg-muted/40"
+                title={`{{${name}}}\nNot used by any step yet\n\n${meta?.description ?? ''}`}
+              >
+                <span className="shrink-0 max-w-[50%] font-mono text-xs text-purple-400/60 truncate">
+                  {`{{${name}}}`}
+                </span>
+                <span className="flex-1 min-w-0 flex items-center gap-1.5 text-[10px] text-muted-foreground/70 italic truncate">
+                  <Lock className="h-2.5 w-2.5 shrink-0" />
+                  {meta?.label}
+                </span>
+                <button
+                  className="shrink-0 p-0.5 rounded text-muted-foreground/60 hover:text-foreground hover:bg-muted opacity-0 group-hover:opacity-100 transition-opacity"
+                  onClick={() => copyTemplate(name)}
+                  title={`Copy {{${name}}} — paste it as a fill step's value`}
+                >
+                  <Copy className="h-3 w-3" />
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* Add row */}
       {adding ? (

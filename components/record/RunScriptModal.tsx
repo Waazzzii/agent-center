@@ -56,7 +56,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { RowActionsMenu } from '@/components/ui/row-actions-menu';
-import { listLogins, type Login } from '@/lib/api/logins';
+import { listLogins, getLoginCredentialKeys, type Login } from '@/lib/api/logins';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { isReservedParam } from '@/lib/script-params';
 import { GuidedRecordDialog } from './GuidedRecordDialog';
@@ -252,6 +252,34 @@ export function RunScriptModal({
   const [loginsError, setLoginsError] = useState<string | null>(null);
   const [loggingIn, setLoggingIn] = useState(false);
   const linkedLogin = availableLogins.find((l) => l.id === linkedLoginId) ?? null;
+
+  // The reserved variables the login this session runs as offers the script:
+  // each stored credential as {{_<key>}} ({{_password}}…) and {{_mfa}} with a
+  // 2FA source. Listed in the Variables panel whether or not a step uses them.
+  // Same login precedence as buildReservedHints below. NAMES only — the keys
+  // endpoint never returns a value.
+  const variablesLoginId = sessionLoginId ?? ownerLoginId ?? linkedLoginId;
+  const variablesLogin = availableLogins.find((l) => l.id === variablesLoginId) ?? null;
+  const [loginCredentialKeys, setLoginCredentialKeys] = useState<string[] | undefined>(undefined);
+  useEffect(() => {
+    setLoginCredentialKeys(undefined);
+    if (!orgId || !variablesLoginId) return;
+    let cancelled = false;
+    getLoginCredentialKeys(orgId, variablesLoginId)
+      .then((keys) => { if (!cancelled) setLoginCredentialKeys(keys); })
+      .catch(() => { /* unknown: the panel flags nothing */ });
+    return () => { cancelled = true; };
+  }, [orgId, variablesLoginId]);
+  const loginVariables = useMemo<string[] | null | undefined>(() => {
+    if (!variablesLoginId) return null;
+    if (loginCredentialKeys === undefined) return undefined;
+    const names = loginCredentialKeys
+      .filter((k) => /^[a-zA-Z][a-zA-Z0-9_]*$/.test(k))
+      .map((k) => `_${k}`)
+      .sort();
+    if (variablesLogin?.mfa_source && variablesLogin.mfa_source !== 'none') names.push('_mfa');
+    return names;
+  }, [variablesLoginId, loginCredentialKeys, variablesLogin?.mfa_source]);
 
   /**
    * Live hints so the server can resolve {{_mfa}} for a TEST run.
@@ -4358,6 +4386,8 @@ export function RunScriptModal({
                           onDeleteVariable={handleDeleteVariable}
                           hoveredStep={hoveredStep}
                           onHoverVariable={setHighlightVarSteps}
+                          loginVariables={loginVariables}
+                          loginName={variablesLogin?.name ?? null}
                         />
                       );
                     })()}
