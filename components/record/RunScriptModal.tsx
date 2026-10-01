@@ -4137,7 +4137,9 @@ export function RunScriptModal({
                               // These are the options an operator changes most
                               // while reading the list, and making each one a
                               // modal round trip is why scripts end up untagged.
-                              ...(!isGroupHeader && !['navigate', 'press_key', 'pause', 'group', 'download',
+                              // Not on a login script: it IS the sign-in, so
+                              // it has no session to prove.
+                              ...(scriptKind === 'regular' && !isGroupHeader && !['navigate', 'press_key', 'pause', 'group', 'download',
                                 'wait_for_tab', 'switch_tab', 'close_tab'].includes(s.action)
                                 ? [{
                                     label: s.login_indicator ? 'Clear login indicator' : 'Proves we are signed in',
@@ -4526,6 +4528,7 @@ export function RunScriptModal({
         onClose={() => setEditingStepIndex(null)}
         variableNames={editModalVarNames}
         allSteps={stepRunState?.steps ?? []}
+        showLoginIndicator={scriptKind === 'regular'}
         onSave={async (updated) => {
           // The body lives in applyStepEdit so the row menu's one-click
           // toggles persist exactly the way a modal save does.

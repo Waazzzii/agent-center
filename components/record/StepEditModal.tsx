@@ -30,6 +30,12 @@ interface StepEditModalProps {
   allSteps?: RecordedStep[];
   /** Called on Save with the modified step. Caller persists via syncStepRunSteps. */
   onSave: (updated: RecordedStep) => Promise<void> | void;
+  /**
+   * Offer "Proves we are signed in". Only a business script has a session to
+   * prove — a login script IS the sign-in — so the caller turns this off for
+   * login scripts. Default on.
+   */
+  showLoginIndicator?: boolean;
 }
 
 /**
@@ -43,7 +49,7 @@ interface StepEditModalProps {
  * pinned to Variables since selector/JSON live here now.
  */
 export function StepEditModal({
-  step, stepIndex, open, onClose, variableNames, allSteps, onSave,
+  step, stepIndex, open, onClose, variableNames, allSteps, onSave, showLoginIndicator = true,
 }: StepEditModalProps) {
   const [draft, setDraft] = useState<RecordedStep | null>(step);
   const [jsonText, setJsonText] = useState('');
@@ -319,6 +325,7 @@ export function StepEditModal({
                   />
                 </div>
 
+                {showLoginIndicator && (
                 <div className="flex items-start justify-between gap-4">
                   <div className="space-y-0.5">
                     <p className="text-[11px] font-medium">Proves we are signed in</p>
@@ -337,6 +344,7 @@ export function StepEditModal({
                     aria-label="This step proves we are signed in"
                   />
                 </div>
+                )}
               </div>
               </>)}
             </div>
