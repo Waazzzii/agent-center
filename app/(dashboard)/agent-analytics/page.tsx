@@ -35,7 +35,7 @@ import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import { toast } from 'sonner';
 import {
   Activity, Clock, AlertTriangle, Zap, Server, Monitor, Cpu,
-  RefreshCw, Loader2, ChevronRight, BarChart3,
+  RefreshCw, Loader2, ChevronRight, ChevronLeft, BarChart3,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -200,7 +200,7 @@ export default function AnalyticsPage() {
           {capacity && <CapacityCards capacity={capacity} />}
 
           {/* Availability timeline — capacity blockages / outage windows */}
-          <AvailabilityCard events={capacityEvents} />
+          <AvailabilityCard events={capacityEvents} periodKey={`${selectedOrgId}|${rangeIdx}|${customFrom}|${customTo}`} />
 
           {/* Pod history (worker and runner apart) + how long runs waited */}
           <PodResourcesCard metrics={podMetrics} />
@@ -381,8 +381,29 @@ const EVENT_KIND_META: Record<CapacityEvent['kind'], { label: string; hint: stri
   },
 };
 
-function AvailabilityCard({ events }: { events: CapacityEvent[] }) {
+/** Windows per page. A busy period produces dozens — one per burst of refusals. */
+const AVAILABILITY_PAGE_SIZE = 8;
+
+function AvailabilityCard({ events, periodKey }: { events: CapacityEvent[]; periodKey: string }) {
   const ongoing = events.filter((e) => e.ongoing);
+  // Ongoing first (it is the one that needs attention), then newest first.
+  const sorted = useMemo(
+    () => [...events].sort((a, b) =>
+      Number(!!b.ongoing) - Number(!!a.ongoing)
+      || new Date(b.started_at).getTime() - new Date(a.started_at).getTime()),
+    [events],
+  );
+  // The page belongs to a period: a new period (or org) starts from the top.
+  // Keyed on the period, not the events array — the page reloads live, and
+  // every reload is a new array, which would throw the reader back to page 1
+  // mid-read. A list that shrinks under the current page is clamped below.
+  const [pageState, setPageState] = useState({ key: periodKey, page: 1 });
+  const page = pageState.key === periodKey ? pageState.page : 1;
+  const setPage = (n: number) => setPageState({ key: periodKey, page: n });
+  const totalPages = Math.max(1, Math.ceil(sorted.length / AVAILABILITY_PAGE_SIZE));
+  const current = Math.min(page, totalPages);
+  const shown = sorted.slice((current - 1) * AVAILABILITY_PAGE_SIZE, current * AVAILABILITY_PAGE_SIZE);
+  const refusedTotal = events.reduce((n, e) => n + (Number(e.refusal_count) || 0), 0);
 
   if (events.length === 0) {
     return (
@@ -409,17 +430,19 @@ function AvailabilityCard({ events }: { events: CapacityEvent[] }) {
               Windows where new work could not start — browsers refused by a worker, or runs held by a runner — and queued until capacity recovered
             </p>
           </div>
-          <Badge
-            variant="outline"
-            className={cn('text-[10px]', ongoing.length > 0
-              ? 'border-red-400 text-red-500'
-              : 'border-amber-400 text-amber-500')}
-          >
-            {ongoing.length > 0 ? 'Blocked now' : `${events.length} in period`}
-          </Badge>
+          <div className="flex items-center gap-2">
+            <Badge
+              variant="outline"
+              className={cn('text-[10px]', ongoing.length > 0
+                ? 'border-red-400 text-red-500'
+                : 'border-amber-400 text-amber-500')}
+            >
+              {ongoing.length > 0 ? 'Blocked now' : `${events.length} in period`}
+            </Badge>
+          </div>
         </div>
         <div className="space-y-1.5">
-          {events.map((ev) => {
+          {shown.map((ev) => {
             const meta = EVENT_KIND_META[ev.kind] ?? { label: ev.kind, hint: '' };
             return (
               <div key={ev.id} className="flex items-start gap-3 rounded-md border p-2.5" title={meta.hint}>
@@ -447,6 +470,24 @@ function AvailabilityCard({ events }: { events: CapacityEvent[] }) {
             );
           })}
         </div>
+        {totalPages > 1 && (
+          <div className="mt-2.5 flex items-center justify-between gap-2 text-xs text-muted-foreground">
+            <span className="tabular-nums">
+              {events.length} windows · {refusedTotal.toLocaleString()} refused requests
+            </span>
+            <div className="flex items-center gap-1">
+              <span className="tabular-nums">
+                {(current - 1) * AVAILABILITY_PAGE_SIZE + 1}–{Math.min(current * AVAILABILITY_PAGE_SIZE, sorted.length)} of {sorted.length}
+              </span>
+              <Button variant="outline" size="icon-sm" disabled={current <= 1} onClick={() => setPage(current - 1)} aria-label="Previous page">
+                <ChevronLeft className="h-3.5 w-3.5" />
+              </Button>
+              <Button variant="outline" size="icon-sm" disabled={current >= totalPages} onClick={() => setPage(current + 1)} aria-label="Next page">
+                <ChevronRight className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   );
