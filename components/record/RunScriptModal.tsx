@@ -56,7 +56,7 @@ import {
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { RowActionsMenu } from '@/components/ui/row-actions-menu';
-import { listLogins, getLoginCredentialKeys, type Login } from '@/lib/api/logins';
+import { listLogins, getLoginCredentialKeys, assignableLogins, type Login } from '@/lib/api/logins';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { isReservedParam } from '@/lib/script-params';
 import { GuidedRecordDialog } from './GuidedRecordDialog';
@@ -3401,7 +3401,7 @@ export function RunScriptModal({
                       No logins in this organization yet.
                     </div>
                   )}
-                  {availableLogins.map((l) => (
+                  {assignableLogins(availableLogins).map((l) => (
                     <SelectItem key={l.id} value={l.id}>
                       {l.name}
                       {!(l.auto_login_script_id && l.credentials_secret_id) && ' (not set up)'}

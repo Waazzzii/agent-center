@@ -22,7 +22,7 @@ import { listApprovalSteps, createApprovalStep, updateApprovalStep, type Approva
 import { AiStepFormBody, type AiStepFormData } from '@/components/actions/AiStepFormBody';
 import { LoginFormBody, type LoginFormData } from '@/components/actions/LoginFormBody';
 import { LoginChip } from '@/components/actions/LoginChip';
-import { listLogins, createLogin, updateLogin, type Login } from '@/lib/api/logins';
+import { listLogins, createLogin, updateLogin, assignableLogins, loginOptionHint, type Login } from '@/lib/api/logins';
 import { useTags } from '@/lib/hooks/use-tags';
 import { TagPicker } from '@/components/tags/tag-picker';
 import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
@@ -2041,7 +2041,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         setActionForm(f => ({ ...f, loginId: v }));
                         if (l) setNewLoginForm({ name: l.name });
                       }}
-                      options={logins.map((l) => ({ value: l.id, label: l.name, hint: l.url ?? undefined }))}
+                      options={assignableLogins(logins).map((l) => ({ value: l.id, label: l.name, hint: loginOptionHint(l) }))}
                       placeholder="Select a login profile to edit…"
                       emptyLabel="No logins yet"
                       searchPlaceholder="Search logins by name or URL…"
@@ -2292,7 +2292,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   const selected = browserScripts.find((s) => s.id === actionForm.scriptId);
                   if (!selected) return null;
                   const required = selected.requires_login;
-                  const usableLogins = logins.filter((l) => l.id === actionForm.loginId || true);
                   return (
                     <div className="space-y-1">
                       <Label>
@@ -2301,10 +2300,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       <SearchableSelect
                         value={actionForm.loginId}
                         onChange={(v) => setActionForm(f => ({ ...f, loginId: v }))}
-                        options={logins.map((l) => ({
+                        options={assignableLogins(logins).map((l) => ({
                           value: l.id,
                           label: l.name,
-                          hint: l.url ?? undefined,
+                          hint: loginOptionHint(l),
                         }))}
                         placeholder={required ? 'Select the login this action runs as…' : 'No login (unauthenticated)'}
                         emptyLabel="No logins configured"

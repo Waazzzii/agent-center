@@ -103,10 +103,17 @@ export interface Login {
    * browser uses this login's credentials, TOTP and MFA settings, and they are
    * edited on Browser 1 only. false: each browser has its own.
    *
-   * Also decides sign-in concurrency: shared credentials sign in one browser
-   * at a time (one account, one MFA code); separate ones in parallel.
+   * Separate credentials always sign in independently (different accounts);
+   * shared ones follow signin_one_at_a_time.
    */
   pool_shared_credentials: boolean;
+  /**
+   * Pool parent: the browsers take turns signing in (true) instead of signing
+   * in independently (false, the default). For accounts where one sign-in
+   * disrupts another — a 2FA code sent to Slack or email is one message two
+   * sign-ins would race for. Read off the parent; ignored on a member.
+   */
+  signin_one_at_a_time: boolean;
   /** Pool member only: when the pool was scaled down past this browser. It
    *  takes no new runs and is deleted once its current run lets go. */
   pool_removing_at: string | null;
@@ -122,6 +129,13 @@ export interface Login {
    */
   proxy_enabled: boolean;
   proxy_ip_id: string | null;
+  /**
+   * GET /logins/:id only: this browser's sign-in state on each LIVE pod. A
+   * profile is a pod-local copy, so `status` above (one value) can be true of
+   * one pod and not another. 'unknown' = has not run on that pod yet, which on
+   * a new pod means signed out.
+   */
+  pods?: Array<{ pod: string; state: 'signed_in' | 'signed_out' | 'unknown'; at: string | null }>;
   created_at: string;
   updated_at: string;
 }
@@ -154,6 +168,8 @@ export interface LoginPatch {
   mfa_gmail_query?: string | null;
   mfa_code_regex?: string | null;
   mfa_timeout_seconds?: number;
+  /** Pool parent / plain login only — a member's PATCH is refused. */
+  signin_one_at_a_time?: boolean;
 }
 
 /** One message the pattern was tried against. Codes come back masked. */
@@ -204,6 +220,26 @@ export interface LoginRunAudit {
   metadata: Record<string, unknown>;
   started_at: string;
   completed_at: string | null;
+}
+
+/**
+ * The logins an agent step or a script can be assigned to: every login except
+ * a pool's member browsers.
+ *
+ * A pool is assigned by its first login (Browser 1), and the system hands each
+ * run whichever browser is free. A member is never assigned directly — doing
+ * so pinned every run of an agent to one browser and bypassed the rotation
+ * (Casago, 2026-10-01). The backend refuses it; this keeps it off the menu.
+ * Need one specific browser? That is an independent login, not a pool member.
+ */
+export function assignableLogins(logins: Login[]): Login[] {
+  return logins.filter((l) => !l.pool_parent_id);
+}
+
+/** Picker hint: a pool says it rotates; a plain login shows its URL. */
+export function loginOptionHint(l: Login): string | undefined {
+  if (l.max_browsers > 1) return `Pool of up to ${l.max_browsers} browsers — each run gets a free one`;
+  return l.url || undefined;
 }
 
 export async function listLogins(orgId: string): Promise<Login[]> {

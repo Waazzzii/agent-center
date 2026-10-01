@@ -1209,6 +1209,20 @@ export default function EditLoginPage() {
   };
 
   /**
+   * Whether the pool's browsers take turns signing in. Saved on Browser 1,
+   * whichever browser's page this is — it is a property of the account.
+   */
+  const handleOneAtATime = async (on: boolean) => {
+    if (!selectedOrgId || !poolParent) return;
+    try {
+      await updateLogin(selectedOrgId, poolParent.id, { signin_one_at_a_time: on });
+      await load(true);
+    } catch (err) {
+      toast.error(apiError(err) || 'Failed to change how this pool signs in');
+    }
+  };
+
+  /**
    * Change how many browsers this login may use at once.
    *
    * Lowering it removes the highest-numbered browsers, so it asks first — their
@@ -1473,29 +1487,54 @@ export default function EditLoginPage() {
               maxBrowsers={poolParent?.max_browsers ?? 1}
               onChange={handlePoolSize}
             />
+            {/* Both rows: the checkbox, its name, and the ⓘ right beside it — no
+                caption underneath that rewrites itself on every click. The
+                second row is always present on a pool and only DISABLED with
+                separate credentials, so ticking the first never makes the card
+                grow or shrink. */}
             {pooled && (
-              <div className="flex items-center justify-between gap-3 border-t pt-4">
+              <div className="flex items-center gap-1.5 border-t pt-4">
                 <label className="flex cursor-pointer items-center gap-3">
                   <Checkbox
                     checked={sharedCreds}
                     onCheckedChange={(v) => handleCredentialMode(v === true)}
                   />
-                  <span>
-                    <span className="block text-sm font-medium">Same credentials for every browser</span>
-                    <span className="block text-xs text-muted-foreground">
-                      {sharedCreds
-                        ? 'One account for the whole pool. Browsers sign in one at a time.'
-                        : 'Each browser signs in with its own account, in parallel.'}
-                    </span>
-                  </span>
+                  <span className="text-sm font-medium">Same credentials for every browser</span>
                 </label>
                 <InfoBubble>
-                  Shared: every browser uses Browser 1&apos;s credentials, authenticator and 2FA
-                  settings, edited on Browser 1&apos;s Credentials tab. Separate: each browser has its own —
-                  use this for sites that allow only one session per account. Switching to shared
-                  deletes each browser&apos;s own credentials.
+                  On: one account for the whole pool — every browser uses Browser 1&apos;s credentials,
+                  authenticator and 2FA settings, edited on Browser 1&apos;s Credentials tab. Off: each
+                  browser signs in with its own account; use this for sites that allow only one session
+                  per account. Turning it on deletes each browser&apos;s own credentials.
                 </InfoBubble>
               </div>
+            )}
+            {pooled && (
+              <div className="flex items-center gap-1.5 border-t pt-4">
+                <label className={cn('flex items-center gap-3', sharedCreds ? 'cursor-pointer' : 'cursor-not-allowed opacity-50')}>
+                  <Checkbox
+                    checked={sharedCreds && !!poolParent?.signin_one_at_a_time}
+                    disabled={!sharedCreds || !poolParent}
+                    onCheckedChange={(v) => void handleOneAtATime(v === true)}
+                  />
+                  <span className="text-sm font-medium">Sign in one browser at a time</span>
+                </label>
+                <InfoBubble>
+                  On: a browser that needs to sign in waits while another one is signing in. Off: each
+                  browser signs in on its own, without waiting. Turn it on when one sign-in can break
+                  another — usually a 2FA code sent to Slack or email, where two sign-ins race for the
+                  same message and the second code cancels the first, or a site that signs out other
+                  sessions when a new one starts. Only applies with the same credentials for every
+                  browser: separate accounts never wait for each other.
+                </InfoBubble>
+              </div>
+            )}
+            {pooled && (
+              <p className="border-t pt-4 text-xs text-muted-foreground">
+                Agents and scripts use this login as a whole: each run is handed whichever browser
+                is free, so a single browser can&apos;t be picked. To run as one specific browser
+                every time, create a separate login.
+              </p>
             )}
           </CardContent>
         </Card>
@@ -1643,6 +1682,25 @@ export default function EditLoginPage() {
               )}
             </div>
           </div>
+          {/* Per pod: each pod keeps its own copy of this browser's profile and
+              signs it in on its own — a new pod starts signed out. The status
+              above is one value for all of them. */}
+          {login.pods && login.pods.length > 0 && (
+            <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 border-t pt-3 text-xs">
+              <span className="text-muted-foreground">On each pod:</span>
+              {login.pods.map((p) => (
+                <span key={p.pod} className="inline-flex items-center gap-1.5" title={p.pod}>
+                  <span className={cn('h-1.5 w-1.5 rounded-full',
+                    p.state === 'signed_in' ? 'bg-success' : p.state === 'signed_out' ? 'bg-warning' : 'bg-muted-foreground/40')} />
+                  <span className="font-mono">{p.pod.replace(/^agent-fleet-/, '')}</span>
+                  <span className="text-muted-foreground">
+                    {p.state === 'signed_in' ? 'signed in' : p.state === 'signed_out' ? 'signed out' : 'not used yet'}
+                    {p.at && ` · ${formatRelative(p.at)}`}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
 

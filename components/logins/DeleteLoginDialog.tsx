@@ -10,7 +10,7 @@ import { Button } from '@/components/ui/button';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { toast } from 'sonner';
 import {
-  deleteLogin, getLoginUsage, reassignLogin,
+  deleteLogin, getLoginUsage, reassignLogin, assignableLogins,
   type Login, type LoginUsage,
 } from '@/lib/api/logins';
 
@@ -59,7 +59,9 @@ export function DeleteLoginDialog({
       .finally(() => setLoading(false));
   }, [open, orgId, login]);
 
-  const targets = allLogins.filter((l) => l.id !== login?.id);
+  // Pools are moved onto by their first login only — a pool browser is never a
+  // target, the backend refuses one (see assignableLogins).
+  const targets = assignableLogins(allLogins).filter((l) => l.id !== login?.id);
 
   const handleReassign = async () => {
     if (!orgId || !login || !target) return;
