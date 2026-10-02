@@ -25,6 +25,44 @@ export interface ElementSnapshot {
   candidates: SelectorCandidate[];
 }
 
+/** What an extract reads from an element (single mode, a list row, or a column). */
+export type ExtractRead = 'auto' | 'text' | 'value' | 'html' | 'outer_html' | 'attribute' | 'count' | 'exists';
+export type ExtractTransform = 'trim' | 'none' | 'number' | 'integer' | 'lower' | 'upper';
+export interface ExtractColumn {
+  /** list: relative to the row (omit for the row itself). */
+  selector?: string;
+  /** table: the header to take. */
+  header?: string;
+  /** json / network: path inside each entry. */
+  path?: string;
+  read?: ExtractRead;
+  attribute?: string;
+  pattern?: string;
+  transform?: ExtractTransform;
+}
+/**
+ * An extract step's extended options — see agent-backend
+ * services/extraction/extract-engine.js, the one place they are implemented.
+ * Absent = the original extract (one element: its value, else its text).
+ */
+export interface ExtractConfig {
+  mode?: 'single' | 'list' | 'table' | 'json' | 'network';
+  read?: ExtractRead;
+  attribute?: string;
+  pattern?: string;
+  transform?: ExtractTransform;
+  columns?: Record<string, ExtractColumn>;
+  limit?: number;
+  dedupe_by?: string;
+  as_items?: boolean;
+  paginate?: {
+    mode: 'url' | 'next' | 'load_more' | 'scroll';
+    url?: string; start?: number; step?: number; next?: string; max_pages?: number; wait_ms?: number;
+  };
+  json?: { selector?: string; global?: string; path?: string };
+  network?: { url_contains: string; path?: string };
+}
+
 export interface RecordedStep {
   // Kept in step with ACTION_TYPES in the backend's step-schema.js. 'download'
   // was already missing here while the engine implemented it — a step the UI
@@ -50,6 +88,8 @@ export interface RecordedStep {
   text?: string;
   key?: string;
   field_name?: string;
+  /** extract only — extended options (attribute, pattern, list, table, page data…). */
+  extract?: ExtractConfig;
   tab_index?: number;
   /** For wait_for steps: optional timeout override in ms */
   timeout?: number;

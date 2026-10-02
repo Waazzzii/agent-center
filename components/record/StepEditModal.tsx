@@ -9,8 +9,9 @@ import { Switch } from '@/components/ui/switch';
 import { cn } from '@/lib/utils';
 import type { RecordedStep } from '@/lib/api/scripts';
 import { SelectorPanel, JsonPanel } from './panels';
+import { ExtractOptionsPanel } from './ExtractOptionsPanel';
 
-type TabId = 'name' | 'branch' | 'selector' | 'json';
+type TabId = 'name' | 'extract' | 'branch' | 'selector' | 'json';
 
 interface StepEditModalProps {
   /** Step being edited. The modal is uncontrolled w.r.t. step data — it
@@ -194,6 +195,10 @@ export function StepEditModal({
     'wait_for_tab', 'switch_tab', 'close_tab'].includes(draft.action);
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: 'name', label: 'Name' },
+    // What an extract reads, and how — attribute, pattern, list, table,
+    // page data… (ExtractOptionsPanel). Not for a URL extract, which has its
+    // own options on the Selector tab.
+    ...(draft.action === 'extract' && draft.selector !== '__url__' ? [{ id: 'extract' as TabId, label: 'Extract' }] : []),
     isGroup ? { id: 'branch', label: 'Branch' } : { id: 'selector', label: 'Selector' },
     { id: 'json', label: 'JSON' },
   ];
@@ -447,6 +452,10 @@ export function StepEditModal({
             );
           })()}
 
+          {tab === 'extract' && (
+            <ExtractOptionsPanel step={draft} onChange={handleSelectorUpdate} />
+          )}
+
           {tab === 'selector' && (
             <SelectorPanel
               step={draft}
@@ -492,7 +501,7 @@ function autoLabelHint(step: RecordedStep): string {
     case 'fill':       return `Fill: ${step.selector ?? ''} = ${step.value ?? ''}`;
     case 'select':     return `Select: ${step.value ?? ''} in ${step.selector ?? ''}`;
     case 'press_key':  return `Press: ${step.key ?? ''}`;
-    case 'extract':    return `Extract → {{${step.field_name ?? '?'}}}`;
+    case 'extract':    return `Extract${step.extract?.mode && step.extract.mode !== 'single' ? ` ${step.extract.mode}` : ''} → {{${step.field_name ?? '?'}}}`;
     case 'wait_for':   return `Wait: ${step.waitFor?.description ?? step.selector ?? 'element'}`;
     default:           return step.action;
   }

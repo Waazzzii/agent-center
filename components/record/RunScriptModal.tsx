@@ -118,6 +118,24 @@ interface RunScriptModalProps {
  * Returns 0-based indices, clamped to [0, count). `raw` is whether a step was
  * mentioned at all (to distinguish "no targeting" from "out-of-range step").
  */
+/**
+ * Extracted values as editor variables. A list / table / page-data extract
+ * returns an array, and the Variables panel and the next /execute both deal in
+ * strings — so anything that is not a string travels as JSON, the same way the
+ * engine hands it to later steps ({{field}}).
+ */
+function asParamMap(extracted: Record<string, unknown> | undefined): Record<string, string> {
+  return Object.fromEntries(Object.entries(extracted ?? {}).map(([k, v]) => [k, typeof v === 'string' ? v : JSON.stringify(v)]));
+}
+
+/** Short display of an extracted value for the activity log. */
+function describeExtracted(v: string): string {
+  if (v.startsWith('[')) {
+    try { const a = JSON.parse(v); if (Array.isArray(a)) return `${a.length} row(s) — ${JSON.stringify(a[0] ?? null).slice(0, 80)}${a.length ? ' …' : ''}`; } catch { /* plain text */ }
+  }
+  return v.length > 120 ? `${v.slice(0, 120)}…` : v;
+}
+
 function parseStepTargets(text: string, count: number): { indices: number[]; mentioned: boolean } {
   if (!text || !/\bsteps?\b/i.test(text)) return { indices: [], mentioned: false };
   const nums = new Set<number>();
@@ -148,7 +166,7 @@ function autoStepLabel(step: RecordedStep): string {
     case 'press_key':  return `Press: ${step.key ?? ''}`;
     case 'extract':    return step.selector === '__url__'
       ? `Extract URL ${step.url_extraction?.method === 'query_param' ? `?${step.url_extraction.param_name}` : step.url_extraction?.method === 'path_segment' ? `path[${step.url_extraction.path_index}]` : 'match'} → {{${step.field_name ?? '?'}}}${step._defaultValue ? ` = "${step._defaultValue}"` : ''}`
-      : `Extract → {{${step.field_name ?? '?'}}}${step._defaultValue ? ` = "${step._defaultValue}"` : ''}`;
+      : `Extract${step.extract?.mode && step.extract.mode !== 'single' ? ` ${step.extract.mode}${step.extract.as_items ? ' (one item per row)' : ''}` : ''} → {{${step.field_name ?? '?'}}}${step._defaultValue ? ` = "${step._defaultValue}"` : ''}`;
     case 'switch_tab': return `Switch to tab ${step.tab_index ?? ''}`;
     case 'close_tab':  return 'Close tab';
     case 'wait_for':     return `Wait: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? 'element'}`;
@@ -630,7 +648,7 @@ export function RunScriptModal({
   // the top of a fresh top-level replay.
   const startReplayActivity = useCallback((fromIndex: number, extracted: Record<string, string>) => {
     lastLoggedIndexRef.current = fromIndex;
-    lastExtractedRef.current = { ...extracted };
+    lastExtractedRef.current = asParamMap(extracted);
     runningLoggedRef.current = null;
   }, []);
 
@@ -1676,7 +1694,7 @@ export function RunScriptModal({
       setStepEditError('');
       // Live-update test values from extracted data (extract steps set variables)
       if (res.extracted && Object.keys(res.extracted).length > 0) {
-        setParams((p) => ({ ...p, ...res.extracted }));
+        setParams((p) => ({ ...p, ...asParamMap(res.extracted) }));
       }
       // A group whose guard didn't match reports the range it jumped. Record
       // it so those rows render as SKIPPED rather than inheriting "done" from
@@ -1794,7 +1812,7 @@ export function RunScriptModal({
         pageUrl:      res.pageUrl ?? s.pageUrl ?? null,
       } : s);
       if (res.extracted && Object.keys(res.extracted).length > 0) {
-        setParams((p) => ({ ...p, ...res.extracted }));
+        setParams((p) => ({ ...p, ...asParamMap(res.extracted) }));
       }
       if (res.done) toast.success('All steps completed (agent timing)!');
       else if (res.interrupted) toast.info('Agent run stopped');
@@ -1912,7 +1930,7 @@ export function RunScriptModal({
       // for the steps we skipped past. A subsequent real run still logs from
       // here (startReplayActivity re-baselines on Run).
       lastLoggedIndexRef.current = res.currentIndex;
-      lastExtractedRef.current = { ...(res.extracted ?? {}) };
+      lastExtractedRef.current = asParamMap(res.extracted);
       runningLoggedRef.current = null;
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Failed to jump to step');
@@ -3172,13 +3190,13 @@ export function RunScriptModal({
       }
       lastLoggedIndexRef.current = stepRunState.currentIndex;
       // Surface any extracted keys that appeared since we last looked.
-      const extracted = stepRunState.extracted ?? {};
+      const extracted = asParamMap(stepRunState.extracted);
       for (const [k, v] of Object.entries(extracted)) {
         if (lastExtractedRef.current[k] !== v) {
-          pushActivity('done', `→ ${k} = ${v}`);
+          pushActivity('done', `→ ${k} = ${describeExtracted(v)}`);
         }
       }
-      lastExtractedRef.current = { ...extracted };
+      lastExtractedRef.current = asParamMap(extracted);
     }
 
     // Step currently running — log "▶" once per index.
