@@ -1,5 +1,6 @@
 import type { NextConfig } from "next";
 import path from "path";
+import { withSentryConfig } from "@sentry/nextjs/config";
 
 // @tailwindcss/node uses process.env.NODE_PATH to build its enhanced-resolve
 // modules list. When opts.from is empty (a Turbopack behaviour), the CSS
@@ -18,4 +19,20 @@ const nextConfig: NextConfig = {
   },
 };
 
-export default nextConfig;
+/**
+ * Sentry (browser + server error reporting; init in instrumentation*.ts).
+ * Source maps are uploaded — and then not served publicly — only when the
+ * build has SENTRY_AUTH_TOKEN, SENTRY_ORG and SENTRY_PROJECT; without them the
+ * build is unchanged apart from the SDK.
+ */
+const sentryUpload = !!(process.env.SENTRY_AUTH_TOKEN && process.env.SENTRY_ORG && process.env.SENTRY_PROJECT);
+
+export default withSentryConfig(nextConfig, {
+  org: process.env.SENTRY_ORG,
+  project: process.env.SENTRY_PROJECT,
+  authToken: process.env.SENTRY_AUTH_TOKEN,
+  silent: !process.env.CI,
+  telemetry: false,
+  widenClientFileUpload: true,
+  sourcemaps: { disable: !sentryUpload, deleteSourcemapsAfterUpload: true },
+});
