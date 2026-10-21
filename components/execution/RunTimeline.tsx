@@ -178,9 +178,12 @@ export function RunRow({
                 </div>
               )}
             </div>
-            {right && <div className="hidden shrink-0 items-center gap-2 text-xs text-muted-foreground sm:flex">{right}</div>}
             {onOpen && !disabled && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground/40" />}
           </button>
+
+          {/* Beside the row's button, not inside it: `right` holds links
+              (Open desk), and a link inside a button is invalid HTML. */}
+          {right && <div className="hidden shrink-0 items-center gap-2 text-xs text-muted-foreground sm:flex">{right}</div>}
 
           {/* The caret is its own control when the row also opens a record —
               otherwise clicking to peek at children would navigate away. */}
@@ -214,13 +217,16 @@ export function RunRow({
  * miniature: status · glyph · label · facts · badge · chevron.
  */
 export function NestedRow({
-  status, icon, label, facts, badge, onOpen, href, external,
+  status, icon, label, facts, badge, action, onOpen, href, external,
 }: {
   status?: string;
   icon?: React.ReactNode;
   label: React.ReactNode;
   facts?: React.ReactNode;
   badge?: React.ReactNode;
+  /** A control of its own (e.g. a Desk link), drawn BESIDE the row's link or
+   *  button — never inside it, which is invalid HTML and a hydration error. */
+  action?: React.ReactNode;
   onOpen?: () => void;
   href?: string;
   /** Opens outside the run page (the desk) — shown with an external glyph. */
@@ -243,9 +249,18 @@ export function NestedRow({
     </>
   );
   const cls = 'flex w-full items-center gap-2.5 px-3.5 py-2 text-left transition-colors hover:bg-muted/40';
-  if (href) return <Link href={href} className={cls}>{inner}</Link>;
-  if (onOpen) return <button type="button" onClick={onOpen} className={cls}>{inner}</button>;
-  return <div className={cls.replace(' hover:bg-muted/40', '')}>{inner}</div>;
+  const row = href
+    ? <Link href={href} className={cn(cls, action && 'min-w-0 flex-1')}>{inner}</Link>
+    : onOpen
+      ? <button type="button" onClick={onOpen} className={cn(cls, action && 'min-w-0 flex-1')}>{inner}</button>
+      : <div className={cn(cls.replace(' hover:bg-muted/40', ''), action && 'min-w-0 flex-1')}>{inner}</div>;
+  if (!action) return row;
+  return (
+    <div className="flex items-center pr-3.5">
+      {row}
+      {action}
+    </div>
+  );
 }
 
 function NestedList({ children }: { children: React.ReactNode }) {
@@ -289,10 +304,9 @@ export function TriggerZone({ node }: { node: FullTreeNode }) {
           }
           facts={<>{origin.item_index != null && <span>item {origin.item_index + 1}</span>}<span className="tabular-nums">{fmtTime(origin.decided_at)}</span></>}
           href={origin.execution_id ? `/agent-history/${origin.execution_id}` : origin.desk_id ? `/interactions/decisions/${origin.desk_id}` : undefined}
-          badge={origin.desk_id && (
+          action={origin.desk_id && (
             <Link
               href={`/interactions/decisions/${origin.desk_id}`}
-              onClick={(e) => e.stopPropagation()}
               className="shrink-0 rounded-md border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
             >
               Desk
