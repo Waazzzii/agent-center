@@ -10,8 +10,10 @@ import { cn } from '@/lib/utils';
 import type { RecordedStep } from '@/lib/api/scripts';
 import { SelectorPanel, JsonPanel } from './panels';
 import { ExtractOptionsPanel } from './ExtractOptionsPanel';
+import { FileStepFields } from './FileStepFields';
+import { LOGIN_INDICATOR_BLOCKED, fileStepLabel, isFileStep } from '@/lib/file-steps';
 
-type TabId = 'name' | 'extract' | 'branch' | 'selector' | 'json';
+type TabId = 'name' | 'extract' | 'file' | 'branch' | 'selector' | 'json';
 
 interface StepEditModalProps {
   /** Step being edited. The modal is uncontrolled w.r.t. step data — it
@@ -191,14 +193,16 @@ export function StepEditModal({
   // succeed with nothing on the page (navigate, press_key, pause) and download,
   // which would produce a second file when a failed indicator re-runs the
   // script. Kept in step with LOGIN_INDICATOR_BLOCKED in step-schema.js.
-  const canIndicate = !['navigate', 'press_key', 'pause', 'group', 'download',
-    'wait_for_tab', 'switch_tab', 'close_tab'].includes(draft.action);
+  const canIndicate = !LOGIN_INDICATOR_BLOCKED.includes(draft.action);
+  const isFile = isFileStep(draft);
   const tabs: Array<{ id: TabId; label: string }> = [
     { id: 'name', label: 'Name' },
     // What an extract reads, and how — attribute, pattern, list, table,
     // page data… (ExtractOptionsPanel). Not for a URL extract, which has its
     // own options on the Selector tab.
     ...(draft.action === 'extract' && draft.selector !== '__url__' ? [{ id: 'extract' as TabId, label: 'Extract' }] : []),
+    // download / upload / save_page: what file, where it goes, its limits.
+    ...(isFile ? [{ id: 'file' as TabId, label: 'File' }] : []),
     isGroup ? { id: 'branch', label: 'Branch' } : { id: 'selector', label: 'Selector' },
     { id: 'json', label: 'JSON' },
   ];
@@ -452,6 +456,12 @@ export function StepEditModal({
             );
           })()}
 
+          {tab === 'file' && (
+            <div className="px-6 py-3">
+              <FileStepFields step={draft} onChange={handleSelectorUpdate} />
+            </div>
+          )}
+
           {tab === 'extract' && (
             <ExtractOptionsPanel step={draft} onChange={handleSelectorUpdate} />
           )}
@@ -503,6 +513,9 @@ function autoLabelHint(step: RecordedStep): string {
     case 'press_key':  return `Press: ${step.key ?? ''}`;
     case 'extract':    return `Extract${step.extract?.mode && step.extract.mode !== 'single' ? ` ${step.extract.mode}` : ''} → {{${step.field_name ?? '?'}}}`;
     case 'wait_for':   return `Wait: ${step.waitFor?.description ?? step.selector ?? 'element'}`;
+    case 'download':
+    case 'upload':
+    case 'save_page':  return fileStepLabel(step);
     default:           return step.action;
   }
 }

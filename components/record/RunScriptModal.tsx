@@ -18,6 +18,7 @@ import {
   CircleDot, X, XCircle, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
   Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
   Scissors, ShieldAlert, Undo2, GitBranch, SkipForward, CircleSlash,
+  Download, Upload, FileText,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -65,6 +66,10 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import { VariablesPanel } from './panels/VariablesPanel';
 import { StepEditModal } from './StepEditModal';
+import { FileStepFields } from './FileStepFields';
+import {
+  LOGIN_INDICATOR_BLOCKED, fileStepErrors, fileStepLabel, fileStepOutputs, type FileStepAction,
+} from '@/lib/file-steps';
 import { ProvisioningNotice } from '@/components/hitl/ProvisioningNotice';
 import { AGENT_BACKEND_URL as agentApiUrl } from '@/lib/config';
 
@@ -172,6 +177,9 @@ function autoStepLabel(step: RecordedStep): string {
     case 'wait_for':     return `Wait: ${step._waitLabel ?? step.waitFor?.description ?? step.waitFor?.selector ?? step.selector ?? 'element'}`;
     case 'wait_for_tab': return `Wait for new tab${step.selector ? `: ${step.waitFor?.description ?? step.selector}` : ''}`;
     case 'pause':        return `Pause ${typeof step.duration_ms === 'number' ? `${step.duration_ms}ms` : ''}`.trim();
+    case 'download':
+    case 'upload':
+    case 'save_page':    return fileStepLabel(step);
     // A group is named after the BRANCH, not its selector. "Two-factor
     // challenge" tells you what is optional here; an XPath does not.
     case 'group':      return (step as { label?: string }).label?.trim() || 'Optional branch';
@@ -970,6 +978,9 @@ export function RunScriptModal({
       if (frameSel)         fields.push(frameSel);
       const wf = (s as RecordedStep & { waitFor?: { selector?: string } }).waitFor;
       if (wf?.selector)     fields.push(wf.selector);
+      // An upload's file refs ({{packet_file}}) and a capture's filename template.
+      if (Array.isArray(s.files)) fields.push(...s.files.map(String));
+      if (s.filename)       fields.push(s.filename);
       return fields;
     };
     steps.forEach((s, i) => {
@@ -982,6 +993,11 @@ export function RunScriptModal({
       // Sources: extract steps set a variable named field_name
       if (s.action === 'extract' && s.field_name) {
         ensure(s.field_name).sources.push({ index: i, action: s.action });
+      }
+      // File steps produce <field>_file and friends. field_name is a PREFIX
+      // here, not a variable, so it is not itself a consumer either.
+      for (const out of fileStepOutputs(s)) {
+        ensure(out).sources.push({ index: i, action: s.action });
       }
     });
     return vars;
@@ -1028,6 +1044,10 @@ export function RunScriptModal({
       // at field_name — so a script saved from the editor and the same script
       // saved through the MCP now declare the same thing.
       if (info.consumers.length === 0) continue;
+      // A file step's output (evidence_file, read by a later upload) is
+      // produced by this script, not supplied by the caller — same rule as
+      // the backend's finalize pass.
+      if (info.sources.some((src) => src.action === 'download' || src.action === 'upload' || src.action === 'save_page')) continue;
       result[name] = '';
     }
     return result;
@@ -2184,6 +2204,38 @@ export function RunScriptModal({
     toast.success(`Pause step added (${parsed}ms)`);
   };
 
+  // ── Add a file step — download, upload or save_page ──
+  // Opens a small dialog (FileStepFields) rather than a picker: an upload's
+  // input is often hidden and a capture needs no element at all, so the
+  // fields are typed. The selector can be refined afterwards on the step's
+  // Selector tab. Inserted after the current step, like a pause.
+  const [fileStepDraft, setFileStepDraft] = useState<RecordedStep | null>(null);
+  const handleAddFileStep = (action: FileStepAction) => {
+    if (!runId || !orgId || !stepRunState) return;
+    setFileStepDraft(
+      action === 'upload'
+        // Choosing the file IS the submit on most portals — gated by default,
+        // so a test run asks before attaching. Agent runs go through.
+        ? { action: 'upload', files: [], requires_approval: true }
+        : { action },
+    );
+  };
+  const handleConfirmFileStep = async () => {
+    const step = fileStepDraft;
+    if (!step || !runId || !orgId || !stepRunState) return;
+    if (fileStepErrors(step).length > 0) return;
+    const idx = stepRunState.currentIndex + 1;
+    const newSteps = [...(stepRunState.steps ?? [])];
+    newSteps.splice(idx, 0, step);
+    setStepRunState((s) => s ? { ...s, steps: newSteps, totalSteps: newSteps.length, step } : s);
+    setEditedStep(JSON.stringify(step, null, 2));
+    setNewStepIndices((prev) => new Set([...prev, idx]));
+    setHasChanges(true);
+    setFileStepDraft(null);
+    await syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
+    toast.success(`${fileStepLabel(step)} — added as step ${idx + 1}`);
+  };
+
   // ── Add extract step — triggers element picker, then inserts ──
   const handleAddExtractStep = async () => {
     if (!runId || !orgId || !stepRunState || isCapturingExtract) return;
@@ -2794,8 +2846,7 @@ export function RunScriptModal({
     const idx = stepRunState?.currentIndex ?? 0;
     const step = steps[idx];
     if (!step) return { idx, ok: false, why: 'Select a step first.' };
-    if (['navigate', 'press_key', 'pause', 'group', 'download',
-      'wait_for_tab', 'switch_tab', 'close_tab'].includes(step.action)) {
+    if (LOGIN_INDICATOR_BLOCKED.includes(step.action)) {
       return { idx, ok: false,
         why: `A ${step.action} step succeeds with nothing on the page, so it cannot prove a `
            + 'session. Select one that has to find an element — wait-for, extract, select, fill or click.' };
@@ -2825,8 +2876,7 @@ export function RunScriptModal({
     // options just as a wait_for waits for its selector. Excluded are the steps
     // that succeed with nothing on the page, and download, which would produce a
     // second artifact when a failed indicator re-runs the script.
-    if (['navigate', 'press_key', 'pause', 'group', 'download',
-      'wait_for_tab', 'switch_tab', 'close_tab'].includes(target.action)) {
+    if (LOGIN_INDICATOR_BLOCKED.includes(target.action)) {
       toast.error(`A ${target.action} step cannot prove a session — it succeeds with nothing on the page. Use one that has to find an element: wait-for, extract, select, fill or click.`);
       return;
     }
@@ -3557,6 +3607,7 @@ export function RunScriptModal({
                 setIsCapturingWaitFor(false);
               }}
               onSelectAddPause={handleAddPauseStep}
+              onSelectAddFileStep={handleAddFileStep}
               onSelectExtractElement={handleAddExtractStep}
               onCancelExtract={() => {
                 captureExtractAbortRef.current?.abort();
@@ -4157,8 +4208,7 @@ export function RunScriptModal({
                               // modal round trip is why scripts end up untagged.
                               // Not on a login script: it IS the sign-in, so
                               // it has no session to prove.
-                              ...(scriptKind === 'regular' && !isGroupHeader && !['navigate', 'press_key', 'pause', 'group', 'download',
-                                'wait_for_tab', 'switch_tab', 'close_tab'].includes(s.action)
+                              ...(scriptKind === 'regular' && !isGroupHeader && !LOGIN_INDICATOR_BLOCKED.includes(s.action)
                                 ? [{
                                     label: s.login_indicator ? 'Clear login indicator' : 'Proves we are signed in',
                                     icon: <KeyRound className="h-4 w-4" />,
@@ -4555,6 +4605,39 @@ export function RunScriptModal({
         }}
       />
 
+      {/* Add a file step (Record menu → Add Download / Add Upload / Save Page As File). */}
+      <Dialog open={fileStepDraft != null} onOpenChange={(o) => { if (!o) setFileStepDraft(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>
+              {fileStepDraft?.action === 'upload' ? 'Add upload step'
+                : fileStepDraft?.action === 'download' ? 'Add download step'
+                : 'Save page as file'}
+            </DialogTitle>
+            <DialogDescription>
+              {fileStepDraft?.action === 'upload'
+                ? 'Attaches stored files by id. Test it by setting the file variable in Variables, or with a download or saved page earlier in this script.'
+                : 'The file is kept in storage and its id is an output, so an upload step — in this script or another agent — can attach it.'}
+            </DialogDescription>
+          </DialogHeader>
+          {fileStepDraft && (
+            <div className="max-h-[60vh] overflow-y-auto pr-1">
+              <FileStepFields step={fileStepDraft} onChange={setFileStepDraft} />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={() => setFileStepDraft(null)}>Cancel</Button>
+            <Button
+              size="sm"
+              onClick={handleConfirmFileStep}
+              disabled={!fileStepDraft || fileStepErrors(fileStepDraft).length > 0}
+            >
+              Add step
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Exit-session warning — shown on explicit exit AND on nav interception */}
       <Dialog open={showExitWarning} onOpenChange={(o) => {
         if (!o) { pendingNavRef.current = null; setShowExitWarning(false); }
@@ -4679,6 +4762,7 @@ interface ModeActionPickerProps {
   onSelectRecordWait: () => void;
   onCancelWait: () => void;
   onSelectAddPause: () => void;
+  onSelectAddFileStep: (action: FileStepAction) => void;
   onSelectExtractElement: () => void;
   onCancelExtract: () => void;
   onSelectExtractUrl: () => void | Promise<void>;
@@ -4704,7 +4788,7 @@ const MODE_META: { key: ToolMode; label: string; icon: React.ComponentType<{ cla
 function ModeActionPicker({
   toolMode, setToolMode, runMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
   onStartRecording, onStopRecording, onSelectRecordWait, onCancelWait,
-  onSelectAddPause, onSelectExtractElement, onCancelExtract, onSelectExtractUrl, onSelectCopyPage,
+  onSelectAddPause, onSelectAddFileStep, onSelectExtractElement, onCancelExtract, onSelectExtractUrl, onSelectCopyPage,
 }: ModeActionPickerProps) {
   // Remember the action last chosen per mode so the left chip can show it.
   // Test derives from runMode (Manual=step, Auto=agent); Record / Extract
@@ -4735,6 +4819,9 @@ function ModeActionPicker({
       { label: 'Record Interactions', desc: 'Capture clicks, fills, and navigations on the page', icon: CircleDot, onClick: onStartRecording },
       { label: 'Record Wait', desc: 'Click an element to insert a wait-for step', icon: Clock, onClick: onSelectRecordWait },
       { label: 'Add Pause', desc: 'Fixed-duration delay before the next step (no element required)', icon: Hourglass, onClick: onSelectAddPause },
+      { label: 'Add Download', desc: 'Click something that produces a file and keep the file', icon: Download, onClick: () => onSelectAddFileStep('download') },
+      { label: 'Add Upload', desc: 'Attach a stored file to a file input on the page', icon: Upload, onClick: () => onSelectAddFileStep('upload') },
+      { label: 'Save Page As File', desc: 'Capture this page (or one element) as a PDF or PNG', icon: FileText, onClick: () => onSelectAddFileStep('save_page') },
     ],
     extract: [
       { label: 'Extract From Element', desc: 'Click any element on the page', icon: MousePointer2, onClick: onSelectExtractElement },

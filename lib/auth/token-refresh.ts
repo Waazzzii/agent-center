@@ -82,7 +82,19 @@ export interface TokenRefreshOptions {
 function clearAndRedirect(loginPath: string, opts: TokenRefreshOptions): void {
   stop()
   opts.onSessionExpired?.()
+  // Already on a sign-in page: leave it alone — it is redirecting to sign-in.
+  if (isOnAuthPage()) return
   window.location.replace(loginPath)
+}
+
+/**
+ * The sign-in pages (/auth/*) mount the root layout too, refresher included.
+ * With an expired session cookie, a refresh failing there re-navigated to
+ * /auth/login every few hundred ms, cancelling that page's own redirect to
+ * sign-in — a loop users saw as "stuck redirecting" (prod 2026-10-21).
+ */
+function isOnAuthPage(): boolean {
+  return typeof window !== "undefined" && window.location.pathname.startsWith("/auth")
 }
 
 // ─── Core scheduler ───────────────────────────────────────────────────────────
@@ -155,6 +167,8 @@ async function tryRecoverSession(opts: TokenRefreshOptions): Promise<number | nu
  * the common "laptop sleep / closed tab overnight" case without a login page.
  */
 export function start(opts: TokenRefreshOptions): () => void {
+  // Nothing to keep alive on the sign-in pages (see isOnAuthPage).
+  if (isOnAuthPage()) return () => {}
   const exp = opts.readExp()
   if (!exp) return () => {}
 

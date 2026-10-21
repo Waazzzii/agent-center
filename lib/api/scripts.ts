@@ -67,7 +67,28 @@ export interface RecordedStep {
   // Kept in step with ACTION_TYPES in the backend's step-schema.js. 'download'
   // was already missing here while the engine implemented it — a step the UI
   // could not describe in types but happily rendered.
-  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for' | 'wait_for_tab' | 'pause' | 'download' | 'group';
+  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for' | 'wait_for_tab' | 'pause' | 'download' | 'upload' | 'save_page' | 'group';
+  /** upload only — stored-file ids, or {{variables}} holding them. */
+  files?: string[];
+  /** upload only — allowed extensions or MIME types, e.g. ["pdf", "image/tiff"]. */
+  accept?: string[];
+  /** upload only — total size cap across the files, in bytes. */
+  max_bytes?: number;
+  /** upload only — 'input' (default) sets files on the <input type=file>; 'chooser' clicks selector and answers the picker. */
+  upload_via?: 'input' | 'chooser';
+  /** download only — the file's declared type / extension when it is not CSV. */
+  content_type?: string;
+  upload_extension?: string;
+  /** save_page only — pdf (default, selectable text) or png. */
+  format?: 'pdf' | 'png';
+  /** save_page only — CSS used for a PDF: screen (default) or the site's print styles. */
+  media?: 'screen' | 'print';
+  /** save_page only — unroll clipped scroll panes before capture (default true). */
+  expand?: boolean;
+  /** save_page only — the one scroll pane to unroll, instead of auto-detecting. */
+  expand_selector?: string;
+  /** save_page only — stored file name, {{variables}} allowed; extension added. */
+  filename?: string;
   /** group only — what the branch IS, shown as the block's header. */
   label?: string;
   /** group only — the guard asked ONCE to decide the whole branch. */
