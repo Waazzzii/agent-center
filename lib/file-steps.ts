@@ -64,12 +64,13 @@ export function uploadFileRefs(step: RecordedStep): string[] {
 export function fileStepLabel(step: RecordedStep): string {
   const f = fileStepField(step);
   switch (step.action) {
+    // Names without braces, matching the Inputs / Outputs panel.
     case 'download':
-      return `Download → {{${f}_file}}`;
+      return `Download → ${f}`;
     case 'save_page':
-      return `Save ${step.selector ? 'element' : 'page'} as ${(step.format ?? 'pdf').toUpperCase()} → {{${f}_file}}`;
+      return `Save ${step.selector ? 'element' : 'page'} as ${(step.format ?? 'pdf').toUpperCase()} → ${f}`;
     case 'upload': {
-      const files = Array.isArray(step.files) ? step.files.join(', ') : '';
+      const files = Array.isArray(step.files) ? step.files.map((x) => String(x).replace(/\{+\s*|\s*\}+/g, '')).join(', ') : '';
       return `Upload ${files || '(no file)'}${step.selector ? ` → ${step.selector}` : ''}`;
     }
     default:
@@ -87,7 +88,7 @@ export function fileStepErrors(step: RecordedStep): string[] {
     errs.push('Output name: letters, digits and underscores only.');
   }
   if (step.action === 'upload') {
-    if (!step.selector?.trim()) errs.push('Selector: the file input (or, with "picker", the button that opens it).');
+    if (!step.selector?.trim()) errs.push("Page's file field: where on the website the file goes (or, with the file picker on, the button that opens it).");
     const files = Array.isArray(step.files) ? step.files.filter((f) => String(f).trim()) : [];
     if (files.length === 0) errs.push('Files: at least one file id or {{variable}}.');
     if (files.length > 10) errs.push('Files: at most 10.');

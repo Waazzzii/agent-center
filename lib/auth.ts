@@ -19,11 +19,15 @@ export type AgentSession = ProductUser;
  * Verify a session token by calling GET /products/me on the backend.
  * Returns the user's session or null if the token is missing, expired,
  * or invalid. Used in server components and layouts (Node.js runtime).
+ *
+ * "unknown_domain" when this hostname isn't an Agent Center domain at all
+ * (404). That is not a sign-in problem: treating it as signed-out loops
+ * forever under shared sign-in, which signs the browser straight back in.
  */
 export async function getSessionFromToken(
   token: string,
   host: string,
-): Promise<AgentSession | null> {
+): Promise<AgentSession | null | "unknown_domain"> {
   try {
     const res = await fetch(`${BACKEND_URL}/products/me`, {
       headers: {
@@ -32,6 +36,7 @@ export async function getSessionFromToken(
       },
       cache: "no-store",
     });
+    if (res.status === 404) return "unknown_domain";
     if (!res.ok) return null;
     const data = await res.json();
     return (data.user as AgentSession) ?? null;

@@ -73,10 +73,10 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
             />
           </Field>
           <Field
-            label="File input"
+            label={step.upload_via === 'chooser' ? "Page's upload button (selector)" : "Page's file field (selector)"}
             hint={step.upload_via === 'chooser'
-              ? 'The button that opens the file picker.'
-              : 'The <input type="file"> itself. It can be hidden behind a styled button — that is fine.'}
+              ? 'Where on the website to click to open its file picker — not your file. Your file is set in Files above.'
+              : 'Where on the website the file goes: its <input type="file"> element — not your file, which is set in Files above. It can be hidden behind a styled button; that is fine.'}
           >
             <Input
               className="font-mono text-xs"

@@ -11,6 +11,8 @@ import agentClient from './agent-client';
 export interface RunAccessGroup {
   id: string;
   name: string;
+  /** Group description from Wazzi admin — shown via an info icon. */
+  description?: string | null;
   member_count: number;
 }
 
@@ -37,6 +39,22 @@ export async function setAgentRunGroups(orgId: string, agentId: string, groupIds
     { group_ids: groupIds },
   );
   return res.data.groups;
+}
+
+/** A member of a Wazzi access group (System A), for the members hover. */
+export interface RunAccessGroupMember {
+  id: string;
+  email: string;
+  first_name: string | null;
+  last_name: string | null;
+}
+
+/** Who is IN a Wazzi access group — membership from Wazzi (user_access_groups). */
+export async function getRunGroupMembers(orgId: string, groupId: string) {
+  const res = await agentClient.get<{ members: RunAccessGroupMember[] }>(
+    `/api/admin/${orgId}/run-access-groups/${groupId}/members`,
+  );
+  return res.data.members;
 }
 
 // ── Group-centric (the central Authorization page: a group → its agents) ────────

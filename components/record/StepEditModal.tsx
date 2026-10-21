@@ -11,7 +11,7 @@ import type { RecordedStep } from '@/lib/api/scripts';
 import { SelectorPanel, JsonPanel } from './panels';
 import { ExtractOptionsPanel } from './ExtractOptionsPanel';
 import { FileStepFields } from './FileStepFields';
-import { LOGIN_INDICATOR_BLOCKED, fileStepLabel, isFileStep } from '@/lib/file-steps';
+import { LOGIN_INDICATOR_BLOCKED, fileStepErrors, fileStepLabel, isFileStep } from '@/lib/file-steps';
 
 type TabId = 'name' | 'extract' | 'file' | 'branch' | 'selector' | 'json';
 
@@ -492,7 +492,12 @@ export function StepEditModal({
           <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>
             Cancel
           </Button>
-          <Button size="sm" onClick={handleSave} disabled={saving}>
+          <Button
+            size="sm"
+            onClick={handleSave}
+            disabled={saving || (isFile && fileStepErrors(draft).length > 0)}
+            title={isFile && fileStepErrors(draft).length > 0 ? 'Fix the problems on the File tab first' : undefined}
+          >
             {saving ? 'Saving…' : 'Save'}
           </Button>
         </DialogFooter>

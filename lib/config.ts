@@ -25,3 +25,16 @@ export const AGENT_CLIENT_ID =
  */
 export const AUTH_URL =
   process.env.NEXT_PUBLIC_AUTH_URL || "http://localhost:3100";
+
+/**
+ * The Wazzi admin app (wazzi-frontend) — where org-wide things like access
+ * groups and their membership are managed. We link out to it (e.g. to edit a
+ * group, deep-linked to /access-groups/:id) rather than duplicating that
+ * management here.
+ *
+ * REQUIRED, no fallback: set NEXT_PUBLIC_WAZZI_APP_URL per environment (dev e.g.
+ * http://localhost:3001, prod e.g. https://app.wazzi.io). When unset the
+ * "Manage / Edit in Wazzi admin" links are hidden rather than pointing at a
+ * wrong host — a bad fallback silently sent people to the wrong place.
+ */
+export const WAZZI_APP_URL = process.env.NEXT_PUBLIC_WAZZI_APP_URL ?? "";

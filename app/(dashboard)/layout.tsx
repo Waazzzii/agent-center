@@ -5,6 +5,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { ViewModeSidebar } from '@/components/layout/ViewModeSidebar';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog';
+import { CenterLoading } from '@/components/layout/CenterLoading';
 import { usePermissionsSync } from '@/hooks/use-permissions-sync';
 import { useUIStore } from '@/stores/ui.store';
 import { Button } from '@/components/ui/button';
@@ -43,14 +44,12 @@ export default function DashboardLayout({
   }, [admin, hydrated, selectedOrgId, switchToOrgAdminView]);
 
   if (!hydrated || !admin) {
-    return (
-      <div className="flex h-screen items-center justify-center">
-        <div className="text-center">
-          <div className="mb-4 inline-block h-12 w-12 animate-spin rounded-full border-4 border-brand border-t-transparent"></div>
-          <p className="text-muted-foreground">Loading...</p>
-        </div>
-      </div>
-    );
+    // An explicit Logout clears the session before navigating, so this screen
+    // is what shows while the sign-out redirects run — say so.
+    const signingOut =
+      typeof window !== 'undefined' &&
+      !!(window as unknown as { __wazziExplicitSignout?: boolean }).__wazziExplicitSignout;
+    return <CenterLoading message={signingOut ? 'Signing out…' : undefined} />;
   }
 
   return (

@@ -50,6 +50,7 @@ import {
   runLoginInStepRun,
   getScriptAgentUsage,
   finalizeScript,
+  renameScriptVariable,
   SCRIPT_KIND_LABELS,
   type BrowserScript,
   type RecordedStep,
@@ -994,10 +995,14 @@ export function RunScriptModal({
       if (s.action === 'extract' && s.field_name) {
         ensure(s.field_name).sources.push({ index: i, action: s.action });
       }
-      // File steps produce <field>_file and friends. field_name is a PREFIX
-      // here, not a variable, so it is not itself a consumer either.
+    });
+    // File steps produce <field>_file and friends — but only the ones a later
+    // step READS are worth showing. Listing all of them (seven per download)
+    // buried the real inputs under rows nobody fills in.
+    steps.forEach((s, i) => {
       for (const out of fileStepOutputs(s)) {
-        ensure(out).sources.push({ index: i, action: s.action });
+        const v = vars.get(out);
+        if (v && v.consumers.length > 0) v.sources.push({ index: i, action: s.action });
       }
     });
     return vars;
@@ -2037,48 +2042,36 @@ export function RunScriptModal({
   //
   // Also matches BOTH `{var}` and `{{var}}` (recorder/substitute allow
   // either form per substitute()'s `\{+...\}+` regex).
-  const handleRenameVariable = (oldName: string, newName: string) => {
-    const safeName = newName.trim().replace(/\s+/g, '_').replace(/\W/g, '');
-    if (!safeName || safeName === oldName) return;
-
-    // Builds a regex that matches {oldName} or {{oldName}} (or any
-    // number of surrounding braces), preserving the outer brace count
-    // in the replacement.
-    const ref = new RegExp(`(\\{+)${oldName}(\\}+)`, 'g');
-    const swap = (s: string | null | undefined): string | null | undefined =>
-      typeof s === 'string' ? s.replace(ref, (_m, open, close) => `${open}${safeName}${close}`) : s;
-
-    const updatedSteps = (stepRunState?.steps ?? []).map((s) => {
-      const updated: typeof s = { ...s };
-      // String fields the worker substitutes against.
-      if (typeof updated.value === 'string')          updated.value          = swap(updated.value) as string;
-      if (typeof updated.url === 'string')            updated.url            = swap(updated.url) as string;
-      if (typeof updated.selector === 'string')       updated.selector       = swap(updated.selector) as string;
-      if (typeof updated.text === 'string')           updated.text           = swap(updated.text) as string;
-      if (typeof updated.frame_selector === 'string') updated.frame_selector = swap(updated.frame_selector) as string;
-      // waitFor.selector (locked-in fallback for the locator chain).
-      if (updated.waitFor && typeof updated.waitFor.selector === 'string') {
-        updated.waitFor = { ...updated.waitFor, selector: swap(updated.waitFor.selector) as string };
-      }
-      // elementSnapshot.candidates[].sel (ranked locator candidates).
-      if (updated.elementSnapshot && Array.isArray(updated.elementSnapshot.candidates)) {
-        updated.elementSnapshot = {
-          ...updated.elementSnapshot,
-          candidates: updated.elementSnapshot.candidates.map((c) =>
-            typeof c?.sel === 'string' ? { ...c, sel: swap(c.sel) as string } : c
-          ),
-        };
-      }
-      // Extract step: field_name names which params key the result writes to.
-      if (updated.field_name === oldName) updated.field_name = safeName;
-      return updated;
-    });
-    setStepRunState((s) => s ? { ...s, steps: updatedSteps } : s);
-    setParams((p) => {
-      const { [oldName]: val, ...rest } = p;
-      return { ...rest, [safeName]: val ?? '' };
-    });
-    setHasChanges(true);
+  // Rename a variable — or a whole output group ("photo" → every photo_*
+  // field) — in every step. The server does the rewrite (scripts/rename-variable,
+  // the same function the authoring MCP's rename_variable uses), so the editor
+  // and the MCP rename exactly the same things. A clash or an invalid name comes
+  // back as an error and nothing changes.
+  const handleRenameVariable = async (oldName: string, newName: string) => {
+    const safeName = newName.trim().replace(/s+/g, '_').replace(/W/g, '');
+    if (!safeName || safeName === oldName || !orgId) return;
+    try {
+      const out = await renameScriptVariable(orgId, { steps: stepRunState?.steps ?? [], from: oldName, to: safeName });
+      if (out.renamed.length === 0) return;
+      setStepRunState((s) => s ? { ...s, steps: out.steps } : s);
+      // Test values follow their names.
+      setParams((p) => {
+        const next = { ...p };
+        for (const [from, to] of out.renamed) {
+          if (from in next) { next[to] = next[from] ?? ''; delete next[from]; }
+        }
+        return next;
+      });
+      setHasChanges(true);
+      if (runId) await syncStepRunSteps(orgId, runId, out.steps).catch(() => {});
+      toast.success(
+        out.kind === 'group'
+          ? `Renamed ${oldName} → ${safeName} (${out.renamed.length} fields) in every step`
+          : `Renamed ${oldName} → ${safeName} in every step`,
+      );
+    } catch (err: any) {
+      toast.error(err?.response?.data?.error || err?.message || 'Could not rename');
+    }
   };
 
   // ── Delete variable (only when not in use) ─────────────────
@@ -4430,7 +4423,7 @@ export function RunScriptModal({
                   title="Drag to resize"
                 >
                   <span className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Variables
+                    Inputs / Outputs
                   </span>
                   <button
                     type="button"
@@ -4458,6 +4451,9 @@ export function RunScriptModal({
                           onHoverVariable={setHighlightVarSteps}
                           loginVariables={loginVariables}
                           loginName={variablesLogin?.name ?? null}
+                          steps={stepsToShow}
+                          outputs={stepRunState?.extracted ?? {}}
+                          focusStep={stepRunState?.currentIndex ?? null}
                         />
                       );
                     })()}

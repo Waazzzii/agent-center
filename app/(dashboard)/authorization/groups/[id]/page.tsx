@@ -100,7 +100,11 @@ export default function GroupDetailPage() {
       <Link href="/authorization/groups" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
         <ArrowLeft className="h-4 w-4" /> Access Groups
       </Link>
-      <PageHeader icon={Play} title={groupName} description="What this group can run, decide on, and sign in to. Members are managed in Wazzi admin." />
+      <PageHeader
+        icon={Play}
+        title={groupName}
+        description="What this group can run, decide on, and sign in to. Members are managed in Wazzi admin."
+      />
 
       <Pills options={PILLS} value={grain} onChange={(v) => setGrain(v as Grain)} />
 

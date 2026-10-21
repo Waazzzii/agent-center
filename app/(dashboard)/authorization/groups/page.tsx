@@ -14,7 +14,10 @@ import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { DataTable } from '@/components/ui/data-table';
 import { getRunAccessGroups, type RunAccessGroup } from '@/lib/api/agent-run-access';
-import { Users, Loader2 } from 'lucide-react';
+import { InfoHint } from '@/components/ui/info-hint';
+import { GroupMembersHint } from '@/components/access/GroupMembersHint';
+import { WAZZI_APP_URL } from '@/lib/config';
+import { Users, Loader2, ExternalLink } from 'lucide-react';
 
 export default function AccessGroupsPage() {
   const router = useRouter();
@@ -51,7 +54,11 @@ export default function AccessGroupsPage() {
 
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
-      <PageHeader icon={Users} title="Access Groups" description="Pick a group to set what it can run, decide on, and sign in to." />
+      <PageHeader
+        icon={Users}
+        title="Access Groups"
+        description="Pick a group to set what it can run, decide on, and sign in to."
+      />
       {loading ? (
         <div className="flex h-48 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
       ) : (
@@ -65,8 +72,41 @@ export default function AccessGroupsPage() {
           sortDir={sortDir}
           onSort={toggleSort}
           columns={[
-            { key: 'name', label: 'Name', sortable: true, render: (g: RunAccessGroup) => <span className="font-medium text-foreground">{g.name}</span> },
-            { key: 'members', label: 'Members', sortable: true, thClassName: 'w-40', tdClassName: 'text-sm text-muted-foreground', render: (g: RunAccessGroup) => `${g.member_count} member${g.member_count === 1 ? '' : 's'}` },
+            {
+              key: 'name', label: 'Name', sortable: true,
+              render: (g: RunAccessGroup) => (
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="font-medium text-foreground">{g.name}</span>
+                  {g.description && <InfoHint>{g.description}</InfoHint>}
+                </span>
+              ),
+            },
+            {
+              key: 'members', label: 'Members', sortable: true, thClassName: 'w-40', tdClassName: 'text-sm text-muted-foreground',
+              render: (g: RunAccessGroup) => (
+                <span className="inline-flex items-center gap-1.5">
+                  {g.member_count > 0 ? (
+                    <GroupMembersHint orgId={selectedOrgId} groupId={g.id}>
+                      {g.member_count} member{g.member_count === 1 ? '' : 's'}
+                    </GroupMembersHint>
+                  ) : <span>0 members</span>}
+                  {/* Manage this group's members in Wazzi admin — right after the
+                      member list, deep-linked to the group's Members tab. */}
+                  {WAZZI_APP_URL && (
+                    <a
+                      href={`${WAZZI_APP_URL}/access-groups/${g.id}?tab=members`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      onClick={(e) => e.stopPropagation()}
+                      title="Manage members in Wazzi admin"
+                      className="text-muted-foreground/60 hover:text-foreground"
+                    >
+                      <ExternalLink className="h-3.5 w-3.5" />
+                    </a>
+                  )}
+                </span>
+              ),
+            },
           ]}
         />
       )}

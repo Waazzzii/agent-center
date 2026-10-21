@@ -284,3 +284,9 @@ main::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
 }
+
+/* CenterLoading's indeterminate bar: a third-width pill sweeping across. */
+@keyframes center-loading {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(300%); }
+}

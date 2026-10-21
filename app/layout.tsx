@@ -8,6 +8,9 @@ import { getBranding, faviconHref } from "@/lib/branding";
 import { cookies, headers } from "next/headers";
 import { BrandingProvider } from "@/components/branding/BrandingProvider";
 import { COOKIE_NAME, getSessionFromToken } from "@/lib/auth";
+import { AUTH_URL } from "@/lib/config";
+import { redirect } from "next/navigation";
+import { ThemeCookie } from "@/components/auth/theme-cookie";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -61,7 +64,17 @@ export default async function RootLayout({
   const host = incomingHeaders.get("host") ?? "";
   const cookieStore = await cookies();
   const token = cookieStore.get(COOKIE_NAME)?.value;
-  const session = token ? await getSessionFromToken(token, host) : null;
+  const lookup = token ? await getSessionFromToken(token, host) : null;
+  // This hostname isn't set up as an Agent Center. Explain it on the shared
+  // sign-in site rather than sign out and back in forever.
+  if (lookup === "unknown_domain") {
+    const target = new URL("/unauthorized", AUTH_URL);
+    target.searchParams.set("reason", "not_configured");
+    target.searchParams.set("product", "Agent Center");
+    target.searchParams.set("host", host.split(":")[0]);
+    redirect(target.toString());
+  }
+  const session = lookup;
 
   // Deduped with generateMetadata's call by the Next data cache — same URL,
   // same tag, one backend request.
@@ -94,6 +107,7 @@ export default async function RootLayout({
             />
           </BrandingProvider>
         </ThemeProvider>
+        <ThemeCookie />
       </body>
     </html>
   );

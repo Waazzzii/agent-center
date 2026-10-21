@@ -494,6 +494,22 @@ export async function finalizeScript(orgId: string, body: {
   return res.data;
 }
 
+/**
+ * Rename a variable or a whole output group ("photo" → every photo_* field) in
+ * every step. A pure transform — the caller applies the returned steps. Same
+ * rules as the authoring MCP's rename_variable; a clash or invalid name throws
+ * with the server's message.
+ */
+export async function renameScriptVariable(orgId: string, body: {
+  steps: RecordedStep[];
+  from: string;
+  to: string;
+}): Promise<{ steps: RecordedStep[]; renamed: Array<[string, string]>; kind: 'group' | 'extract' | 'input' }> {
+  const res = await agentClient.post<{ steps: RecordedStep[]; renamed: Array<[string, string]>; kind: 'group' | 'extract' | 'input' }>(
+    `/api/admin/${orgId}/scripts/rename-variable`, body);
+  return res.data;
+}
+
 
 // ─── AI Step Assist ────────────────────────────────────────────
 
