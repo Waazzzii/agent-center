@@ -29,11 +29,13 @@ interface Column<T> {
   mobileLabel?: string;
   mobileFullWidth?: boolean;
   sortable?: boolean;
+  /** Inline column filter — render a <ColumnFilter> here; it sits beside the label. */
+  filter?: React.ReactNode;
   thClassName?: string;
   tdClassName?: string;
 }
 
-interface ResponsiveTableProps<T> {
+export interface ResponsiveTableProps<T> {
   data: T[];
   columns: Column<T>[];
   onRowClick?: (item: T) => void;
@@ -49,6 +51,14 @@ interface ResponsiveTableProps<T> {
   sortKey?: string;
   sortDir?: 'asc' | 'desc';
   onSort?: (key: string) => void;
+  /**
+   * True when a search/filter is narrowing the list. When set and the (already
+   * filtered) data is empty, the table + headers stay and the empty message
+   * shows inline as a row — so a filter that matches nothing doesn't make the
+   * columns vanish. Only a TRULY empty list (no rows before filtering, i.e.
+   * isFiltered falsey) shows the big standalone message.
+   */
+  isFiltered?: boolean;
 }
 
 export function ResponsiveTable<T>({
@@ -66,6 +76,7 @@ export function ResponsiveTable<T>({
   sortKey,
   sortDir,
   onSort,
+  isFiltered = false,
 }: ResponsiveTableProps<T>) {
   const [detailItem, setDetailItem] = React.useState<T | null>(null);
 
@@ -77,7 +88,11 @@ export function ResponsiveTable<T>({
     }
   };
 
-  if (!data || data.length === 0) {
+  const isEmpty = !data || data.length === 0;
+
+  // Truly empty (nothing to filter) → the big standalone message. A filter that
+  // matched nothing keeps the table + headers and shows the message inline below.
+  if (isEmpty && !isFiltered) {
     return (
       <div className="py-12 text-center text-muted-foreground">
         {emptyMessage}
@@ -86,6 +101,7 @@ export function ResponsiveTable<T>({
   }
 
   const isClickable = !!(detailRender || onRowClick);
+  const colSpan = columns.length + (showCheckboxes ? 1 : 0);
 
   return (
     <>
@@ -94,30 +110,40 @@ export function ResponsiveTable<T>({
         <table className="w-full caption-bottom text-sm table-fixed">
           <thead className="[&_tr]:border-b">
             <tr className="border-b transition-colors">
-              {showCheckboxes && <th className="w-10 px-2"></th>}
+              {showCheckboxes && <th className="w-10 px-3"></th>}
               {columns.map((column) => (
                 <th
                   key={column.key}
-                  className={cn('text-foreground h-10 px-2 first:pl-4 text-left align-middle font-medium', column.thClassName)}
+                  className={cn('text-muted-foreground h-10 px-3 first:pl-4 text-left align-middle text-xs font-medium', column.thClassName)}
                 >
-                  {column.sortable && onSort ? (
-                    <button
-                      className="flex items-center gap-1 hover:text-foreground/80 select-none"
-                      onClick={() => onSort(column.key)}
-                    >
-                      {column.label}
-                      {sortKey === column.key ? (
-                        sortDir === 'asc' ? <ArrowUp className="h-3 w-3" /> : <ArrowDown className="h-3 w-3" />
-                      ) : (
-                        <ArrowUpDown className="h-3 w-3 opacity-40" />
-                      )}
-                    </button>
-                  ) : column.label}
+                  <span className="inline-flex items-center gap-1.5">
+                    {column.sortable && onSort ? (
+                      <button
+                        className="flex items-center gap-1 hover:text-foreground select-none"
+                        onClick={() => onSort(column.key)}
+                      >
+                        {column.label}
+                        {sortKey === column.key ? (
+                          sortDir === 'asc' ? <ArrowUp className="h-3.5 w-3.5 text-brand" /> : <ArrowDown className="h-3.5 w-3.5 text-brand" />
+                        ) : (
+                          <ArrowUpDown className="h-3.5 w-3.5 text-muted-foreground/60" />
+                        )}
+                      </button>
+                    ) : column.label}
+                    {column.filter}
+                  </span>
                 </th>
               ))}
             </tr>
           </thead>
           <tbody className="[&_tr:last-child]:border-0">
+            {isEmpty && (
+              <tr>
+                <td colSpan={colSpan} className="py-10 text-center text-sm text-muted-foreground">
+                  {emptyMessage}
+                </td>
+              </tr>
+            )}
             {data.map((item) => {
               const itemId = getRowKey(item);
               return (
@@ -125,22 +151,24 @@ export function ResponsiveTable<T>({
                   key={itemId}
                   onClick={() => handleRowClick(item)}
                   className={cn(
-                    'hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors',
+                    'h-11 hover:bg-muted/50 data-[state=selected]:bg-muted border-b transition-colors',
                     isClickable && 'cursor-pointer'
                   )}
                 >
                   {showCheckboxes && (
-                    <td className="w-10 p-2" onClick={(e) => e.stopPropagation()}>
-                      <Checkbox
-                        checked={selectedIds.includes(itemId)}
-                        onCheckedChange={() => onToggleSelect?.(itemId)}
-                      />
+                    <td className="w-10 px-3 align-middle" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center">
+                        <Checkbox
+                          checked={selectedIds.includes(itemId)}
+                          onCheckedChange={() => onToggleSelect?.(itemId)}
+                        />
+                      </div>
                     </td>
                   )}
                   {columns.map((column) => (
                     <td
                       key={column.key}
-                      className={cn('p-2 first:pl-4 align-middle', !column.desktopRender && 'overflow-hidden', column.tdClassName)}
+                      className={cn('px-3 first:pl-4 align-middle', !column.desktopRender && 'overflow-hidden', column.tdClassName)}
                     >
                       {column.desktopRender ? (
                         column.desktopRender(item)
@@ -160,6 +188,9 @@ export function ResponsiveTable<T>({
 
       {/* Mobile Card View */}
       <div className="md:hidden space-y-3">
+        {isEmpty && (
+          <div className="py-10 text-center text-sm text-muted-foreground">{emptyMessage}</div>
+        )}
         {data.map((item) => {
           const itemId = getRowKey(item);
           const visibleColumns = columns.filter((column) => !column.hideOnMobile);

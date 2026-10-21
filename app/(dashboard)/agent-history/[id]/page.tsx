@@ -21,6 +21,8 @@ import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import agentClient from '@/lib/api/agent-client';
 import { isInertLoginRow, retryParkedRun } from '@/lib/api/agents';
+import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
+import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import { TokenUsage } from '@/components/execution/TokenUsage';
 import { Button } from '@/components/ui/button';
 import { PageHeader, MetaSep } from '@/components/layout/PageHeader';
@@ -124,7 +126,15 @@ function fmtDate(iso: string): string {
  * included.
  */
 function SignInRecovery({ step, runId }: { step: FullTreeNode; runId: string }) {
+  const { selectedOrgId } = useAdminViewStore();
+  const { start: startManualLogin } = useStartManualLogin();
   const [retrying, setRetrying] = useState(false);
+  const [startingLogin, setStartingLogin] = useState(false);
+  // The live noVNC session, once started. step.login_id is already the pool
+  // MEMBER this run parked on (the backend resolves it via login_pin →
+  // COALESCE(lm.id, aa.login_id)), so signing in here fixes the exact browser
+  // that is signed out — not the pool parent.
+  const [sessionLogId, setSessionLogId] = useState<string | null>(null);
   if (!step.login_id) return null;
   const retry = async () => {
     setRetrying(true);
@@ -136,6 +146,17 @@ function SignInRecovery({ step, runId }: { step: FullTreeNode; runId: string }) 
     } finally {
       setRetrying(false);
     }
+  };
+  // Manual Login signs THIS member in directly and opens the browser view in
+  // place — no hop to the login editor (which a login-only operator can't open,
+  // and which is the wrong pool row anyway). Finishing resumes this run and
+  // every run waiting on the same member, exactly like the Interactions queue.
+  const manualLogin = async () => {
+    if (!selectedOrgId || !step.login_id) return;
+    setStartingLogin(true);
+    const result = await startManualLogin(selectedOrgId, step.login_id, `Log in: ${step.login_name ?? 'login'}`);
+    setStartingLogin(false);
+    if (result) setSessionLogId(result.logId);
   };
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-warning/30 bg-warning-soft/60 p-3">
@@ -150,15 +171,24 @@ function SignInRecovery({ step, runId }: { step: FullTreeNode; runId: string }) 
           without signing in.
         </span>
       </div>
-      <Button size="sm" variant="outline" className="shrink-0 text-xs" onClick={retry} disabled={retrying}>
+      <Button size="sm" variant="outline" className="shrink-0 text-xs" onClick={retry} disabled={retrying || startingLogin}>
         {retrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
         <span className="ml-1">Retry</span>
       </Button>
-      <Button asChild size="sm" variant="outline" className="shrink-0 text-xs">
-        <Link href={`/actions/logins/${step.login_id}?tab=credentials`}>
-          Open {step.login_name ?? 'login'}
-        </Link>
+      <Button size="sm" variant="outline" className="shrink-0 text-xs" onClick={manualLogin} disabled={startingLogin || retrying}>
+        {startingLogin ? <Loader2 className="h-3 w-3 animate-spin" /> : <LogIn className="h-3 w-3" />}
+        <span className="ml-1">Manual Login</span>
       </Button>
+
+      {sessionLogId && (
+        <BrowserHITLDialog
+          open={!!sessionLogId}
+          onOpenChange={(open) => { if (!open) setSessionLogId(null); }}
+          runId={sessionLogId}
+          agentName={`Log in: ${step.login_name ?? 'login'}`}
+          mode="interactive"
+        />
+      )}
     </div>
   );
 }
@@ -1265,7 +1295,7 @@ export default function ExecutionDetailPage() {
         }
         actions={isAction && current.action_type === 'outcome' && readOutcome(current).deskId ? (
           <Button size="sm" asChild>
-            <Link href={`/decisions/${readOutcome(current).deskId}`}>
+            <Link href={`/interactions/decisions/${readOutcome(current).deskId}`}>
               <Gavel className="h-4 w-4" />
               Open decision desk
             </Link>

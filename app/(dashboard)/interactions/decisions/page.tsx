@@ -25,7 +25,7 @@ import {
   getAgents, getDecisions,
   type Agent, type Decision, type DecisionStatus,
 } from '@/lib/api/agents';
-import { FilterPicker } from '@/components/execution/FilterPicker';
+import { ColumnSelectFilter } from '@/components/ui/column-select-filter';
 import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/layout/PageHeader';
@@ -37,7 +37,7 @@ import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { toast } from 'sonner';
 import {
   RefreshCw, ChevronRight, ChevronLeft, ArrowUp, ArrowDown, ArrowUpDown,
-  Filter, X, Bot, Clock, Loader2, Gavel, CheckCircle2,
+  Clock, Loader2, Gavel, CheckCircle2,
   ArrowUpRight, AlertTriangle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
@@ -285,8 +285,8 @@ export default function DecisionsPage() {
       >
         <span className="truncate">{label}</span>
         {active
-          ? (sortDir === 'asc' ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" />)
-          : <ArrowUpDown className="h-3 w-3 shrink-0 opacity-40" />}
+          ? (sortDir === 'asc' ? <ArrowUp className="h-3.5 w-3.5 shrink-0 text-brand" /> : <ArrowDown className="h-3.5 w-3.5 shrink-0 text-brand" />)
+          : <ArrowUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />}
       </button>
     );
   };
@@ -355,77 +355,28 @@ export default function DecisionsPage() {
         </div>
 
         <Card className="py-0 gap-0">
-          <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
-            <FilterPicker
-              align="start"
-              onApply={applyFilter}
-              kinds={[
-                {
-                  key: 'status', label: 'Status', icon: Filter,
-                  current: statusFilters.length === 1 ? statusFilters[0] : null,
-                  options: FILTERABLE_STATUSES.map((v) => ({ value: v, label: STATUS_LABELS[v] })),
-                },
-                {
-                  // Two agent filters, because a decision sits between two
-                  // agents and you will want to ask about either one.
-                  key: 'source', label: 'Ended with', icon: Bot,
-                  current: sourceAgent || null,
-                  options: agents.map((a) => ({ value: a.id, label: a.name })),
-                  emptyHint: 'no agents',
-                },
-                {
-                  key: 'target', label: 'Triggered', icon: ArrowUpRight,
-                  current: targetAgent || null,
-                  options: agents.map((a) => ({ value: a.id, label: a.name })),
-                  emptyHint: 'no agents',
-                },
-              ]}
-            />
-
-            {statusFilters.map((s) => (
-              <span key={s} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                {STATUS_LABELS[s]}
-                <button onClick={() => applyFilter('status', '')} className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10">
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
-            ))}
-            {sourceAgent && (
-              <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                Ended with: {agents.find((a) => a.id === sourceAgent)?.name ?? 'agent'}
-                <button onClick={() => applyFilter('source', '')} className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10">
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
-            )}
-            {targetAgent && (
-              <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                Triggered: {agents.find((a) => a.id === targetAgent)?.name ?? 'agent'}
-                <button onClick={() => applyFilter('target', '')} className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10">
-                  <X className="h-2.5 w-2.5" />
-                </button>
-              </span>
-            )}
-            {hasFilters && (
-              <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={clearFilters}>
-                Clear all
-              </Button>
-            )}
-
-            {totalPages > 1 && (
-              <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
-                <span className="tabular-nums">
-                  {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
-                </span>
-                <Button variant="outline" size="icon-sm" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
-                  <ChevronLeft className="h-3.5 w-3.5" />
+          {(hasFilters || totalPages > 1) && (
+            <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
+              {hasFilters && (
+                <Button variant="ghost" size="sm" className="text-xs text-muted-foreground" onClick={clearFilters}>
+                  Clear filters
                 </Button>
-                <Button variant="outline" size="icon-sm" disabled={page >= totalPages} onClick={() => goToPage(page + 1)}>
-                  <ChevronRight className="h-3.5 w-3.5" />
-                </Button>
-              </div>
-            )}
-          </div>
+              )}
+              {totalPages > 1 && (
+                <div className="ml-auto flex items-center gap-1 text-xs text-muted-foreground">
+                  <span className="tabular-nums">
+                    {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} of {total}
+                  </span>
+                  <Button variant="outline" size="icon-sm" disabled={page <= 1} onClick={() => goToPage(page - 1)}>
+                    <ChevronLeft className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button variant="outline" size="icon-sm" disabled={page >= totalPages} onClick={() => goToPage(page + 1)}>
+                    <ChevronRight className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
 
           <CardContent className="p-0">
             {loading ? (
@@ -442,14 +393,20 @@ export default function DecisionsPage() {
               </div>
             ) : (
               <div>
-                <div className={cn('hidden md:grid items-center gap-2 h-10 px-3 border-b text-sm font-medium text-foreground', GRID)}>
-                  <Th col="source" label="Ended with" />
-                  {/* Sorts by status: it groups Pending away from everything
-                      settled, which is the cut people actually want. Sorting
-                      by which option was chosen went with the column — it is
-                      still available as a filter. */}
-                  <Th col="status" label="Decision" />
-                  <Th col="target" label="Triggered" />
+                <div className={cn('hidden md:grid items-center gap-2 h-10 px-3 border-b text-xs font-medium text-muted-foreground', GRID)}>
+                  <span className="flex items-center gap-1.5">
+                    <Th col="source" label="Ended with" />
+                    <ColumnSelectFilter title="Ended with" value={sourceAgent || null} onChange={(v) => applyFilter('source', v)} options={agents.map((a) => ({ value: a.id, label: a.name }))} />
+                  </span>
+                  {/* Sorts by status; the funnel filters by it. */}
+                  <span className="flex items-center gap-1.5">
+                    <Th col="status" label="Decision" />
+                    <ColumnSelectFilter title="Decision" value={statusFilters[0] ?? null} onChange={(v) => applyFilter('status', v)} options={FILTERABLE_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] }))} searchable={false} />
+                  </span>
+                  <span className="flex items-center gap-1.5">
+                    <Th col="target" label="Triggered" />
+                    <ColumnSelectFilter title="Triggered" value={targetAgent || null} onChange={(v) => applyFilter('target', v)} options={agents.map((a) => ({ value: a.id, label: a.name }))} />
+                  </span>
                   <Th col="decided" label="Decided" />
                   <Th col="created" label="Raised" />
                 </div>
@@ -466,7 +423,7 @@ export default function DecisionsPage() {
                         // the same first item, and on an answered desk that
                         // meant clicking "Denied — item 2" and being shown
                         // item 1's approval.
-                        onClick={() => router.push(`/decisions/${d.desk_id}?decision=${d.id}`)}
+                        onClick={() => router.push(`/interactions/decisions/${d.desk_id}?decision=${d.id}`)}
                         className={cn('group/row cursor-pointer hover:bg-muted/30 transition-colors md:grid items-center gap-2 px-3 py-2.5 text-sm', GRID)}
                       >
                         <div className="min-w-0">
@@ -483,15 +440,9 @@ export default function DecisionsPage() {
                               </span>
                             )}
                           </span>
-                          {(() => {
-                            const item = describeItem(d);
-                            if (!item.text) return null;
-                            return (
-                              <span className="block truncate text-[11px] text-muted-foreground" title={item.title}>
-                                {item.text}
-                              </span>
-                            );
-                          })()}
+                          {/* The item's message/"response" line used to sit here;
+                              it moved to the decision detail (row click) so the
+                              feed keeps one datum per column. */}
                         </div>
 
                         <div className="min-w-0 flex items-center gap-1.5">

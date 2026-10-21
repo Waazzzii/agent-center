@@ -13,7 +13,7 @@
  */
 
 import { useState } from 'react';
-import { Check, ChevronDown, Search, Tag as TagIcon } from 'lucide-react';
+import { Check, ChevronDown, Search, Tag as TagIcon, Filter } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -27,9 +27,15 @@ interface TagFilterProps {
   onChange: (selected: string[]) => void;
   match: 'any' | 'all';
   onMatchChange: (match: 'any' | 'all') => void;
+  /**
+   * 'button' (default) = the toolbar dropdown button. 'column' = the inline
+   * header funnel (the standard filter idiom), for use in a ResponsiveTable
+   * column's `filter` slot. Same popover body either way.
+   */
+  variant?: 'button' | 'column';
 }
 
-export function TagFilter({ tags, selected, onChange, match, onMatchChange }: TagFilterProps) {
+export function TagFilter({ tags, selected, onChange, match, onMatchChange, variant = 'button' }: TagFilterProps) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
 
@@ -44,24 +50,38 @@ export function TagFilter({ tags, selected, onChange, match, onMatchChange }: Ta
   return (
     <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setQuery(''); }}>
       <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className={cn('h-9 gap-1.5', count > 0 && 'border-brand/40 text-brand')}
-        >
-          <TagIcon className="h-3.5 w-3.5" />
-          Groups
-          {count > 0 && (
-            <span className="ml-0.5 rounded-full bg-brand px-1.5 text-[10px] font-semibold text-brand-fg">
-              {count}
-            </span>
-          )}
-          <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
-        </Button>
+        {variant === 'column' ? (
+          <button
+            type="button"
+            aria-label="Filter by tag"
+            onClick={(e) => e.stopPropagation()}
+            className={cn(
+              'inline-grid h-5 w-5 place-items-center rounded transition-colors hover:bg-muted hover:text-foreground',
+              count > 0 ? 'text-brand' : 'text-muted-foreground/60',
+            )}
+          >
+            <Filter className="h-3.5 w-3.5" />
+          </button>
+        ) : (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className={cn('h-9 gap-1.5', count > 0 && 'border-brand/40 text-brand')}
+          >
+            <TagIcon className="h-3.5 w-3.5" />
+            Tags
+            {count > 0 && (
+              <span className="ml-0.5 rounded-full bg-brand px-1.5 text-[10px] font-semibold text-brand-fg">
+                {count}
+              </span>
+            )}
+            <ChevronDown className={cn('h-3 w-3 transition-transform', open && 'rotate-180')} />
+          </Button>
+        )}
       </PopoverTrigger>
 
-      <PopoverContent align="end" className="w-64 p-0">
+      <PopoverContent align={variant === 'column' ? 'start' : 'end'} className="w-64 p-0">
         {/* Match mode + clear */}
         <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
           <div className="inline-flex rounded-md border p-0.5 text-[11px]">
@@ -97,7 +117,7 @@ export function TagFilter({ tags, selected, onChange, match, onMatchChange }: Ta
             <Input
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search groups…"
+              placeholder="Search tags…"
               className="h-8 pl-7 text-xs"
               autoFocus
             />
@@ -107,9 +127,9 @@ export function TagFilter({ tags, selected, onChange, match, onMatchChange }: Ta
         {/* Capped at ~10 rows or half the viewport, whichever is smaller. */}
         <div className="max-h-[min(20rem,50vh)] overflow-auto py-1">
           {tags.length === 0 ? (
-            <div className="px-3 py-2 text-xs italic text-muted-foreground">No groups yet.</div>
+            <div className="px-3 py-2 text-xs italic text-muted-foreground">No tags yet.</div>
           ) : visible.length === 0 ? (
-            <div className="px-3 py-2 text-xs italic text-muted-foreground">No groups match “{query}”.</div>
+            <div className="px-3 py-2 text-xs italic text-muted-foreground">No tags match “{query}”.</div>
           ) : (
             visible.map((t) => {
               const isSelected = selected.includes(t.id);

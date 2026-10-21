@@ -53,6 +53,19 @@ export async function getClient(orgId: string, id: string): Promise<Client> {
   return res.data;
 }
 
+/**
+ * Set the FULL set of agents assigned to a client/product (the Products detail
+ * page). agents.client_id is one-per-agent, so selecting an agent here moves it to
+ * this client and deselecting removes it. Returns the resulting agent ids.
+ */
+export async function setClientAgents(orgId: string, id: string, agentIds: string[]): Promise<string[]> {
+  const res = await agentClient.put<{ agent_ids: string[] }>(
+    `/api/admin/${orgId}/clients/${id}/agents`,
+    { agent_ids: agentIds },
+  );
+  return res.data.agent_ids;
+}
+
 /** Create a client. The backend generates the immutable public_id. */
 export async function createClient(orgId: string, data: ClientInput): Promise<Client> {
   const res = await agentClient.post<Client>(`/api/admin/${orgId}/clients`, data);

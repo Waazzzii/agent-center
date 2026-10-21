@@ -8,7 +8,7 @@ import type { Metadata } from 'next'
  * `%s | <Company> <Center>` template, so the tab reads "Groups | ...".
  */
 export const metadata: Metadata = {
-  title: 'Groups',
+  title: 'Tags',
 }
 
 export default function Layout({ children }: { children: React.ReactNode }) {

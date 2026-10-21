@@ -17,11 +17,13 @@ import {
   CheckCircle,
   History,
   Gavel,
+  Users,
+  Package,
   BarChart3,
   ShieldCheck,
   Video,
   Wand2,
-  LogIn,
+  Globe,
   MessageSquare,
   Sparkles,
   Receipt,
@@ -43,16 +45,20 @@ const ICON_BY_HREF: Record<string, React.ElementType> = {
   '/actions/ai-steps':        Sparkles,
   '/skills':                  Wand2,
   '/actions/browser-scripts': Video,
-  '/actions/logins':          LogIn,
+  '/actions/logins':          Globe,
   '/actions/approvals':       CheckCircle,
-  '/decisions':               Gavel,
-  '/interactions':            MessageSquare,
+  '/interactions/decisions':  Gavel,
+  '/interactions/logins':     Globe,
   '/agent-analytics':         BarChart3,
   '/billing':                 Receipt,
+  '/authorization/groups':    Users,
+  '/authorization/clients':   Package,
   '/access':                  ShieldCheck,
   '/tags':                    TagsIcon,
 };
 const ICON_BY_LABEL: Record<string, React.ElementType> = {
+  'Authorization': ShieldCheck,
+  'Interactions': MessageSquare,
   // A pulse, not a clock. Activity shared History with its own Executions
   // child, so the group and the row under it were the same glyph — which
   // makes the indent the only thing telling them apart, and reads as a
@@ -133,6 +139,12 @@ export function ViewModeSidebar() {
   const { clearAuth } = useAuthStore();
 
   const handleLogout = async () => {
+    // Mark this as an EXPLICIT sign-out before clearing the store: clearing it
+    // makes the dashboard layout think the session was invalidated and fire
+    // the automatic GET /auth/signout — which replaced this POST, so the
+    // shared center sign-in was never ended and the next sign-in page signed
+    // the browser straight back in.
+    (window as unknown as { __wazziExplicitSignout?: boolean }).__wazziExplicitSignout = true;
     clearAuth();
     // POST to server signout so httpOnly cookies are actually cleared.
     const form = document.createElement('form');

@@ -24,7 +24,7 @@ import { Label } from '@/components/ui/label';
 export default function EditAiStepPage() {
   const { id } = useParams() as { id: string };
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const router = useRouter();
   const { confirm } = useConfirmDialog();
 

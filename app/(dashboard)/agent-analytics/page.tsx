@@ -98,7 +98,7 @@ const ANALYTICS_RANGES: RangePreset[] = [
 
 export default function AnalyticsPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const router = useRouter();
 
   const [rangeIdx, setRangeIdx] = useState(0); // default: the last 24 hours

@@ -9,7 +9,7 @@ import type { Metadata } from 'next'
  * The route stays /access; only the label changed.
  */
 export const metadata: Metadata = {
-  title: 'Authorization',
+  title: 'Authorization moved',
 }
 
 export default function Layout({ children }: { children: React.ReactNode }) {

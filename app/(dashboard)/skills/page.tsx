@@ -39,7 +39,7 @@ function AssignedTo({ usages }: { usages: SkillUsage[] }) {
 export default function SkillsPage() {
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agent_center_user');
+  const permitted = useRequirePermission('agent_center_manager');
   const { confirm } = useConfirmDialog();
 
   const [skills, setSkills] = useState<Skill[]>([]);

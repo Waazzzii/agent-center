@@ -12,13 +12,15 @@ import {
 } from '@/lib/api/logins';
 import { getBrowserRunStatus } from '@/lib/api/agents';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
+import { DataTable } from '@/components/ui/data-table';
+import { ColumnFilter } from '@/components/ui/column-filter';
+import { RowActionsMenu } from '@/components/ui/row-actions-menu';
 import { toast } from 'sonner';
 import {
-  Plus, Trash2, Copy, LogIn, Loader2, CheckCircle2, AlertCircle, HelpCircle, Search, ArrowUp, ArrowDown } from 'lucide-react';
+  Plus, Trash2, Copy, LogIn, Loader2, CheckCircle2, AlertCircle, HelpCircle } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { DeleteLoginDialog } from '@/components/logins/DeleteLoginDialog';
 import { NewLoginDialog } from '@/components/logins/NewLoginDialog';
@@ -60,7 +62,7 @@ const TERMINAL = new Set(['completed', 'failed', 'aborted']);
 
 export default function LoginsPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const [deleteTarget, setDeleteTarget] = useState<Login | null>(null);
   const router = useRouter();
   const [newLoginOpen, setNewLoginOpen] = useState(false);
@@ -289,166 +291,101 @@ export default function LoginsPage() {
           No logins yet. Create one to share auth sessions across agents.
         </CardContent></Card>
       ) : (
-        <Card className="overflow-hidden py-0">
-          {/* CardContent p-0 wraps BOTH the toolbar and the table, which is
-              what the scripts list does and why it looks right. Card is
-              `flex flex-col gap-6`: py-0 removes its padding but not its gap,
-              so two children put 24px of air between the filter bar and the
-              first row. One child, no gap. */}
-          <CardContent className="p-0">
-            {/* Same shape as the scripts list: search on the left, count while
-                filtering, filters on the right. */}
-            <div className="flex items-center gap-2 border-b px-3 py-2">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search logins by name…"
-                  className="h-9 pl-8"
-                />
-              </div>
-              {(search || statusFilter !== 'all') && (
-                <span className="text-xs text-muted-foreground">{visible.length} of {items.length}</span>
-              )}
-              <div className="ml-auto flex items-center gap-1">
-                {([
-                  ['all', 'All'],
-                  ['valid', 'Logged in'],
-                  ['needs_login', 'Needs login'],
-                  ['needs_creds', 'Needs credentials'],
-                ] as const).map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setStatusFilter(key)}
-                    className={cn(
-                      'px-2.5 py-1 rounded-md text-xs font-medium transition-colors',
-                      statusFilter === key ? 'bg-brand text-brand-fg' : 'text-muted-foreground hover:bg-muted',
-                    )}
-                  >
-                    {label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <table className="w-full text-sm">
-              <thead className="bg-muted/40 text-xs text-muted-foreground">
-                <tr>
-                  <th className="text-left font-medium px-4 py-2">
-                    <button
-                      type="button"
-                      onClick={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
-                      className="inline-flex items-center gap-1 hover:text-foreground transition-colors"
-                      title={`Sort ${sortDir === 'asc' ? 'Z→A' : 'A→Z'}`}
-                    >
-                      Name
-                      {sortDir === 'asc'
-                        ? <ArrowUp className="h-3 w-3" />
-                        : <ArrowDown className="h-3 w-3" />}
-                    </button>
-                  </th>
-                  {/* Was URL, then briefly "Sign-in". Every login is automatic
-                      now, so saying so on each row said nothing. The two things
-                      that actually vary — and that decide whether a login can
-                      run unattended — are whether its credentials are stored
-                      and where its second factor comes from. */}
-                  <th className="text-left font-medium px-4 py-2 w-36">Credentials</th>
-                  <th className="text-left font-medium px-4 py-2 w-32">Two-factor</th>
-                  <th className="text-left font-medium px-4 py-2 w-28">Status</th>
-                  <th className="text-left font-medium px-4 py-2 w-28">Last Checked</th>
-                  <th className="w-20" />
-                </tr>
-              </thead>
-              <tbody>
-                {visible.length === 0 && (
-                  <tr className="border-t">
-                    <td colSpan={6} className="px-4 py-8 text-center text-sm text-muted-foreground">
-                      {search
-                        ? <>Nothing matches &ldquo;{search}&rdquo;.</>
-                        : statusFilter === 'needs_creds'
-                          ? 'Every login has its credentials stored.'
-                          : 'No logins match this filter.'}
-                    </td>
-                  </tr>
-                )}
-                {visible.map((item) => {
-                  const active = activeSessions[item.id];
-                  const isStarting = !!starting[item.id];
-                  return (
-                    <tr key={item.id} className="border-t hover:bg-muted/30 cursor-pointer transition-colors"
-                        onClick={() => router.push(`/actions/logins/${item.id}`)}>
-                      <td className="px-4 py-2.5 font-medium">
-                        <span className="inline-flex items-center gap-2">
-                          {item.name}
-                          {poolOf(item).length > 1 && (
-                            <span
-                              className="rounded-full border px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground"
-                              title={`${poolOf(item).length} browsers, up to ${item.max_browsers}. Concurrent runs each take their own.`}
-                            >
-                              {poolOf(item).length} browsers
-                            </span>
-                          )}
+        <DataTable
+              search={{ value: search, onChange: setSearch, placeholder: 'Search logins by name…' }}
+              count={(search || statusFilter !== 'all') ? <span className="text-xs text-muted-foreground">{visible.length} of {items.length}</span> : undefined}
+              data={visible}
+              isFiltered={!!search || statusFilter !== 'all'}
+              getRowKey={(l) => l.id}
+              onRowClick={(l) => router.push(`/actions/logins/${l.id}`)}
+              emptyMessage={search
+                ? `Nothing matches "${search}".`
+                : statusFilter === 'needs_creds'
+                  ? 'Every login has its credentials stored.'
+                  : 'No logins match this filter.'}
+              sortKey="name"
+              sortDir={sortDir}
+              onSort={() => setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))}
+              columns={[
+                {
+                  key: 'name', label: 'Name', sortable: true,
+                  render: (item) => (
+                    <span className="inline-flex items-center gap-2 font-medium">
+                      <span className="truncate">{item.name}</span>
+                      {poolOf(item).length > 1 && (
+                        <span className="shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-normal text-muted-foreground"
+                          title={`${poolOf(item).length} browsers, up to ${item.max_browsers}. Concurrent runs each take their own.`}>
+                          {poolOf(item).length} browsers
                         </span>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs">
-                        {!item.auto_login_script_id ? (
-                          <span className="text-amber-600 dark:text-amber-500">No login script</span>
-                        ) : item.credentials_secret_id ? (
-                          <span className="text-muted-foreground">Stored</span>
-                        ) : (
-                          <span className="text-amber-600 dark:text-amber-500">Not set</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">
-                        {item.mfa_source && item.mfa_source !== 'none'
-                          ? MFA_LABELS[item.mfa_source] ?? item.mfa_source
-                          : <span className="text-muted-foreground/50">None</span>}
-                      </td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <StatusPill status={item.status} />
-                          {/* Say WHICH sibling is out, not just that one is.
-                              "Needs login" on a pool tells an operator to go
-                              looking; the count tells them what they will
-                              find when they get there. */}
-                          {needingLogin(item).filter((m) => m.id !== item.id).length > 0 && (
-                            <span className="text-[11px] text-amber-600 dark:text-amber-500">
-                              +{needingLogin(item).filter((m) => m.id !== item.id).length} in pool
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-2.5 text-xs text-muted-foreground">{formatRelative(item.last_checked_at)}</td>
-                      <td className="px-4 py-2.5">
-                        <div className="flex items-center gap-1 justify-end" onClick={(e) => e.stopPropagation()}>
-                          {/* Duplicate and Delete only. Log In and Log Out
-                              both moved to the login's own page: one opens a
-                              live browser the operator has to sit in front of,
-                              the other wipes a profile and fails any run
-                              holding it. Neither belongs a stray click away
-                              from Delete on a list people scan. The Status
-                              column still says which logins need attention;
-                              the row click goes to where it can be given. */}
-                          <Button variant="ghost" size="icon-sm" className="text-muted-foreground/60 hover:text-foreground"
-                            onClick={() => handleDuplicate(item)} disabled={isStarting || !!active}
-                            title="Duplicate — copies the script and 2FA setup, not the credentials or session">
-                            <Copy className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button variant="ghost" size="icon-sm" className="text-destructive/50 hover:text-destructive"
-                            onClick={() => handleDelete(item)} disabled={!!active}
-                            title="Delete">
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </CardContent>
-        </Card>
+                      )}
+                    </span>
+                  ),
+                },
+                {
+                  // Credentials + 2FA decide whether a login can run unattended.
+                  key: 'credentials', label: 'Credentials', thClassName: 'w-36',
+                  render: (item) => !item.auto_login_script_id
+                    ? <span className="text-xs text-amber-600 dark:text-amber-500">No login script</span>
+                    : item.credentials_secret_id
+                      ? <span className="text-xs text-muted-foreground">Stored</span>
+                      : <span className="text-xs text-amber-600 dark:text-amber-500">Not set</span>,
+                },
+                {
+                  key: 'twofactor', label: 'Two-factor', thClassName: 'w-32',
+                  render: (item) => item.mfa_source && item.mfa_source !== 'none'
+                    ? <span className="text-xs text-muted-foreground">{MFA_LABELS[item.mfa_source] ?? item.mfa_source}</span>
+                    : <span className="text-xs text-muted-foreground/50">None</span>,
+                },
+                {
+                  key: 'status', label: 'Status', thClassName: 'w-40',
+                  filter: (
+                    <ColumnFilter active={statusFilter !== 'all'} title="Filter by status" onClear={() => setStatusFilter('all')}>
+                      {([['valid', 'Logged in'], ['needs_login', 'Needs login'], ['needs_creds', 'Needs credentials']] as const).map(([k, label]) => (
+                        <button key={k} type="button" onClick={() => setStatusFilter(k)}
+                          className={cn('flex w-full items-center gap-2 rounded px-1.5 py-1 text-sm hover:bg-muted/50', statusFilter === k && 'font-medium text-brand')}>
+                          <span className={cn('h-2 w-2 rounded-full', statusFilter === k ? 'bg-brand' : 'bg-muted-foreground/30')} />
+                          {label}
+                        </button>
+                      ))}
+                    </ColumnFilter>
+                  ),
+                  render: (item) => (
+                    <div className="flex items-center gap-2">
+                      <StatusPill status={item.status} />
+                      {needingLogin(item).filter((m) => m.id !== item.id).length > 0 && (
+                        <span className="text-[11px] text-amber-600 dark:text-amber-500">
+                          +{needingLogin(item).filter((m) => m.id !== item.id).length} in pool
+                        </span>
+                      )}
+                    </div>
+                  ),
+                },
+                {
+                  key: 'lastChecked', label: 'Last Checked', thClassName: 'w-28',
+                  render: (item) => <span className="text-xs text-muted-foreground">{formatRelative(item.last_checked_at)}</span>,
+                },
+                {
+                  key: 'actions', label: '',
+                  thClassName: 'w-px whitespace-nowrap', tdClassName: 'w-px whitespace-nowrap',
+                  desktopRender: (item) => (
+                    <div className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+                      <RowActionsMenu actions={[
+                        { label: 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: !!starting[item.id] || !!activeSessions[item.id], onSelect: () => handleDuplicate(item) },
+                        { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, disabled: !!activeSessions[item.id], onSelect: () => handleDelete(item) },
+                      ]} />
+                    </div>
+                  ),
+                  render: (item) => (
+                    <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
+                      <RowActionsMenu actions={[
+                        { label: 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: !!starting[item.id] || !!activeSessions[item.id], onSelect: () => handleDuplicate(item) },
+                        { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, disabled: !!activeSessions[item.id], onSelect: () => handleDelete(item) },
+                      ]} />
+                    </div>
+                  ),
+                },
+              ]}
+            />
       )}
 
       <DeleteLoginDialog

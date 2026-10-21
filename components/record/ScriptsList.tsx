@@ -3,9 +3,8 @@
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
-import { Card, CardContent } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
-import { ResponsiveTable } from '@/components/ui/responsive-table';
+import { DataTable } from '@/components/ui/data-table';
+import { InfoHint } from '@/components/ui/info-hint';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider } from '@/components/ui/tooltip';
 import { Info, Plus, TriangleAlert } from 'lucide-react';
@@ -14,7 +13,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
   DialogDescription, DialogFooter,
 } from '@/components/ui/dialog';
-import { Trash2, Pencil, Copy, Search, KeyRound } from 'lucide-react';
+import { Trash2, Pencil, Copy, KeyRound } from 'lucide-react';
 import { listScripts, deleteScript, createScript, updateScript, getScriptLoginUsage, type BrowserScript, type ScriptKind } from '@/lib/api/scripts';
 import { Switch } from '@/components/ui/switch';
 import { RunScriptModal } from './RunScriptModal';
@@ -323,28 +322,12 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSea
           <div className="h-8 w-8 animate-spin rounded-full border-4 border-brand border-t-transparent" />
         </div>
       ) : (
-        <Card className="overflow-hidden py-0">
-          <CardContent className="p-0">
-            <div className="flex items-center gap-2 border-b px-3 py-2">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search by name or description…"
-                  className="h-9 pl-8"
-                />
-              </div>
-              {search && (
-                <span className="text-xs text-muted-foreground">{visibleScripts.length} of {scripts.length}</span>
-              )}
-              <div className="ml-auto flex items-center gap-3">
-                <TagFilter tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />
-              </div>
-            </div>
-            <TooltipProvider delayDuration={200}>
-            <ResponsiveTable
+        <TooltipProvider delayDuration={200}>
+            <DataTable
+              search={{ value: search, onChange: setSearch, placeholder: 'Search by name or description…' }}
+              count={search ? <span className="text-xs text-muted-foreground">{visibleScripts.length} of {scripts.length}</span> : undefined}
               data={visibleScripts}
+              isFiltered={!!search || tagFilter.length > 0}
               getRowKey={(s) => s.id}
               onRowClick={(s) => setRunModalScript(s)}
               emptyMessage={search ? `No scripts match "${search}".` : 'No scripts saved yet. Click Record above to create one.'}
@@ -364,12 +347,10 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSea
                   thClassName: 'w-96',
                   tdClassName: 'w-96',
                   render: (s) => (
-                    <div className="min-w-0">
-                      <span className="font-medium">{s.name}</span>
-                      {s.description && (
-                        <p className="text-xs text-muted-foreground mt-0.5 truncate">{s.description}</p>
-                      )}
-                    </div>
+                    <span className="flex min-w-0 items-center gap-1.5">
+                      <span className="truncate font-medium">{s.name}</span>
+                      {s.description && <InfoHint>{s.description}</InfoHint>}
+                    </span>
                   ),
                 },
                 {
@@ -478,13 +459,14 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSea
                   key: 'tags',
                   label: (
                     <span className="inline-flex items-center gap-1">
-                      Groups
+                      Tags
                       <HeaderHelp>
-                        Groups for organising and filtering. Click a row&apos;s group area
+                        Tags for organising and filtering. Click a row&apos;s tag area
                         to edit them.
                       </HeaderHelp>
                     </span>
                   ),
+                  filter: <TagFilter variant="column" tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />,
                   // Compact and fixed. Almost every script carries ONE tag, so a
                   // column sized for several spent most of its width on nothing
                   // while the name beside it was being truncated. One chip shows,
@@ -587,9 +569,7 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSea
                 },
               ]}
             />
-            </TooltipProvider>
-          </CardContent>
-        </Card>
+        </TooltipProvider>
       )}
 
       <RunScriptModal

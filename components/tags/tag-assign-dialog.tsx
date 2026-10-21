@@ -80,7 +80,7 @@ export function TagAssignDialog({ open, onOpenChange, orgId, entityLabel, initia
             selected={selected}
             onChange={setSelected}
             onCreate={(name) => createTag({ name })}
-            placeholder="Search or create a group…"
+            placeholder="Search or create a tag…"
           />
         </div>
         <DialogFooter>

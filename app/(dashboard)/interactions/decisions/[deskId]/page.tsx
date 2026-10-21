@@ -136,7 +136,7 @@ export default function DecisionReviewPage() {
     // Drops ?option= only. ?decision= has already been consumed into `idx`,
     // so there is nothing to preserve and a bare URL is the cleaner thing to
     // leave in the address bar.
-    router.replace(`/decisions/${deskId}`, { scroll: false });
+    router.replace(`/interactions/decisions/${deskId}`, { scroll: false });
   };
   const { confirm } = useConfirmDialog();
 
@@ -332,7 +332,7 @@ export default function DecisionReviewPage() {
   return (
     <div className="flex flex-col gap-4 p-6 max-w-[1000px] mx-auto">
       <PageHeader
-        breadcrumbs={[{ label: 'Decisions', href: '/decisions' }, { label: desk.agent_name }]}
+        breadcrumbs={[{ label: 'Decisions', href: '/interactions/decisions' }, { label: desk.agent_name }]}
         icon={Gavel}
         title={desk.agent_name}
         badge={

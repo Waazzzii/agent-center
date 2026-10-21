@@ -29,13 +29,14 @@ import { listTags, createTag, updateTag, deleteTag, type Tag } from '@/lib/api/t
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { TableSearch } from '@/components/ui/data-table-toolbar';
 import { TagBadge } from '@/components/tags/tag-badge';
 import { TAG_COLORS, tagSwatchClass } from '@/components/tags/tag-colors';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { Plus, Trash2, Tags as TagsIcon, Search, Loader2, Pencil, Check, X, BookOpen } from 'lucide-react';
+import { Plus, Trash2, Tags as TagsIcon, Loader2, Pencil, Check, X, BookOpen } from 'lucide-react';
 
 /** The entity types a tag can be attached to, in the order the row lists them. */
 const USAGE_PARTS: { key: keyof Tag; singular: string; plural: string }[] = [
@@ -108,7 +109,7 @@ function apiError(err: unknown, fallback: string): string {
 export default function TagsPage() {
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const { confirm } = useConfirmDialog();
 
   const [tags, setTags] = useState<Tag[]>([]);
@@ -245,11 +246,11 @@ export default function TagsPage() {
     <div className="flex flex-col gap-4 p-6 max-w-[1200px] mx-auto">
       <div>
         <h1 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <TagsIcon className="h-5 w-5 text-brand" /> Groups
+          <TagsIcon className="h-5 w-5 text-brand" /> Tags
         </h1>
         <p className="text-sm text-muted-foreground mt-0.5">
-          How agents, steps and scripts are grouped. Link a group to a Knowledge Base article that
-          explains how its agents work together. Groups can be created from any picker — this is where
+          How agents, steps and scripts are labelled. Link a tag to a Knowledge Base article that
+          explains how its agents work together. Tags can be created from any picker — this is where
           they get renamed, recoloured, documented and removed.
         </p>
       </div>
@@ -274,7 +275,7 @@ export default function TagsPage() {
               value={newName}
               onChange={(e) => setNewName(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') void handleCreate(); }}
-              placeholder="New group name…"
+              placeholder="New tag name…"
               className="h-9 w-56"
             />
             {/* Colour is chosen up front because it is what makes a tag
@@ -291,17 +292,11 @@ export default function TagsPage() {
               {creating
                 ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
                 : <Plus className="h-3.5 w-3.5 mr-1.5" />}
-              Add group
+              Add tag
             </Button>
 
-            <div className="relative ml-auto">
-              <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-              <Input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search groups…"
-                className="h-9 pl-7 w-48"
-              />
+            <div className="ml-auto">
+              <TableSearch value={search} onChange={setSearch} placeholder="Search tags…" />
             </div>
           </div>
         </CardContent>
@@ -343,7 +338,7 @@ export default function TagsPage() {
                         <Input
                           value={editDescription}
                           onChange={(e) => setEditDescription(e.target.value)}
-                          placeholder="Description (shown on the group)"
+                          placeholder="Description (shown on the tag)"
                           className="h-8 w-64"
                         />
                         <Input

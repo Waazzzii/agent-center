@@ -34,7 +34,7 @@ import { CopyableId } from '@/components/clients/copyable-id';
 export default function ClientsPage() {
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agent_center_user');
+  const permitted = useRequirePermission('agent_center_manager');
   const { confirm } = useConfirmDialog();
 
   const [clients, setClients] = useState<Client[]>([]);

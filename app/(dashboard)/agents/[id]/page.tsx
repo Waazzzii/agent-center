@@ -24,6 +24,8 @@ import { LoginFormBody, type LoginFormData } from '@/components/actions/LoginFor
 import { LoginChip } from '@/components/actions/LoginChip';
 import { listLogins, createLogin, updateLogin, assignableLogins, loginOptionHint, type Login } from '@/lib/api/logins';
 import { useTags } from '@/lib/hooks/use-tags';
+import { useRequirePermission } from '@/lib/hooks/use-require-permission';
+import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { TagPicker } from '@/components/tags/tag-picker';
 import { EntityPreviewNotice } from '@/components/actions/EntityPreviewNotice';
 import { SearchableSelect } from '@/components/ui/searchable-select';
@@ -64,13 +66,14 @@ import { toast } from 'sonner';
 import {
   Plus, Pencil, Trash2, Copy, RefreshCw, ArrowDown, GripVertical,
   Webhook, Clock, Play, History, X,
-  GitBranch, Settings, AlertTriangle, Globe, Users, Link as LinkIcon,
+  GitBranch, Settings, AlertTriangle, Lock, Users, Link as LinkIcon,
   Bot, ChevronRight, Search,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { OutcomeCard } from '@/components/agents/OutcomeCard';
 import { ConfigRow, ConfigSlideOut } from '@/components/agents/ConfigSlideOut';
-import { AgentAccessGroups } from '@/components/agents/AgentAccessGroups';
+import { AgentAccessPills } from '@/components/agents/AgentAccessPills';
+import { InfoHint } from '@/components/ui/info-hint';
 
 // ─── Cron description helper ──────────────────────────────────
 
@@ -222,6 +225,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const router = useRouter();
   const searchParams = useSearchParams();
   const { selectedOrgId } = useAdminViewStore();
+  // agent_center_manager (admins included) = full editor; a plain agent_center_user
+  // gets a read-only run+view surface — no authoring/config (the backend enforces
+  // this too; this just hides the controls so they aren't dead ends).
+  const isManager = useRequirePermission('agent_center_manager');
   const { confirm } = useConfirmDialog();
 
   // ?action=<id> — auto-open the edit dialog for a specific action on first load
@@ -399,9 +406,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>([]);
 
   useEffect(() => {
-    if (selectedOrgId && agentId) loadAll();
+    // Only managers load the full editor — it reads manager-only config data.
+    // A plain agent_center_user is shown NoPermission below and never fires these
+    // requests (they run from the list and view executions instead).
+    if (selectedOrgId && agentId && isManager) loadAll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedOrgId, agentId]);
+  }, [selectedOrgId, agentId, isManager]);
 
   const loadAll = useCallback(async () => {
     if (!selectedOrgId) return;
@@ -1098,6 +1108,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     setDragId(null);
   };
 
+  // The agent editor is the configuration surface — managers (and admins) only.
+  // A plain user runs agents from the list and sees output in Executions.
+  if (!isManager) return <NoPermissionContent />;
+
   if (loading || !agent) {
     return (
       <div className="flex h-64 items-center justify-center">
@@ -1164,10 +1178,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
             <GitBranch />
             Workflow
           </TabsTrigger>
-          <TabsTrigger value="settings">
-            <Settings />
-            Settings
-          </TabsTrigger>
+          {isManager && (
+            <TabsTrigger value="settings">
+              <Settings />
+              Settings
+            </TabsTrigger>
+          )}
         </TabsList>
         <TabsPanel className="px-4 pb-12 pt-8 sm:px-6">
 
@@ -1644,13 +1660,17 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       {/* Right attachment (max ~1/3): the login for browser-script
                           steps, linked by a link icon. */}
                       {action.action_type === 'browser_script' && (() => {
-                        // Read-only reflection of the login configured on the script
-                        // itself (via the paired login step). It's added/removed by
-                        // configuring the login on the browser script — not here — so
-                        // there's no detach button; clicking it opens the login editor.
-                        const loginActionId = actionPairs.get(action.id)?.partnerId;
-                        const loginAction = loginActionId ? actions.find((a) => a.id === loginActionId) : null;
-                        const login = loginAction?.login_id ? (logins.find((l) => l.id === loginAction.login_id) ?? null) : null;
+                        // Read-only reflection of the login the script signs in with.
+                        // Read the browser_script action's OWN login_id — that is
+                        // authoritative (the paired-step model even requires the
+                        // adjacent login step to MATCH it). Reading it directly means
+                        // the chip shows whether the login is represented as a
+                        // separate adjacent login step OR set on the script step
+                        // alone; the latter shape (no paired login action) was
+                        // silently showing nothing. It's added/removed by configuring
+                        // the login on the browser script — not here — so there's no
+                        // detach button; clicking it opens the login editor.
+                        const login = action.login_id ? (logins.find((l) => l.id === action.login_id) ?? null) : null;
                         if (!login) return null;
                         return (
                           <>
@@ -1683,6 +1703,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     muted-foreground — an empty routine should draw the eye to
                     the way forward, not make you hunt for it. Still dashed, so
                     it stays legible as an affordance rather than a step. */}
+                {isManager && (
                 <button
                   type="button"
                   onClick={() => setActionTypeModalOpen(true)}
@@ -1691,6 +1712,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                   <Plus className="h-4 w-4 transition-transform group-hover:scale-110" />
                   <span className="text-sm font-semibold">Add Step</span>
                 </button>
+                )}
 
               </div>
             </div>
@@ -1725,13 +1747,14 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           flow meant you could not read one while editing the other.
           Same 720px reading column as the workflow, so switching
           tabs does not reflow the page under you. */}
-      {activeTab === 'settings' && (
+      {isManager && activeTab === 'settings' && (
         <div className="mx-auto w-full max-w-[720px]">
           {/* The same Field system the inspector panels use, so a form here
               and a form in a slide-out have one rhythm. Groups follow what
               the fields are ABOUT — the agent, who may act on it, how it is
               organised, whether it runs — rather than a flat list. */}
-          <FieldGroup title="Agent">
+          {/* GENERAL — the agent itself: name, description, whether it runs, tags. */}
+          <FieldGroup title="General">
             <Field label="Name" required htmlFor="agent-name">
               <Input
                 id="agent-name"
@@ -1740,7 +1763,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 placeholder="Agent name"
               />
             </Field>
-            <Field label="Description" htmlFor="agent-desc" hint="Shown on the agents list and wherever this agent is picked.">
+            <Field label="Description" htmlFor="agent-desc" trailing={<InfoHint>Shown on the agents list and wherever this agent is picked.</InfoHint>}>
               <Textarea
                 id="agent-desc"
                 value={agentDesc}
@@ -1749,26 +1772,16 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 rows={3}
               />
             </Field>
-          </FieldGroup>
-
-          {/* Access sits in Settings, next to the other things that are true
-              of the AGENT rather than of one step. It saves on change rather
-              than on this tab's Save, because it writes to its own table —
-              bundling it into the agent row's dirty tracking would mean one
-              Save doing two unrelated writes. The component says so. */}
-          {selectedOrgId && (
-            <FieldGroup title="Access" description="Saved as you change it.">
-              <AgentAccessGroups orgId={selectedOrgId} agentId={agentId} />
-            </FieldGroup>
-          )}
-
-          <FieldGroup title="Organise">
-            <Field
-              label="Groups"
-              // The picker can create a tag but not rename or delete one, so
-              // the link hands off to the page that can.
-              trailing={<Link href="/tags" className="text-brand hover:underline">Manage groups</Link>}
-            >
+            <Field label="Status" trailing={<InfoHint>Inactive agents ignore triggers and can’t be started with Run now.</InfoHint>}>
+              <label className="flex cursor-pointer items-center justify-between gap-4 rounded-[var(--r-md)] border bg-card/50 px-3.5 py-2.5">
+                <span className="text-sm">{agentActive ? 'Active' : 'Inactive'}</span>
+                <Switch
+                  checked={agentActive}
+                  onCheckedChange={(v) => { setAgentActive(v); setSettingsDirty(true); }}
+                />
+              </label>
+            </Field>
+            <Field label="Tags" trailing={<Link href="/tags" className="text-brand hover:underline">Manage tags</Link>}>
               <TagPicker
                 tags={allTags}
                 selected={agentTagIds}
@@ -1776,50 +1789,36 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 onCreate={(name) => createTag({ name })}
               />
             </Field>
-            {/* SINGULAR — agents.client_id holds one id. "Products" over a
-                single select would promise a many-to-many the schema does
-                not have. Saves on change, like Access, for the same reason. */}
-            <Field
-              label="Product"
-              trailing="saved on change"
-              hint={agent?.client_id
-                ? 'Runnable from this product’s agent kit, which passes _client_prompt / _client_media / _client_video to this agent.'
-                : products.length === 0
-                  ? 'No products with an agent kit are enabled for this organisation yet.'
-                  : 'Pick a product to make this agent runnable from its agent kit.'}
-            >
-              <Select
-                value={agent?.client_id ?? NO_PRODUCT}
-                disabled={savingClient || products.length === 0}
-                onValueChange={(v) => handleSetClient(v === NO_PRODUCT ? null : v)}
-              >
-                <SelectTrigger className="w-full sm:w-72">
-                  <SelectValue placeholder="None" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NO_PRODUCT}>None</SelectItem>
-                  {products.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{clientDisplayName(c)}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
           </FieldGroup>
 
-          <FieldGroup title="Status">
-            <label className="flex cursor-pointer items-center justify-between gap-4 rounded-[var(--r-md)] border bg-card/50 px-3.5 py-3">
-              <span>
-                <span className="block text-sm font-medium">{agentActive ? 'Active' : 'Inactive'}</span>
-                <span className="block text-xs text-muted-foreground">
-                  {agentActive ? 'Triggers run and the agent can be started.' : 'Triggers are ignored and Run now is disabled.'}
-                </span>
-              </span>
-              <Switch
-                checked={agentActive}
-                onCheckedChange={(v) => { setAgentActive(v); setSettingsDirty(true); }}
+          {/* ACCESS — who/what can reach this agent: run it, act on its decisions,
+              and which product's kit it runs from. Saves on change (its own tables),
+              separate from this tab's Save. One area, three pills. */}
+          {selectedOrgId && (
+            <FieldGroup title="Access">
+              <AgentAccessPills
+                orgId={selectedOrgId}
+                agentId={agentId}
+                productSlot={
+                  <Select
+                    value={agent?.client_id ?? NO_PRODUCT}
+                    disabled={savingClient || products.length === 0}
+                    onValueChange={(v) => handleSetClient(v === NO_PRODUCT ? null : v)}
+                  >
+                    <SelectTrigger className="w-full sm:w-72">
+                      <SelectValue placeholder={products.length === 0 ? 'No clients enabled' : 'None'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NO_PRODUCT}>None</SelectItem>
+                      {products.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>{clientDisplayName(c)}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                }
               />
-            </label>
-          </FieldGroup>
+            </FieldGroup>
+          )}
 
           {/* No Close button: the Workflow tab is the way out, and a dead
               "Close" that only navigates would suggest the edits were
@@ -2080,10 +2079,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       </Link>
                     </div>
                     {actionForm.accessGroupIds.length === 0 ? (
-                      <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
-                        <Globe className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                      <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                        <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                         <span>
-                          <strong>Open to everyone.</strong> With no groups assigned to this login profile, any user with Agent Center access in this organization can complete the login when the agent pauses.
+                          No groups assigned to this login profile — only admins and managers can complete the login when the agent pauses. Add a group to let a specific team handle it.
                         </span>
                       </div>
                     ) : (
@@ -2198,10 +2197,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     placeholder="Select access groups…"
                   />
                   {actionForm.accessGroupIds.length === 0 ? (
-                    <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
-                      <Globe className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                    <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                      <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
                       <span>
-                        <strong>Open to everyone.</strong> With no groups selected, any user with Agent Center access in this organization will see and be able to approve this step. Add one or more groups to restrict approvals.
+                        No groups selected — only admins and managers will see and be able to approve this step. Add a group to let a specific team handle it.
                       </span>
                     </div>
                   ) : (
@@ -2565,18 +2564,11 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
               </div>
             </button>
 
-            {/* Human Review */}
-            <button
-              type="button"
-              className="flex items-center gap-3 rounded-lg border px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
-              onClick={() => { setActionTypeModalOpen(false); openNewAction('approval'); }}
-            >
-              <StepTypeIcon type="approval" size="lg" />
-              <div>
-                <p className="font-medium text-sm">Human Review</p>
-                <p className="text-xs text-muted-foreground">Pause for a human to review and approve before continuing</p>
-              </div>
-            </button>
+            {/* Human Review (blocking HITL approval) is intentionally NOT offered
+                here: the post-execution outcomes/decisions mechanism replaced it,
+                MCP authoring is already closed, and no new approval step should be
+                created. Existing approval actions still render and run; removing
+                the executor branch + schema is the separate (deferred) teardown. */}
 
             {/* Run Agent — disabled if this agent is used as a sub-agent elsewhere (nesting limited to one level) */}
             {(() => {

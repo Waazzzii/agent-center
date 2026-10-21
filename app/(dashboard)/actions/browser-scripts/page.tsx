@@ -13,7 +13,7 @@ import { RunScriptModal } from '@/components/record/RunScriptModal';
 
 export default function RecordPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agent_center_user');
+  const permitted = useRequirePermission('agent_center_manager');
 
   const [recordModalOpen, setRecordModalOpen] = useState(false);
   const [scriptsRefreshKey, setScriptsRefreshKey] = useState(0);

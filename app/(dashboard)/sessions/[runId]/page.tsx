@@ -84,7 +84,7 @@ export default function AuthoringSessionPage() {
   const { runId } = useParams<{ runId: string }>();
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agent_center_user');
+  const permitted = useRequirePermission('agent_center_manager');
 
   const [session, setSession] = useState<AuthoringSessionDetail | null>(null);
   const [loading, setLoading] = useState(true);

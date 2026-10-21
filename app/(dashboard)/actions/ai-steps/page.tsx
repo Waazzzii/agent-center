@@ -7,12 +7,10 @@ import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { listAiSteps, deleteAiStep, updateAiStep, type AiStep } from '@/lib/api/ai-steps';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Badge } from '@/components/ui/badge';
-import { Input } from '@/components/ui/input';
-import { ResponsiveTable } from '@/components/ui/responsive-table';
+import { DataTable } from '@/components/ui/data-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Sparkles, Loader2, Search, Tag as TagIcon } from 'lucide-react';
+import { Plus, Pencil, Trash2, Sparkles, Loader2, Tag as TagIcon } from 'lucide-react';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { useTags } from '@/lib/hooks/use-tags';
 import { TagFilter } from '@/components/tags/tag-filter';
@@ -24,7 +22,7 @@ type SortKey = 'name' | 'model';
 
 export default function AiStepsPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const { confirm } = useConfirmDialog();
   const router = useRouter();
 
@@ -118,27 +116,11 @@ export default function AiStepsPage() {
           <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
         </div>
       ) : (
-        <Card className="overflow-hidden py-0">
-          <CardContent className="p-0">
-            <div className="flex items-center gap-2 border-b px-3 py-2">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search by name or description…"
-                  className="h-9 pl-8"
-                />
-              </div>
-              {search && (
-                <span className="text-xs text-muted-foreground">{visibleItems.length} of {items.length}</span>
-              )}
-              <div className="ml-auto">
-                <TagFilter tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />
-              </div>
-            </div>
-            <ResponsiveTable
+        <DataTable
+              search={{ value: search, onChange: setSearch, placeholder: 'Search by name or description…' }}
+              count={search ? <span className="text-xs text-muted-foreground">{visibleItems.length} of {items.length}</span> : undefined}
               data={visibleItems}
+              isFiltered={!!search || tagFilter.length > 0}
               getRowKey={(i) => i.id}
               onRowClick={(i) => router.push(`/actions/ai-steps/${i.id}`)}
               emptyMessage={search ? `No AI steps match "${search}".` : 'No AI steps yet. Create one to reuse prompts across agent workflows.'}
@@ -150,17 +132,7 @@ export default function AiStepsPage() {
                   key: 'name',
                   label: 'Name',
                   sortable: true,
-                  render: (i) => (
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{i.name}</span>
-                      {i.connector_ids.length > 0 && (
-                        <Badge variant="outline" className="text-[9px] h-4">{i.connector_ids.length} connector{i.connector_ids.length !== 1 ? 's' : ''}</Badge>
-                      )}
-                      {(i.outputs?.length ?? 0) > 0 && (
-                        <Badge variant="outline" className="text-[9px] h-4">{i.outputs.length} output{i.outputs.length !== 1 ? 's' : ''}</Badge>
-                      )}
-                    </div>
-                  ),
+                  render: (i) => <span className="font-medium">{i.name}</span>,
                 },
                 {
                   key: 'model',
@@ -179,7 +151,8 @@ export default function AiStepsPage() {
                 },
                 {
                   key: 'tags',
-                  label: 'Groups',
+                  label: 'Tags',
+                  filter: <TagFilter variant="column" tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />,
                   // Same shape as the routines list: the actions column next to
                   // this one is w-px, so an unsized Tags column let a long tag
                   // truncate right up against the row menu and read as running
@@ -200,7 +173,7 @@ export default function AiStepsPage() {
                       <RowActionsMenu
                         actions={[
                           { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/actions/ai-steps/${i.id}`) },
-                          { label: 'Groups', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogStep(i) },
+                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogStep(i) },
                           { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(i) },
                         ]}
                       />
@@ -211,7 +184,7 @@ export default function AiStepsPage() {
                       <RowActionsMenu
                         actions={[
                           { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/actions/ai-steps/${i.id}`) },
-                          { label: 'Groups', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogStep(i) },
+                          { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogStep(i) },
                           { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(i) },
                         ]}
                       />
@@ -220,8 +193,6 @@ export default function AiStepsPage() {
                 },
               ]}
             />
-          </CardContent>
-        </Card>
       )}
 
       <TagAssignDialog

@@ -1,14 +1,12 @@
 import type { Metadata } from 'next'
 
 /**
- * Metadata-only layout.
- *
- * app/(dashboard)/interactions/page.tsx is a client component, and a "use client" module cannot
- * export `metadata`. Next composes this against the root layout's
- * `%s | <Company> <Center>` template, so the tab reads "Action Required | ...".
+ * Metadata-only layout for the Interactions parent. Its children (Logins,
+ * Decisions) each set their own title, which overrides this; this is only the
+ * fallback and the value Next uses if a child ever omits one.
  */
 export const metadata: Metadata = {
-  title: 'Action Required',
+  title: 'Interactions',
 }
 
 export default function Layout({ children }: { children: React.ReactNode }) {

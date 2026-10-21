@@ -288,10 +288,10 @@ export function TriggerZone({ node }: { node: FullTreeNode }) {
             </>
           }
           facts={<>{origin.item_index != null && <span>item {origin.item_index + 1}</span>}<span className="tabular-nums">{fmtTime(origin.decided_at)}</span></>}
-          href={origin.execution_id ? `/agent-history/${origin.execution_id}` : origin.desk_id ? `/decisions/${origin.desk_id}` : undefined}
+          href={origin.execution_id ? `/agent-history/${origin.execution_id}` : origin.desk_id ? `/interactions/decisions/${origin.desk_id}` : undefined}
           badge={origin.desk_id && (
             <Link
-              href={`/decisions/${origin.desk_id}`}
+              href={`/interactions/decisions/${origin.desk_id}`}
               onClick={(e) => e.stopPropagation()}
               className="shrink-0 rounded-md border bg-card px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground hover:text-foreground"
             >
@@ -493,7 +493,7 @@ function DeskDecisions({ orgId, deskId }: { orgId: string; deskId: string }) {
         const who = [d.decided_by_first_name, d.decided_by_last_name].filter(Boolean).join(' ');
         // Where the row goes: to the run the answer launched when there is
         // one, otherwise to the desk where it can still be answered.
-        const href = d.resulting_execution_id ? `/agent-history/${d.resulting_execution_id}` : `/decisions/${deskId}`;
+        const href = d.resulting_execution_id ? `/agent-history/${d.resulting_execution_id}` : `/interactions/decisions/${deskId}`;
         return (
           <NestedRow
             key={d.id}
@@ -572,7 +572,7 @@ export function OutcomeZone({ rows, orgId, onOpen }: {
             }
             right={info.deskId && (
               <Link
-                href={`/decisions/${info.deskId}`}
+                href={`/interactions/decisions/${info.deskId}`}
                 onClick={(e) => e.stopPropagation()}
                 className="inline-flex items-center gap-1 rounded-md border bg-card px-2 py-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground"
               >

@@ -27,7 +27,7 @@ interface TagPickerProps {
   placeholder?: string;
 }
 
-export function TagPicker({ tags, selected, onChange, onCreate, disabled, placeholder = 'Add groups…' }: TagPickerProps) {
+export function TagPicker({ tags, selected, onChange, onCreate, disabled, placeholder = 'Add tags…' }: TagPickerProps) {
   const [input, setInput] = useState('');
   const [open, setOpen] = useState(false);
   const [creating, setCreating] = useState(false);

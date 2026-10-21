@@ -29,7 +29,7 @@ import { NoPermissionContent } from '@/components/layout/no-permission-content';
  */
 export default function ApprovalStepsPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const { confirm } = useConfirmDialog();
   const router = useRouter();
 

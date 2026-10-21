@@ -22,7 +22,7 @@ import { SlackChannelInput } from '@/components/notifications/SlackChannelInput'
 export default function EditApprovalStepPage() {
   const { id } = useParams() as { id: string };
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const router = useRouter();
   const { confirm } = useConfirmDialog();
 

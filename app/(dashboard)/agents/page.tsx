@@ -9,12 +9,12 @@ import { getAgents, deleteAgent, duplicateAgent, runAgent, updateAgent, type Age
 import { listClients, clientDisplayName } from '@/lib/api/clients';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
+import { DataTableToolbar } from '@/components/ui/data-table-toolbar';
 import { Badge } from '@/components/ui/badge';
 import { ResponsiveTable } from '@/components/ui/responsive-table';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Play, Pause, RefreshCw, Bot, Copy, Search, Tag as TagIcon, Sparkles, List, Layers, ChevronRight, BookOpen, ExternalLink } from 'lucide-react';
+import { Plus, Pencil, Trash2, Play, Pause, RefreshCw, Bot, Copy, Tag as TagIcon, Sparkles, List, Layers, ChevronRight, BookOpen, ExternalLink } from 'lucide-react';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { StatTile } from '@/components/ui/stat-tile';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
@@ -44,6 +44,7 @@ export default function AgentsPage() {
   const router = useRouter();
   const { selectedOrgId } = useAdminViewStore();
   const permitted = useRequirePermission('agent_center_user');
+  const isManager = useRequirePermission('agent_center_manager');
   const { confirm } = useConfirmDialog();
 
   const [agents, setAgents] = useState<Agent[]>([]);
@@ -254,8 +255,9 @@ export default function AgentsPage() {
   const renderTable = (rows: Agent[], emptyMessage: string) => (
       <ResponsiveTable
         data={rows}
+        isFiltered={!!search || tagFilter.length > 0 || statusFilter !== null}
         getRowKey={(a) => a.id}
-        onRowClick={(a) => router.push(`/agents/${a.id}`)}
+        onRowClick={isManager ? (a) => router.push(`/agents/${a.id}`) : undefined}
         emptyMessage={emptyMessage}
         sortKey={sortKey}
         sortDir={sortDir}
@@ -326,6 +328,7 @@ export default function AgentsPage() {
             // (rows can carry several tags, so a-z has no meaning).
             key: 'tags',
             label: 'Tags',
+            filter: <TagFilter variant="column" tags={tags} selected={tagFilter} onChange={setTagFilter} match={tagMatch} onMatchChange={setTagMatch} />,
             // Wider than it looks like it needs to be, on purpose. The
             // actions column next to it is w-px, so it sits flush
             // against the Run button — a tag long enough to fill w-48
@@ -365,14 +368,16 @@ export default function AgentsPage() {
                     ? <RefreshCw className="h-4 w-4 animate-spin" />
                     : <Play className="h-4 w-4 text-success" />}
                 </Button>
+                {isManager && (
                 <RowActionsMenu
                   actions={[
                     { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/agents/${a.id}`) },
-                    { label: 'Groups', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
+                    { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
                     { label: duplicatingId === a.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === a.id, onSelect: () => handleDuplicate(a) },
                     { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(a.id, a.name) },
                   ]}
                 />
+                )}
               </div>
             ),
             // Mobile card view fallback — same Run + ⋮ menu.
@@ -383,14 +388,16 @@ export default function AgentsPage() {
                     ? <RefreshCw className="h-4 w-4 animate-spin" />
                     : <Play className="h-4 w-4 text-success" />}
                 </Button>
+                {isManager && (
                 <RowActionsMenu
                   actions={[
                     { label: 'Edit', icon: <Pencil className="h-4 w-4" />, onSelect: () => router.push(`/agents/${a.id}`) },
-                    { label: 'Groups', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
+                    { label: 'Tags', icon: <TagIcon className="h-4 w-4" />, onSelect: () => setTagDialogAgent(a) },
                     { label: duplicatingId === a.id ? 'Duplicating…' : 'Duplicate', icon: <Copy className="h-4 w-4" />, disabled: duplicatingId === a.id, onSelect: () => handleDuplicate(a) },
                     { label: 'Delete', icon: <Trash2 className="h-4 w-4" />, destructive: true, onSelect: () => handleDelete(a.id, a.name) },
                   ]}
                 />
+                )}
               </div>
             ),
           },
@@ -496,10 +503,12 @@ export default function AgentsPage() {
         title="Agents"
         description="Automated workflows powered by LLMs and your connected systems"
         actions={
-          <Button disabled={!selectedOrgId} onClick={() => router.push('/agents/create')}>
-            <Plus className="h-4 w-4" />
-            New agent
-          </Button>
+          isManager ? (
+            <Button disabled={!selectedOrgId} onClick={() => router.push('/agents/create')}>
+              <Plus className="h-4 w-4" />
+              New agent
+            </Button>
+          ) : undefined
         }
       />
 
@@ -542,28 +551,18 @@ export default function AgentsPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card className="overflow-hidden py-0">
-          <CardContent className="p-0">
-            <div className="flex items-center gap-2 border-b px-3 py-2">
-              <div className="relative flex-1 max-w-sm">
-                <Search className="pointer-events-none absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
-                <Input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search by name or description…"
-                  className="h-9 pl-8"
-                />
-              </div>
-              {search && (
-                <span className="text-xs text-muted-foreground">
-                  {visibleAgents.length} of {agents.length}
-                </span>
-              )}
-              <div className="ml-auto flex items-center gap-2">
+        <>
+          <DataTableToolbar
+            search={{ value: search, onChange: setSearch, placeholder: 'Search by name or description…' }}
+            right={
+              <>
+                {search && (
+                  <span className="text-xs text-muted-foreground">{visibleAgents.length} of {agents.length}</span>
+                )}
                 <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="Agents view">
                   {([
                     { mode: 'list', label: 'List', icon: List },
-                    { mode: 'grouped', label: 'Grouped', icon: Layers },
+                    { mode: 'grouped', label: 'Tagged', icon: Layers },
                   ] as const).map(({ mode, label, icon: Icon }) => (
                     <button
                       key={mode}
@@ -581,18 +580,15 @@ export default function AgentsPage() {
                     </button>
                   ))}
                 </div>
-                <TagFilter
-                  tags={tags}
-                  selected={tagFilter}
-                  onChange={setTagFilter}
-                  match={tagMatch}
-                  onMatchChange={setTagMatch}
-                />
-              </div>
-            </div>
-            {viewMode === "grouped" ? renderGrouped() : renderTable(visibleAgents, search ? `No agents match "${search}".` : "No agents yet. Create one to get started.")}
-          </CardContent>
-        </Card>
+              </>
+            }
+          />
+          <Card className="overflow-hidden py-0">
+            <CardContent className="p-0">
+              {viewMode === "grouped" ? renderGrouped() : renderTable(visibleAgents, search ? `No agents match "${search}".` : "No agents yet. Create one to get started.")}
+            </CardContent>
+          </Card>
+        </>
       )}
 
       <TagAssignDialog

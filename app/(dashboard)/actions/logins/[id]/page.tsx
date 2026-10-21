@@ -14,12 +14,8 @@ import {
 import { isReservedParam } from '@/lib/script-params';
 import { getBrowserRunStatus } from '@/lib/api/agents';
 import { listScripts, type BrowserScript } from '@/lib/api/scripts';
-import {
-  getAgentAccessGroups,
-  getLoginAccessGroups,
-  setLoginAccessGroups,
-  type AgentAccessGroup,
-} from '@/lib/api/agent-access-groups';
+import { getRunAccessGroups, type RunAccessGroup } from '@/lib/api/agent-run-access';
+import { getLoginGroups, setLoginGroups } from '@/lib/api/agent-grain-access';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
 import {
   getActiveVerifySession,
@@ -46,7 +42,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import {
   Loader2, LogIn, LogOut, Save, Trash2,
-  CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Globe, Users,
+  CheckCircle2, AlertCircle, HelpCircle, ShieldCheck, Users,
   Sparkles, X as XIcon, Eye, EyeOff, KeyRound, Pencil,
   Settings2, Camera, Lock, Image as ImageIcon,
 } from 'lucide-react';
@@ -169,7 +165,7 @@ type PageSnapshot = {
   orgId: string;
   poolId: string;
   allLogins: Login[];
-  groups: AgentAccessGroup[];
+  groups: RunAccessGroup[];
   loginGroupIds: string[];
   scripts: BrowserScript[];
   /** Credential names on file, by browser — fetched for the whole pool. */
@@ -244,7 +240,7 @@ function SharedCredentialsMask({
 export default function EditLoginPage() {
   const { id } = useParams() as { id: string };
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const router = useRouter();
   const { confirm } = useConfirmDialog();
   // Read once, at mount — see PageSnapshot.
@@ -273,7 +269,7 @@ export default function EditLoginPage() {
   const [loading, setLoading] = useState(!seed);
   const hasShown = useRef(!!seed);
   const [saving, setSaving] = useState(false);
-  const [allGroups, setAllGroups] = useState<AgentAccessGroup[]>(seed?.groups ?? []);
+  const [allGroups, setAllGroups] = useState<RunAccessGroup[]>(seed?.groups ?? []);
   const [loginGroupIds, setLoginGroupIds] = useState<string[]>(seed?.loginGroupIds ?? []);
 
   const [form, setForm] = useState<LoginFormData>({
@@ -600,8 +596,8 @@ export default function EditLoginPage() {
       // client-side guess.
       const [loginData, groups, loginGroups, loginScriptsData, credKeys, everyLogin] = await Promise.all([
         getLogin(selectedOrgId, id),
-        getAgentAccessGroups(selectedOrgId),
-        getLoginAccessGroups(selectedOrgId, id),
+        getRunAccessGroups(selectedOrgId),
+        getLoginGroups(selectedOrgId, id),
         listScripts(selectedOrgId, { kinds: ['login'] }).catch(() => ({ scripts: [] as BrowserScript[] })),
         getLoginCredentialKeys(selectedOrgId, id).catch(() => [] as string[]),
         // Non-fatal: the pool panel simply does not render without it.
@@ -733,7 +729,7 @@ export default function EditLoginPage() {
         ...(scriptChanged ? { auto_login_script_id: scriptId } : {}),
         ...(slackChanged ? { notification_slack_channel_id: normalizedSlack } : {}),
       });
-      await setLoginAccessGroups(selectedOrgId, loginLevelId, loginGroupIds).catch(() => {});
+      await setLoginGroups(selectedOrgId, loginLevelId, loginGroupIds).catch(() => {});
       toast.success('Login saved');
       // Refresh to get latest data
       const updated = await getLogin(selectedOrgId, id);
@@ -1574,10 +1570,10 @@ export default function EditLoginPage() {
             placeholder="Select access groups..."
           />
           {loginGroupIds.length === 0 ? (
-            <div className="flex items-start gap-2 rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-xs text-warning">
-              <Globe className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+            <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+              <Lock className="h-3.5 w-3.5 shrink-0 mt-0.5" />
               <span>
-                <strong>Open to everyone.</strong> With no groups selected, any user with Agent Center access in this organization can complete this login when an agent pauses. Add one or more groups to restrict it.
+                No groups assigned — only admins and managers can complete this login. Add a group to let a specific team handle its sign-ins.
               </span>
             </div>
           ) : (

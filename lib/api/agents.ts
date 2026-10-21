@@ -122,6 +122,14 @@ export interface AgentApprovalItem {
   login_id: string | null;
   /** Login profile display name — only set when login_id is set. */
   login_name: string | null;
+  /** Deploy instance (worker pod) the parked run is pinned to — where the
+   *  member's profile is signed out and where manual login opens. Null if the
+   *  park carries no pin. */
+  pod?: string | null;
+  /** 1-based pool-member ordinal (parent = #1), and the pool's size. pg returns
+   *  bigint as a string, so coerce before display. 1 / 1 for a lone login. */
+  pool_member_index?: number | string | null;
+  pool_size?: number | string | null;
 }
 
 /**

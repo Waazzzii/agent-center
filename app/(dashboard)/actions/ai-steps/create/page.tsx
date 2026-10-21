@@ -19,7 +19,7 @@ import { Label } from '@/components/ui/label';
 
 export default function CreateAiStepPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
   const router = useRouter();
 
   const [saving, setSaving] = useState(false);

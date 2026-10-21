@@ -30,7 +30,7 @@ export default function ClientDetailPage() {
   const params = useParams<{ id: string }>();
   const clientId = params.id;
   const { selectedOrgId } = useAdminViewStore();
-  const permitted = useRequirePermission('agent_center_user');
+  const permitted = useRequirePermission('agent_center_manager');
   const { confirm } = useConfirmDialog();
 
   const [client, setClient] = useState<Client | null>(null);

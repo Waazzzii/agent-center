@@ -1,7 +1,7 @@
 'use client';
 
 import * as React from 'react';
-import { useEffect, useState, useCallback, useRef } from 'react';
+import { useEffect, useState, useCallback, useRef, type ReactNode } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
@@ -18,7 +18,7 @@ import {
 } from '@/lib/api/agents';
 import { tagFilterParams } from '@/lib/api/tags';
 import { TriggerBadge } from '@/components/execution/TriggerBadge';
-import { FilterPicker } from '@/components/execution/FilterPicker';
+import { ColumnSelectFilter } from '@/components/ui/column-select-filter';
 import { ActionProgress } from '@/components/execution/ActionProgress';
 import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
 import { TokenUsage } from '@/components/execution/TokenUsage';
@@ -38,12 +38,10 @@ import {
   ArrowUp,
   ArrowDown,
   ArrowUpDown,
-  Webhook,
   Clock,
   CheckCircle2,
   XCircle,
   Loader2,
-  Filter,
   X,
   History,
   Eye,
@@ -53,7 +51,7 @@ import {
   SquareArrowOutUpRight,
   CircleStop,
   GitBranch,
-  Tag as TagIcon, Bot, Play } from 'lucide-react';
+  Tag as TagIcon, Play } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { BrowserHITLDialog } from '@/components/hitl/BrowserHITLDialog';
 import { useTopicVersions } from '@/lib/hooks/use-topic-versions';
@@ -156,6 +154,7 @@ function RunsTable({
   sortBy,
   sortDir,
   onSort,
+  filterSlots,
 }: {
   runs: ExecutionRun[];
   onOpenBrowser: (run: ExecutionRun) => void;
@@ -166,6 +165,8 @@ function RunsTable({
   sortBy: SortKey;
   sortDir: SortDir;
   onSort: (key: SortKey) => void;
+  /** Inline column filter funnels, keyed by column; rendered beside the header. */
+  filterSlots?: { agent?: ReactNode; status?: ReactNode; trigger?: ReactNode };
 }) {
   const router = useRouter();
 
@@ -192,21 +193,30 @@ function RunsTable({
       >
         <span className="truncate">{label}</span>
         {active
-          ? (sortDir === 'asc' ? <ArrowUp className="h-3 w-3 shrink-0" /> : <ArrowDown className="h-3 w-3 shrink-0" />)
-          : <ArrowUpDown className="h-3 w-3 shrink-0 opacity-40" />}
+          ? (sortDir === 'asc' ? <ArrowUp className="h-3.5 w-3.5 shrink-0 text-brand" /> : <ArrowDown className="h-3.5 w-3.5 shrink-0 text-brand" />)
+          : <ArrowUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />}
       </button>
     );
   };
   return (
     <div>
       {/* Column headers */}
-      <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_100px] items-center gap-2 h-10 px-3 text-sm font-medium text-foreground border-b">
-        <Th col="agent" label="Agent" />
+      <div className="hidden md:grid grid-cols-[1fr_140px_104px_130px_80px_118px_100px] items-center gap-2 h-10 px-3 text-xs font-medium text-muted-foreground border-b">
+        <span className="flex items-center gap-1.5">
+          <Th col="agent" label="Agent" />
+          {filterSlots?.agent}
+        </span>
         {/* One column, not two. A run is either in flight — where the bar is
             the useful thing — or finished, where the outcome is. Showing both
             at once meant a completed run carried a 100% bar saying nothing. */}
-        <Th col="status" label="Status" />
-        <Th col="trigger" label="Trigger" />
+        <span className="flex items-center gap-1.5">
+          <Th col="status" label="Status" />
+          {filterSlots?.status}
+        </span>
+        <span className="flex items-center gap-1.5">
+          <Th col="trigger" label="Trigger" />
+          {filterSlots?.trigger}
+        </span>
         <Th col="started" label="Started" />
         <Th col="duration" label="Duration" align="right" />
         {/* Sorts on the TOTAL of both directions plus both cache buckets,
@@ -1163,106 +1173,11 @@ export default function AgentExecutionsPage() {
               overridden by a plain pb-* in the class list. A plain div with
               the padding written on it says what it does. */}
           <Card className="py-0 gap-0">
-            {/* One control, two steps: which field, then which value.
-                See FilterPicker — six side-by-side dropdowns wrapped onto a
-                second line on a narrow window, and the agent menu had no
-                search, which is the one list that actually gets long. */}
+            {/* Filters are inline on the column headers (RunsTable filterSlots).
+                This bar carries only the active-sort chip, Clear all, and
+                pagination — shown when any of them applies. */}
+            {(hasFilters || !sortIsDefault || totalPages > 1) && (
             <div className="flex flex-wrap items-center gap-2 border-b px-4 py-2.5">
-
-                <FilterPicker
-                  align="start"
-                  onApply={applyFilter}
-                  kinds={[
-                    {
-                      key: 'status', label: 'Status', icon: Filter,
-                      // Single value from here. The summary cards above still
-                      // apply named GROUPS, which is why statusFilters stays an
-                      // array — see applyFilter.
-                      current: statusFilters.length === 1 ? statusFilters[0] : null,
-                      options: FILTERABLE_STATUSES.map((v) => ({
-                        value: v, label: STATUS_LABELS[v] ?? v,
-                      })),
-                    },
-                    {
-                      key: 'trigger', label: 'Trigger', icon: Webhook,
-                      current: triggerFilter || null,
-                      options: FILTERABLE_TRIGGERS.map((t) => ({ value: t, label: TRIGGER_LABELS[t] ?? t })),
-                    },
-                    {
-                      key: 'agent', label: 'Agent', icon: Bot,
-                      current: agentFilter || null,
-                      options: agents.map((a) => ({ value: a.id, label: a.name })),
-                      emptyHint: 'no agents',
-                    },
-                    {
-                      key: 'tag', label: 'Group', icon: TagIcon,
-                      current: tagFilters.length === 1 ? tagFilters[0] : null,
-                      options: tags.map((t) => ({ value: t.id, label: t.name })),
-                      emptyHint: 'no groups',
-                    },
-                  ]}
-                />
-
-                {/* Pills sit in the row, not under it. As their own line they
-                      doubled the bar's height the moment anything was
-                      filtered — and the bar is above the table on every
-                      screen, so that cost is paid constantly. */}
-                {hasFilters && (
-                  <>
-                    {statusFilters.map(s => (
-                      <span key={`s-${s}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                        {STATUS_LABELS[s] ?? s}
-                        <button
-                          onClick={() => toggleStatus(s, false)}
-                          className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                        >
-                          <X className="h-2.5 w-2.5" />
-                        </button>
-                      </span>
-                    ))}
-                    {triggerFilter && (
-                      <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                        {TRIGGER_LABELS[triggerFilter] ?? triggerFilter}
-                        <button
-                          onClick={() => {
-                            setTriggerFilter('');
-                            setPage(1);
-                            loadHistory(1, { statuses: statusFilters, trigger: '', agentId: agentFilter, from: fromFilter, to: toFilter });
-                          }}
-                          className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                        >
-                          <X className="h-2.5 w-2.5" />
-                        </button>
-                      </span>
-                    )}
-                    {agentFilter && (
-                      <span className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                        {agents.find(a => a.id === agentFilter)?.name ?? agentFilter}
-                        <button
-                          onClick={() => {
-                            setAgentFilter('');
-                            setPage(1);
-                            loadHistory(1, { statuses: statusFilters, trigger: triggerFilter, agentId: '', from: fromFilter, to: toFilter });
-                          }}
-                          className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                        >
-                          <X className="h-2.5 w-2.5" />
-                        </button>
-                      </span>
-                    )}
-                    {tagFilters.map((id) => (
-                      <span key={`t-${id}`} className="inline-flex items-center gap-1 rounded-full border bg-muted/60 px-2.5 py-1 text-xs font-medium">
-                        {tags.find((t) => t.id === id)?.name ?? 'tag'}
-                        <button
-                          onClick={() => toggleTag(id, false)}
-                          className="ml-0.5 rounded-full p-0.5 hover:bg-foreground/10 transition-colors"
-                        >
-                          <X className="h-2.5 w-2.5" />
-                        </button>
-                      </span>
-                    ))}
-                  </>
-                  )}
 
                 {/* Active sort, stated rather than implied. */}
                 {!sortIsDefault && (
@@ -1310,6 +1225,7 @@ export default function AgentExecutionsPage() {
                   </div>
                 )}
             </div>
+            )}
 
             <CardContent className="p-0">
               {loading ? (
@@ -1339,6 +1255,16 @@ export default function AgentExecutionsPage() {
                     sortBy={sortBy}
                     sortDir={sortDir}
                     onSort={toggleSort}
+                    filterSlots={{
+                      agent: (
+                        <span className="flex items-center gap-1">
+                          <ColumnSelectFilter title="Agent" value={agentFilter || null} onChange={(v) => applyFilter('agent', v)} options={agents.map((a) => ({ value: a.id, label: a.name }))} />
+                          <ColumnSelectFilter title="Tags" icon={TagIcon} value={tagFilters[0] ?? null} onChange={(v) => applyFilter('tag', v)} options={tags.map((t) => ({ value: t.id, label: t.name }))} />
+                        </span>
+                      ),
+                      status: <ColumnSelectFilter title="Status" value={statusFilters[0] ?? null} onChange={(v) => applyFilter('status', v)} options={FILTERABLE_STATUSES.map((s) => ({ value: s, label: STATUS_LABELS[s] ?? s }))} searchable={false} />,
+                      trigger: <ColumnSelectFilter title="Trigger" value={triggerFilter || null} onChange={(v) => applyFilter('trigger', v)} options={FILTERABLE_TRIGGERS.map((t) => ({ value: t, label: TRIGGER_LABELS[t] ?? t }))} searchable={false} />,
+                    }}
                   />
                 </>
               )}

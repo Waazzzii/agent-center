@@ -30,6 +30,8 @@ export default function DashboardLayout({
     if (!hydrated) return;
 
     if (!admin) {
+      // An explicit Logout is already posting to /auth/signout — don't race it.
+      if ((window as unknown as { __wazziExplicitSignout?: boolean }).__wazziExplicitSignout) return;
       // Session invalidated mid-use — drop cookies and let middleware redirect.
       window.location.replace('/auth/signout');
       return;

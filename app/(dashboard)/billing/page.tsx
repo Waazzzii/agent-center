@@ -128,7 +128,7 @@ interface AgentTokens {
 
 export default function BillingPage() {
   const { selectedOrgId } = useAdminViewStore();
-  const allowed = useRequirePermission('agent_center_user');
+  const allowed = useRequirePermission('agent_center_manager');
 
   // Billing cycles — fetched once so "This cycle" / "Last cycle" presets
   // resolve to the real cycle windows, not just the calendar month.
