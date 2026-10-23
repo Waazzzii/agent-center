@@ -1150,3 +1150,21 @@ export async function getExecutionAnalytics(
   );
   return res.data;
 }
+
+// ── Kit / task usage (the "Tasks" analytics section) ──────────────────────────
+
+export interface KitUsage {
+  range: { from: string; to: string };
+  summary: { sessions: number; completed: number; failed: number; in_progress: number; users: number; runs: number };
+  byTask: { task_slug: string; sessions: number; completed: number; failed: number; in_progress: number; runs: number }[];
+  byUser: { user_id: string; first_name: string | null; last_name: string | null; email: string; sessions: number; completed: number }[];
+}
+
+/** Admin KIT/TASK usage: task-session volume, completion, runs, per-user. */
+export async function getKitAnalytics(
+  orgId: string,
+  params?: { from?: string; to?: string }
+): Promise<KitUsage> {
+  const res = await agentClient.get<KitUsage>(`/api/admin/${orgId}/kit-analytics`, { params });
+  return res.data;
+}

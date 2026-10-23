@@ -81,3 +81,47 @@ export async function updateClient(orgId: string, id: string, data: Partial<Clie
 export async function deleteClient(orgId: string, id: string): Promise<void> {
   await agentClient.delete(`/api/admin/${orgId}/clients/${id}`);
 }
+
+// ── Task → (role →) agent assignment (the single assignment surface) ──────────
+
+/** One STEP of a task. `fallback` = the step whose agent it uses when unset. */
+export interface CatalogTaskRole { key: string; label: string; fallback?: string }
+export interface CatalogTask {
+  slug: string;
+  label: string;
+  description: string | null;
+  /** Always at least one step (a single-agent task has the one `default` step). */
+  roles: CatalogTaskRole[];
+}
+/**
+ * A value in task_agents. The task-roles endpoint always returns { step: agentId }
+ * (a one-step task is stored as a bare id; the backend converts both ways).
+ */
+export type TaskAgentValue = string | Record<string, string | null> | null;
+
+export interface ClientTaskRoles {
+  center: string;
+  tasks: CatalogTask[];
+  task_agents: Record<string, TaskAgentValue>;
+  /** Org agents to assign from (assigning one makes it belong to this client). */
+  agents: { id: string; name: string; is_active: boolean; client_id: string | null; tags?: { id: string; name: string; color?: string | null }[] }[];
+}
+
+/** Load a client's task catalog + current task→agent mapping + assignable agents. */
+export async function getClientTaskRoles(orgId: string, id: string): Promise<ClientTaskRoles> {
+  const res = await agentClient.get<ClientTaskRoles>(`/api/admin/${orgId}/clients/${id}/task-roles`);
+  return res.data;
+}
+
+/** Save the whole task→agent mapping. Assigning an agent also makes it this client's. */
+export async function setClientTaskRoles(
+  orgId: string,
+  id: string,
+  taskAgents: Record<string, TaskAgentValue>,
+): Promise<ClientTaskRoles> {
+  const res = await agentClient.put<ClientTaskRoles>(
+    `/api/admin/${orgId}/clients/${id}/task-roles`,
+    { task_agents: taskAgents },
+  );
+  return res.data;
+}

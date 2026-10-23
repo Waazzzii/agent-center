@@ -85,7 +85,12 @@ export function SearchableSelect({
   }, [open, showSearch]);
 
   return (
+    // modal: these pickers mostly live inside a Sheet/Dialog, whose scroll lock
+    // swallows wheel events on anything portaled outside it — the list could only
+    // be scrolled by dragging its bar. A modal popover takes the lock itself, so
+    // its own list scrolls.
     <Popover
+      modal
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
@@ -117,27 +122,31 @@ export function SearchableSelect({
         className="w-[var(--radix-popover-trigger-width)] min-w-[16rem] p-0"
         align="start"
       >
+        {/* Same search field as the other popover pickers (column filters, tag
+            select): a full input with the icon inside, padded in its own row. */}
         {showSearch && (
-          <div className="flex items-center gap-2 border-b px-2 py-1.5">
-            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-            <Input
-              ref={inputRef}
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder={searchPlaceholder}
-              className="h-7 border-0 px-0 shadow-none focus-visible:ring-0"
-              // Enter on a single remaining match selects it — the fast path
-              // for someone who typed enough to be unambiguous.
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && filtered.length === 1) {
-                  e.preventDefault();
-                  onChange(filtered[0].value);
-                  setOpen(false);
-                } else if (e.key === 'Escape') {
-                  setOpen(false);
-                }
-              }}
-            />
+          <div className="border-b p-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute left-2 top-2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                ref={inputRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={searchPlaceholder}
+                className="h-8 pl-7 text-xs"
+                // Enter on a single remaining match selects it — the fast path
+                // for someone who typed enough to be unambiguous.
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && filtered.length === 1) {
+                    e.preventDefault();
+                    onChange(filtered[0].value);
+                    setOpen(false);
+                  } else if (e.key === 'Escape') {
+                    setOpen(false);
+                  }
+                }}
+              />
+            </div>
           </div>
         )}
         {/* Bounded height — the whole point. Prefer ~24rem of rows, but never

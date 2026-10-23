@@ -15,6 +15,8 @@ import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   getExecutionAnalytics,
   type ExecutionAnalytics,
+  getKitAnalytics,
+  type KitUsage,
   type AgentStats,
   type ActionTypeStats,
   type FailureHotspot,
@@ -105,6 +107,7 @@ export default function AnalyticsPage() {
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
   const [data, setData] = useState<ExecutionAnalytics | null>(null);
+  const [kitUsage, setKitUsage] = useState<KitUsage | null>(null);
   const [capacity, setCapacity] = useState<AgentCapacity | null>(null);
   const [capacityEvents, setCapacityEvents] = useState<CapacityEvent[]>([]);
   const [podMetrics, setPodMetrics] = useState<PodMetrics | null>(null);
@@ -123,14 +126,16 @@ export default function AnalyticsPage() {
       const exact = !isCustom ? ANALYTICS_RANGES[rangeIdx]?.getWindow?.() : undefined;
       const fromIso = exact?.fromIso ?? new Date(range.from + 'T00:00:00').toISOString();
       const toIso   = exact?.toIso   ?? new Date(range.to + 'T23:59:59').toISOString();
-      const [analytics, cap, events, pods, waits] = await Promise.all([
+      const [analytics, cap, events, pods, waits, kit] = await Promise.all([
         getExecutionAnalytics(selectedOrgId, { from: fromIso, to: toIso, compare: true }),
         getAgentCapacity(selectedOrgId).catch(() => null),
         getCapacityEvents(selectedOrgId, { from: fromIso, to: toIso }).catch(() => []),
         getPodMetrics(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
         getQueueWaits(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
+        getKitAnalytics(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
       ]);
       setData(analytics);
+      setKitUsage(kit);
       setCapacity(cap);
       setCapacityEvents(events);
       setPodMetrics(pods);
@@ -208,6 +213,10 @@ export default function AnalyticsPage() {
 
           {/* Stat cards */}
           <SummaryCards data={data} />
+
+          {/* Task usage — the kit/task-session layer the run analytics above
+              don't cover (who ran which guided task, and the outcomes). */}
+          {kitUsage && kitUsage.summary.sessions > 0 && <TaskUsageSection data={kitUsage} />}
 
           {/* Token usage. Deliberately NO dollars: what an org is invoiced
               depends on plan and markup, and a number that looks like money
@@ -494,6 +503,88 @@ function AvailabilityCard({ events, periodKey }: { events: CapacityEvent[]; peri
 }
 
 // ─── Summary cards ───────────────────────────────────────────────
+
+function TaskUsageSection({ data }: { data: KitUsage }) {
+  const s = data.summary;
+  const rate = s.sessions ? Math.round((s.completed / s.sessions) * 100) : 0;
+  const pretty = (slug: string) => slug.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
+  const personName = (u: KitUsage['byUser'][number]) =>
+    [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email;
+  return (
+    <Card>
+      <CardContent className="py-5">
+        <h2 className="mb-3 text-sm font-semibold text-foreground">Task usage</h2>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <TaskStat label="Reports started" value={String(s.sessions)} />
+          <TaskStat label="Completed" value={`${s.completed} · ${rate}%`} />
+          <TaskStat label="Agent runs" value={String(s.runs)} />
+          <TaskStat label="People" value={String(s.users)} />
+        </div>
+
+        <div className="mt-5 overflow-x-auto">
+          <div className="mb-1 text-xs font-medium text-muted-foreground">By task</div>
+          <table className="w-full min-w-[520px] text-sm">
+            <thead>
+              <tr className="border-b text-left text-xs text-muted-foreground">
+                <th className="py-1.5 pr-3 font-medium">Task</th>
+                <th className="py-1.5 pr-3 font-medium">Started</th>
+                <th className="py-1.5 pr-3 font-medium">Completed</th>
+                <th className="py-1.5 pr-3 font-medium">Failed</th>
+                <th className="py-1.5 pr-3 font-medium">In progress</th>
+                <th className="py-1.5 font-medium">Runs</th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.byTask.map((t) => (
+                <tr key={t.task_slug} className="border-b last:border-0">
+                  <td className="py-1.5 pr-3 font-medium text-foreground">{pretty(t.task_slug)}</td>
+                  <td className="py-1.5 pr-3 text-muted-foreground">{t.sessions}</td>
+                  <td className="py-1.5 pr-3 text-emerald-600 dark:text-emerald-400">{t.completed}</td>
+                  <td className="py-1.5 pr-3 text-rose-600 dark:text-rose-400">{t.failed}</td>
+                  <td className="py-1.5 pr-3 text-amber-600 dark:text-amber-400">{t.in_progress}</td>
+                  <td className="py-1.5 text-muted-foreground">{t.runs}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {data.byUser.length > 0 && (
+          <div className="mt-5 overflow-x-auto">
+            <div className="mb-1 text-xs font-medium text-muted-foreground">By person</div>
+            <table className="w-full min-w-[420px] text-sm">
+              <thead>
+                <tr className="border-b text-left text-xs text-muted-foreground">
+                  <th className="py-1.5 pr-3 font-medium">Person</th>
+                  <th className="py-1.5 pr-3 font-medium">Reports</th>
+                  <th className="py-1.5 font-medium">Completed</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.byUser.map((u) => (
+                  <tr key={u.user_id} className="border-b last:border-0">
+                    <td className="py-1.5 pr-3 font-medium text-foreground">{personName(u)}</td>
+                    <td className="py-1.5 pr-3 text-muted-foreground">{u.sessions}</td>
+                    <td className="py-1.5 text-emerald-600 dark:text-emerald-400">{u.completed}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function TaskStat({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border bg-muted/30 px-3 py-2">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-lg font-semibold text-foreground">{value}</div>
+    </div>
+  );
+}
 
 function SummaryCards({ data }: { data: ExecutionAnalytics }) {
   const total     = toNum(data.summary?.total);
