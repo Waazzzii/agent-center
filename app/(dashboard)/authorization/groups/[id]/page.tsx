@@ -2,8 +2,9 @@
 
 /**
  * Authorization → Access Groups → one group. Set what this group covers, across
- * three pills: Executions / Decisions / Logins. Each is a filterable checklist of
- * targets (agents, or pool-parent logins) assigned to THIS group for that grain.
+ * three pills: Executions / Decisions / Logins. Each lists only the targets
+ * (agents, or pool-parent logins) assigned to THIS group for that grain; new ones
+ * are added from a search-by-name-or-tag picker. Changes save immediately.
  * No "all" grant — admins already have blanket access; assignment is explicit.
  */
 
@@ -15,7 +16,7 @@ import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { Pills } from '@/components/ui/pills';
-import { TargetChecklist, type ChecklistTarget } from '@/components/access/TargetChecklist';
+import { AssignedTargets, type ChecklistTarget } from '@/components/access/AssignedTargets';
 import { getAgents } from '@/lib/api/agents';
 import { listLogins } from '@/lib/api/logins';
 import {
@@ -111,13 +112,14 @@ export default function GroupDetailPage() {
       {loading || loadingGrain || !assigned[grain] ? (
         <div className="flex h-40 items-center justify-center"><Loader2 className="h-5 w-5 animate-spin text-muted-foreground" /></div>
       ) : (
-        <TargetChecklist
+        <AssignedTargets
           key={grain}
           targets={targets}
-          initialSelected={assigned[grain] ?? []}
+          assignedIds={assigned[grain] ?? []}
           onSave={onSave}
           showTags={grain !== 'login'}
           targetNoun={grain === 'login' ? 'login' : 'agent'}
+          groupName={groupName}
         />
       )}
     </div>
