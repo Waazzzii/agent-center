@@ -79,8 +79,13 @@ export interface RecordedStep {
   /** download only — the file's declared type / extension when it is not CSV. */
   content_type?: string;
   upload_extension?: string;
-  /** save_page only — pdf (default, selectable text) or png. */
-  format?: 'pdf' | 'png';
+  /** save_page only — pdf (default, selectable text), png, or html (the rendered DOM, for a caller that parses it). */
+  format?: 'pdf' | 'png' | 'html';
+  /**
+   * download / save_page — which tier the stored file goes to: temporary
+   * (default, 1 day) or persistent (30 days, for a later run or a decision).
+   */
+  storage?: 'temporary' | 'persistent';
   /** save_page only — CSS used for a PDF: screen (default) or the site's print styles. */
   media?: 'screen' | 'print';
   /** save_page only — unroll clipped scroll panes before capture (default true). */

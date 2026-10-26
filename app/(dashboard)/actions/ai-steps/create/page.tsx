@@ -6,7 +6,6 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { createAiStep } from '@/lib/api/ai-steps';
 import { getConnectors } from '@/lib/api/connectors';
-import { getSkills, type Skill } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { toast } from 'sonner';
@@ -24,12 +23,11 @@ export default function CreateAiStepPage() {
 
   const [saving, setSaving] = useState(false);
   const [connectors, setConnectors] = useState<{ id: string; label: string }[]>([]);
-  const [skills, setSkills] = useState<Skill[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [form, setForm] = useState<AiStepFormData>({
     name: '', description: '', prompt: '', model: '',
-    connector_ids: [], outputs: [], skill_ids: [],
+    connector_ids: [], outputs: [],
   });
 
   const { tags, createTag } = useTags(selectedOrgId);
@@ -40,10 +38,8 @@ export default function CreateAiStepPage() {
     setLoading(true);
     Promise.all([
       getConnectors(selectedOrgId).catch(() => ({ connectors: [] as any[] })),
-      getSkills(selectedOrgId, { limit: 100 }).catch(() => ({ items: [] as Skill[] })),
-    ]).then(([conns, skillsData]) => {
+    ]).then(([conns]) => {
       setConnectors((conns.connectors ?? []).filter((c: any) => c.agent_enabled).map((c: any) => ({ id: c.id, label: c.connector_name ?? c.id })));
-      setSkills(skillsData.items ?? []);
     }).finally(() => setLoading(false));
   }, [selectedOrgId]);
 
@@ -67,7 +63,6 @@ export default function CreateAiStepPage() {
             // which the verifier honors but reads less obviously.
             required: o.required !== false,
           })),
-        skill_ids: form.skill_ids,
         tag_ids: tagIds,
       });
       toast.success('AI step created');
@@ -107,9 +102,7 @@ export default function CreateAiStepPage() {
               form={form}
               setForm={setForm as any}
               connectors={connectors}
-              skills={skills}
               orgId={selectedOrgId}
-              onSkillsChanged={() => { if (selectedOrgId) getSkills(selectedOrgId, { limit: 100 }).then((r) => setSkills(r.items ?? [])).catch(() => {}); }}
             />
             <div className="mt-4 space-y-1 border-t pt-4">
               <Label>Groups</Label>

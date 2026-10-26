@@ -1,7 +1,6 @@
 'use client';
 
 import { type AiStep } from '@/lib/api/ai-steps';
-import { type Skill } from '@/lib/api/skills';
 import { AiStepFormBody, type ConnectorOption } from './AiStepFormBody';
 
 /**
@@ -12,12 +11,10 @@ import { AiStepFormBody, type ConnectorOption } from './AiStepFormBody';
 export function AiStepPreview({
   step,
   connectors,
-  skills,
   availableVars,
 }: {
   step: AiStep;
   connectors: ConnectorOption[];
-  skills: Skill[];
   availableVars?: string[];
 }) {
   // Read-only mode — no need for setForm to do anything useful.  Supply a
@@ -29,7 +26,6 @@ export function AiStepPreview({
     model: step.model,
     connector_ids: step.connector_ids ?? [],
     outputs: step.outputs ?? [],
-    skill_ids: step.skill_ids ?? [],
   };
 
   return (
@@ -38,7 +34,6 @@ export function AiStepPreview({
         form={form}
         setForm={() => {}}
         connectors={connectors}
-        skills={skills}
         readOnly
         availableVars={availableVars}
       />

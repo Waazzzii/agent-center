@@ -14,7 +14,6 @@ import {
 } from '@/lib/api/agents';
 import { listClients, clientDisplayName, type Client } from '@/lib/api/clients';
 import { getConnectors } from '@/lib/api/connectors';
-import { getSkills, type Skill } from '@/lib/api/skills';
 import { listScripts, type BrowserScript } from '@/lib/api/scripts';
 import { listAiSteps, createAiStep, updateAiStep, type AiStep } from '@/lib/api/ai-steps';
 import { useAiModels } from '@/lib/hooks/use-ai-models';
@@ -274,7 +273,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [actions, setActions] = useState<AgentAction[]>([]);
   const [triggers, setTriggers] = useState<AgentTrigger[]>([]);
   const [connectors, setConnectors] = useState<OrganizationConnector[]>([]);
-  const [skills, setSkills] = useState<Skill[]>([]);
   const [browserScripts, setBrowserScripts] = useState<BrowserScript[]>([]);
   const [webhookKey, setWebhookKey] = useState<AgentWebhookKey | null>(null);
   const [loading, setLoading] = useState(true);
@@ -322,7 +320,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   const [aiStepMode, setAiStepMode] = useState<'new' | 'existing'>('new');
   const [newAiStepForm, setNewAiStepForm] = useState<AiStepFormData>({
     name: '', description: '', prompt: '', model: '',
-    connector_ids: [], outputs: [], skill_ids: [],
+    connector_ids: [], outputs: [],
   });
 
   const [approvalMode, setApprovalMode] = useState<'new' | 'existing'>('new');
@@ -417,11 +415,10 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     if (!selectedOrgId) return;
     try {
       setLoading(true);
-      let [agentData, actionsData, connData, skillsData, allGroupsData, scriptsData, aiStepsData, loginsData, approvalStepsData] = await Promise.all([
+      let [agentData, actionsData, connData, allGroupsData, scriptsData, aiStepsData, loginsData, approvalStepsData] = await Promise.all([
         getAgent(selectedOrgId, agentId),
         getActions(selectedOrgId, agentId),
         getConnectors(selectedOrgId),
-        getSkills(selectedOrgId),
         getAgentAccessGroups(selectedOrgId),
         // Deliberately UNFILTERED by kind. This list does double duty: it
         // populates the browser_script action picker AND resolves names for
@@ -452,7 +449,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       const webhookTrigger = triggers.find((t) => t.trigger_type === 'webhook');
       if (webhookTrigger) loadWebhookKey(webhookTrigger.id);
       setConnectors(connData.connectors);
-      setSkills(skillsData.items ?? []);
       setBrowserScripts(scriptsData.scripts ?? []);
       setAiSteps(aiStepsData);
       setLogins(loginsData);
@@ -467,12 +463,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
   }, [selectedOrgId, agentId, router]);
 
   // Lightweight in-place refresh after an edit — refetches ONLY the workflow
-  // data and never toggles `loading`, so inline edits (steps, skills, login)
+  // data and never toggles `loading`, so inline edits (steps, login)
   // update the UI without a full-screen spinner.
   const refreshData = useCallback(async () => {
     if (!selectedOrgId) return;
     try {
-      const [actionsData, scriptsData, aiStepsData, loginsData, approvalStepsData, skillsData] = await Promise.all([
+      const [actionsData, scriptsData, aiStepsData, loginsData, approvalStepsData] = await Promise.all([
         getActions(selectedOrgId, agentId),
         // Deliberately UNFILTERED by kind. This list does double duty: it
         // populates the browser_script action picker AND resolves names for
@@ -484,14 +480,12 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
         listAiSteps(selectedOrgId).catch(() => [] as AiStep[]),
         listLogins(selectedOrgId).catch(() => [] as Login[]),
         listApprovalSteps(selectedOrgId).catch(() => [] as ApprovalStep[]),
-        getSkills(selectedOrgId),
       ]);
       setActions((actionsData ?? []).sort((a, b) => a.order_index - b.order_index));
       setBrowserScripts(scriptsData.scripts ?? []);
       setAiSteps(aiStepsData);
       setLogins(loginsData);
       setApprovalSteps(approvalStepsData);
-      setSkills(skillsData.items ?? []);
     } catch {
       /* keep the current UI on a transient refresh failure */
     }
@@ -540,7 +534,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
     });
     // Inline editors start blank on "create new".
     setAiStepMode('new');
-    setNewAiStepForm({ name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [], skill_ids: [] });
+    setNewAiStepForm({ name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [] });
     setApprovalMode('new');
     setNewApprovalStepForm({ name: '', instructions: '', notificationSlackChannelId: '' });
     setLoginMode('new');
@@ -572,8 +566,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
       setAiStepMode('existing');
       const s = aiSteps.find((x) => x.id === action.ai_step_id);
       setNewAiStepForm(s
-        ? { name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [], skill_ids: s.skill_ids ?? [] }
-        : { name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [], skill_ids: [] });
+        ? { name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [] }
+        : { name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [] });
     }
     if (action.action_type === 'approval') {
       setApprovalMode('existing');
@@ -631,7 +625,6 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
           outputs: newAiStepForm.outputs
             .filter((o) => o.key.trim())
             .map((o) => ({ key: o.key.trim(), description: o.description.trim(), required: o.required !== false })),
-          skill_ids: newAiStepForm.skill_ids,
         };
         if (aiStepMode === 'existing' && aiStepId) {
           await updateAiStep(selectedOrgId, aiStepId, aiInput);
@@ -1933,7 +1926,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                       // Keep aiStepId so switching back to "Use existing"
                       // restores the previous step; just blank the draft.
                       setAiStepMode('new');
-                      setNewAiStepForm({ name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [], skill_ids: [] });
+                      setNewAiStepForm({ name: '', description: '', prompt: '', model: '', connector_ids: [], outputs: [] });
                       return;
                     }
                     setAiStepMode('existing');
@@ -1943,7 +1936,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     if (targetId) {
                       const s = aiSteps.find((x) => x.id === targetId);
                       setActionForm(f => ({ ...f, aiStepId: targetId }));
-                      if (s) setNewAiStepForm({ name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [], skill_ids: s.skill_ids ?? [] });
+                      if (s) setNewAiStepForm({ name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [] });
                     }
                   }}
                 />
@@ -1961,19 +1954,19 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     <SearchableSelect
                       value={actionForm.aiStepId}
                       options={aiSteps.map((s) => ({ value: s.id, label: s.name, hint: s.description ?? undefined }))}
-                      placeholder="Select an AI skill to edit…"
-                      emptyLabel="No AI skills yet"
-                      searchPlaceholder="Search AI skills by name or description…"
+                      placeholder="Select an AI step to edit…"
+                      emptyLabel="No AI steps yet"
+                      searchPlaceholder="Search AI steps by name or description…"
                       onChange={(v) => {
                         const s = aiSteps.find((x) => x.id === v);
                         setActionForm(f => ({ ...f, aiStepId: v }));
-                        if (s) setNewAiStepForm({ name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [], skill_ids: s.skill_ids ?? [] });
+                        if (s) setNewAiStepForm({ name: s.name, description: s.description ?? '', prompt: s.prompt, model: s.model, connector_ids: s.connector_ids ?? [], outputs: s.outputs ?? [] });
                       }}
                     />
                     <EntityPreviewNotice
                       entityLabel="AI step"
                       editHref={actionForm.aiStepId ? `/actions/ai-steps/${actionForm.aiStepId}` : '/actions/ai-steps'}
-                      editLabel="AI Skills"
+                      editLabel="AI Steps"
                     />
                   </div>
                 )}
@@ -1985,14 +1978,8 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                     connectors={connectors
                       .filter((c) => (c as unknown as { agent_enabled?: boolean }).agent_enabled)
                       .map((c) => ({ id: c.id, label: (c as unknown as { connector_name?: string }).connector_name ?? c.id }))}
-                    skills={skills}
                     availableVars={availableVars}
                     orgId={selectedOrgId}
-                    onSkillsChanged={() => { if (selectedOrgId) getSkills(selectedOrgId).then((r) => setSkills(r.items ?? [])).catch(() => {}); }}
-                    // Skills are not selectable from a routine — not here and not on
-                    // the step card. Existing skill_ids on an AI step are left alone;
-                    // they are managed where skills themselves live.
-                    showSkills={false}
                   />
                 ) : (
                   <p className="text-sm text-muted-foreground">Pick an AI step above to edit it here.</p>
@@ -2220,11 +2207,11 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                 <EntityPreviewNotice
                   entityLabel="browser script"
                   editHref="/actions/browser-scripts"
-                  editLabel="Browser Skills"
+                  editLabel="Browser Scripts"
                 />
                 <div className="space-y-1">
                   <Label>Script <span className="text-destructive">*</span></Label>
-                  {/* Only real browser skills belong in a routine step. Login and
+                  {/* Only real browser scripts belong in a routine step. Login and
                       login-check scripts are run BY the login machinery, not
                       scheduled as steps. The full list is still loaded (it resolves
                       display names for existing actions), so an action already
@@ -2240,9 +2227,9 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         label: s.name,
                         hint: s.description ?? undefined,
                       }))}
-                    placeholder="Select a browser skill…"
-                    emptyLabel="No browser skills available"
-                    searchPlaceholder="Search browser skills by name or description…"
+                    placeholder="Select a browser script…"
+                    emptyLabel="No browser scripts available"
+                    searchPlaceholder="Search browser scripts by name or description…"
                   />
                   {/* Browser scripts are recorded/edited in their own full-screen
                       recorder, so link across to Browser Scripts rather than
@@ -2263,7 +2250,7 @@ export default function AgentDetailPage({ params }: { params: Promise<{ id: stri
                         : '/actions/browser-scripts';
                       return (
                         <Link href={href} className="text-xs text-muted-foreground hover:underline">
-                          Edit in Browser Skills →
+                          Edit in Browser Scripts →
                         </Link>
                       );
                     })()}

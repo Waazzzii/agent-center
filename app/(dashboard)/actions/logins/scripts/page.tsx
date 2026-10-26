@@ -12,7 +12,7 @@ import { ScriptsList } from '@/components/record/ScriptsList';
 import { RunScriptModal } from '@/components/record/RunScriptModal';
 
 /**
- * Login scripts — the same page as Browser Skills, pointed at a different pool.
+ * Login scripts — the same page as Browser Scripts, pointed at a different pool.
  *
  * Deliberately the same table, search, sort and delete guard rather than a
  * bespoke manager: a login script is a browser script, and the only thing that

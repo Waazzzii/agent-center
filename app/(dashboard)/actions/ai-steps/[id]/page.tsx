@@ -9,7 +9,6 @@ import {
   type AiStep, type AiStepOutput,
 } from '@/lib/api/ai-steps';
 import { getConnectors } from '@/lib/api/connectors';
-import { getSkills, type Skill } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -32,11 +31,10 @@ export default function EditAiStepPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [connectors, setConnectors] = useState<{ id: string; label: string }[]>([]);
-  const [skills, setSkills] = useState<Skill[]>([]);
 
   const [form, setForm] = useState<AiStepFormData>({
     name: '', description: '', prompt: '', model: '',
-    connector_ids: [], outputs: [], skill_ids: [],
+    connector_ids: [], outputs: [],
   });
 
   const { tags, createTag } = useTags(selectedOrgId);
@@ -46,10 +44,9 @@ export default function EditAiStepPage() {
     if (!selectedOrgId || !id) return;
     setLoading(true);
     try {
-      const [stepData, conns, skillsData] = await Promise.all([
+      const [stepData, conns] = await Promise.all([
         getAiStep(selectedOrgId, id),
         getConnectors(selectedOrgId).catch(() => ({ connectors: [] as any[] })),
-        getSkills(selectedOrgId, { limit: 100 }).catch(() => ({ items: [] as Skill[] })),
       ]);
       setStep(stepData);
       setForm({
@@ -59,11 +56,9 @@ export default function EditAiStepPage() {
         model: stepData.model,
         connector_ids: stepData.connector_ids ?? [],
         outputs: stepData.outputs ?? [],
-        skill_ids: stepData.skill_ids ?? [],
       });
       setTagIds((stepData.tags ?? []).map((t) => t.id));
       setConnectors((conns.connectors ?? []).filter((c: any) => c.agent_enabled).map((c: any) => ({ id: c.id, label: c.connector_name ?? c.id })));
-      setSkills(skillsData.items ?? []);
     } catch {
       toast.error('Failed to load AI step');
     } finally {
@@ -93,7 +88,6 @@ export default function EditAiStepPage() {
             // which the verifier honors but reads less obviously.
             required: o.required !== false,
           })),
-        skill_ids: form.skill_ids,
         tag_ids: tagIds,
       });
       toast.success('AI step saved');
@@ -164,9 +158,7 @@ export default function EditAiStepPage() {
             form={form}
             setForm={setForm as any}
             connectors={connectors}
-            skills={skills}
             orgId={selectedOrgId}
-            onSkillsChanged={() => { if (selectedOrgId) getSkills(selectedOrgId, { limit: 100 }).then((r) => setSkills(r.items ?? [])).catch(() => {}); }}
           />
           <div className="mt-4 space-y-1 border-t pt-4">
             <Label>Groups</Label>

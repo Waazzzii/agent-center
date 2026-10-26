@@ -96,7 +96,6 @@ export interface AiStep {
   connector_ids: string[];
   /** Declared output schema — executor appends JSON instruction + parses result. */
   outputs: AiStepOutput[];
-  skill_ids?: string[] | null;
   created_at: string;
   updated_at: string;
   /** Tags applied to this AI step. Present on list/get/create/update responses. */
@@ -110,7 +109,6 @@ export interface AiStepInput {
   model?: string;
   connector_ids?: string[];
   outputs?: AiStepOutput[];
-  skill_ids?: string[];
   tag_ids?: string[];
 }
 

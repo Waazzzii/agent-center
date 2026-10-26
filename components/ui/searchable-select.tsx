@@ -3,8 +3,8 @@
 /**
  * A single-select picker with a search box and a bounded, scrolling list.
  *
- * Exists because the routine editor's entity pickers (AI skills, browser
- * skills, logins, approvals, sub-agents) are plain Radix Selects: the list
+ * Exists because the routine editor's entity pickers (AI steps, browser
+ * scripts, logins, approvals, sub-agents) are plain Radix Selects: the list
  * renders every row with no height cap and no way to search. That is fine with
  * six of something and unusable with sixty — the operator scrolls a wall of
  * names looking for one, and on a long list the popover runs off the screen.

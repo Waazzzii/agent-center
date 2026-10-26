@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import { type AiStep } from '@/lib/api/ai-steps';
-import { type Skill } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
 import {
   Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle,
@@ -18,12 +17,10 @@ interface AiStepDialogProps {
   onOpenChange: (open: boolean) => void;
   step?: AiStep | null;
   connectors: ConnectorOption[];
-  skills: Skill[];
   readOnly?: boolean;
   saving?: boolean;
   onSave?: (data: AiStepFormData) => Promise<void>;
   orgId?: string | null;
-  onSkillsChanged?: () => void;
 }
 
 export function AiStepDialog({
@@ -31,12 +28,10 @@ export function AiStepDialog({
   onOpenChange,
   step,
   connectors,
-  skills,
   readOnly = false,
   saving = false,
   onSave,
   orgId,
-  onSkillsChanged,
 }: AiStepDialogProps) {
 
   const [form, setForm] = useState<AiStepFormData>({
@@ -47,7 +42,6 @@ export function AiStepDialog({
     model: '',
     connector_ids: [],
     outputs: [],
-    skill_ids: [],
   });
 
   useEffect(() => {
@@ -59,7 +53,6 @@ export function AiStepDialog({
         model: step?.model ?? '',
         connector_ids: step?.connector_ids ?? [],
         outputs: step?.outputs ?? [],
-        skill_ids: step?.skill_ids ?? [],
       });
     }
   }, [open, step]);
@@ -77,7 +70,7 @@ export function AiStepDialog({
         {readOnly && (
           <InfoBlock>
             This is read-only.  To make changes,{' '}
-            <Link href="/actions/ai-steps" className="text-brand hover:underline font-medium">edit it in AI Skills →</Link>
+            <Link href="/actions/ai-steps" className="text-brand hover:underline font-medium">edit it in AI Steps →</Link>
           </InfoBlock>
         )}
 
@@ -85,10 +78,8 @@ export function AiStepDialog({
           form={form}
           setForm={setForm}
           connectors={connectors}
-          skills={skills}
           readOnly={readOnly}
           orgId={orgId}
-          onSkillsChanged={onSkillsChanged}
         />
 
         <DialogFooter>

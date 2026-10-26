@@ -174,11 +174,20 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
         <>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Format">
-              <Select value={step.format ?? 'pdf'} onValueChange={(v) => set({ format: v === 'png' ? 'png' : undefined })}>
+              <Select
+                value={step.format ?? 'pdf'}
+                onValueChange={(v) => set(
+                  v === 'html'
+                    // html stores the DOM as rendered: no unrolling, no print styles.
+                    ? { format: 'html', expand: undefined, expand_selector: undefined, media: undefined }
+                    : { format: v === 'png' ? 'png' : undefined },
+                )}
+              >
                 <SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent position="popper" align="start">
                   <SelectItem value="pdf">PDF — selectable text</SelectItem>
                   <SelectItem value="png">PNG — full-length screenshot</SelectItem>
+                  <SelectItem value="html">HTML — the page&apos;s markup, for parsing</SelectItem>
                 </SelectContent>
               </Select>
             </Field>
@@ -199,6 +208,7 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
               onChange={(e) => set({ selector: e.target.value })}
             />
           </Field>
+          {step.format !== 'html' && (
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-0.5">
               <p className="text-[11px] font-medium">Unroll scrolling panes</p>
@@ -213,7 +223,8 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
               aria-label="Unroll scrolling panes"
             />
           </div>
-          {step.expand !== false && (
+          )}
+          {step.format !== 'html' && step.expand !== false && (
             <Field label="Pane to unroll" hint="Blank auto-detects every clipped pane. Name one if it unrolls the wrong thing.">
               <Input
                 className="font-mono text-xs"
@@ -237,6 +248,24 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
             </div>
           )}
         </>
+      )}
+
+      {(step.action === 'download' || step.action === 'save_page') && (
+        <Field
+          label="Keep the file"
+          hint="1 day suits a file this run uses, or a caller fetches right after it. 30 days is for a file a later run or a decision will attach."
+        >
+          <Select
+            value={step.storage ?? 'temporary'}
+            onValueChange={(v) => set({ storage: v === 'persistent' ? 'persistent' : undefined })}
+          >
+            <SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent position="popper" align="start">
+              <SelectItem value="temporary">1 day — temporary</SelectItem>
+              <SelectItem value="persistent">30 days — persistent</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
       )}
 
       <Field

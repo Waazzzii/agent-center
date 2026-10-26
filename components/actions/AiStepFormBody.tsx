@@ -1,7 +1,6 @@
 'use client';
 
 import { type AiStepOutput, buildOutputInstructionBlock } from '@/lib/api/ai-steps';
-import { type Skill } from '@/lib/api/skills';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
@@ -14,7 +13,6 @@ import { useEffect } from 'react';
 import { Plus, Trash2, ArrowUpFromLine } from 'lucide-react';
 import { InputsList, parseVars } from './InputsList';
 import { MultiSelectTags } from '@/components/ui/multi-select-tags';
-import { SkillChips } from './SkillChips';
 import { useAiModels } from '@/lib/hooks/use-ai-models';
 
 export interface ConnectorOption { id: string; label: string; }
@@ -26,7 +24,6 @@ export interface AiStepFormData {
   model: string;
   connector_ids: string[];
   outputs: AiStepOutput[];
-  skill_ids: string[];
 }
 
 /**
@@ -46,17 +43,11 @@ interface Props {
   form: AiStepFormData;
   setForm: (updater: (f: AiStepFormData) => AiStepFormData) => void;
   connectors: ConnectorOption[];
-  skills: Skill[];
   readOnly?: boolean;
   /** When provided (workflow context), Required Inputs are colored by availability. */
   availableVars?: string[];
-  /** Org id — enables inline skill create/edit from the skill chips. */
+  /** Org id — scopes the model catalog. */
   orgId?: string | null;
-  /** Called after a skill is created/updated so the parent can refetch the skills list. */
-  onSkillsChanged?: () => void;
-  /** Show the Skills section. Off in the workflow flyout — skills are managed on
-   *  the step card there. Default true (standalone AI-step editor). */
-  showSkills?: boolean;
 }
 
 /**
@@ -68,20 +59,12 @@ interface Props {
  * edit view field-for-field.
  */
 /**
- * showSkills defaults to FALSE: the old skill library is retired.
- *
- * Skills were attachable prompt fragments you assigned to an AI step. Now that
- * AI steps are themselves the reusable, shareable unit that routines are built
- * from, a second layer of attachable things inside them was a distinction
- * without a difference — and one more concept for an operator to learn before
- * they could build anything.
- *
- * Deliberately hidden rather than deleted. Existing skill_ids stay on their
- * rows and keep being honoured at run time, so nothing that works today stops
- * working; there is just no longer a way to add more. Pass showSkills to opt a
- * surface back in if that turns out to be wrong.
+ * No skills section: the skill library (attachable prompt fragments) is retired
+ * — AI steps are themselves the reusable unit. The form never sends skill_ids,
+ * so a save leaves any a step already carries untouched (the backend only
+ * rewrites them when the field is present).
  */
-export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = false, availableVars, orgId, onSkillsChanged, showSkills = false }: Props) {
+export function AiStepFormBody({ form, setForm, connectors, readOnly = false, availableVars, orgId }: Props) {
   // The catalog, from the backend. `models` carries retired rows too, which is
   // what lets a step on an old model show a label instead of a raw id.
   const { models: catalogModels, selectable: selectableModels, defaultModel } = useAiModels(orgId);
@@ -310,20 +293,6 @@ export function AiStepFormBody({ form, setForm, connectors, skills, readOnly = f
             onChange={(ids) => setForm((f) => ({ ...f, connector_ids: ids }))}
             placeholder="Select connectors…"
             disabled={readOnly}
-          />
-        </div>
-      )}
-
-      {showSkills && (!readOnly || form.skill_ids.length > 0) && (
-        <div className="space-y-1">
-          <Label>Skills</Label>
-          <SkillChips
-            orgId={orgId ?? null}
-            skills={skills}
-            selectedIds={form.skill_ids}
-            onChange={(ids) => setForm((f) => ({ ...f, skill_ids: ids }))}
-            onSkillsChanged={onSkillsChanged}
-            readOnly={readOnly}
           />
         </div>
       )}

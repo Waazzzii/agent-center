@@ -89,7 +89,7 @@ interface ScriptsListProps {
   kinds?: ScriptKind[];
   /**
    * Seed for the search box, for arriving from somewhere that already knows
-   * which script you want — "Edit in Browser Skills" on an agent step, say.
+   * which script you want — "Edit in Browser Scripts" on an agent step, say.
    *
    * Only the INITIAL value: it is seeded once, and typing then owns the field.
    * Binding it would make the box un-clearable while the URL still carried a
