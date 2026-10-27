@@ -409,8 +409,12 @@ export interface LoginProxyPatch {
  * Proxy for a login. `enabled` applies to the whole pool; `ip_id` to the login
  * in a shared pool and to this browser in a separate one.
  */
-export async function setLoginProxy(orgId: string, id: string, patch: LoginProxyPatch): Promise<Login> {
-  const res = await agentClient.patch<Login>(`/api/admin/${orgId}/logins/${id}/proxy`, patch);
+export async function setLoginProxy(
+  orgId: string, id: string, patch: LoginProxyPatch,
+): Promise<Login & { session_cleared?: boolean }> {
+  // session_cleared: the route changed, so the backend signed the affected
+  // browsers out (their profiles wiped, like Log Out).
+  const res = await agentClient.patch<Login & { session_cleared?: boolean }>(`/api/admin/${orgId}/logins/${id}/proxy`, patch);
   return res.data;
 }
 

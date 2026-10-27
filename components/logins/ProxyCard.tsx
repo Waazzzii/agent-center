@@ -25,6 +25,11 @@
  *
  * This mirrors the data exactly: proxy_enabled always follows the parent;
  * proxy_ip_id follows the credential mode.
+ *
+ * A CHANGE OF ROUTE SIGNS THE BROWSER OUT. The saved session's cookies were
+ * issued to the old IP, and bot protection treats a session that reappears on
+ * another IP as stolen or scripted, so the backend wipes the profile of every
+ * browser whose route changed, exactly like Log Out. Each change asks first.
  */
 
 import { useEffect, useState } from 'react';
@@ -36,6 +41,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { InfoBubble } from '@/components/actions/login-fields';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 
 function apiError(err: unknown): string | undefined {
   return (err as { response?: { data?: { error?: string } } } | null)?.response?.data?.error;
@@ -134,6 +140,7 @@ export function ProxyCard({
   // select. A spinner on a line of its own grew the card by a row while it
   // spun and shrank it again after — the bounce this replaced.
   const [busy, setBusy] = useState<'toggle' | 'ip' | null>(null);
+  const { confirm } = useConfirmDialog();
 
   const loadAccount = () =>
     getProxyAccountConfigured(orgId)
@@ -146,6 +153,33 @@ export function ProxyCard({
     patch: Parameters<typeof setLoginProxy>[2],
     ok: string,
   ) => {
+    // Whose session goes: a shared pool's IP and the on/off switch move every
+    // browser in the pool; a separate pool's IP moves only this browser.
+    const wholePool = pooled && (which === 'toggle' || sharedCredentials);
+    const confirmed = await confirm({
+      title: 'Change the Proxy and Sign Out?',
+      description: (
+        <div className="space-y-2">
+          <p>
+            Changing the route signs out{' '}
+            {wholePool ? 'every browser in ' : ''}
+            <span className="font-medium text-foreground">{login.name}</span>: its saved session is wiped,
+            exactly like Log Out. The cookies were issued to the old IP, and sites that check for bots
+            treat a session that turns up on a new IP as suspicious.
+          </p>
+          <p>
+            <span className="font-medium text-destructive">
+              Any agent runs using {wholePool ? 'these browsers' : 'this browser'} right now will fail mid-step.
+            </span>{' '}
+            The next run signs in fresh on the new route.
+          </p>
+        </div>
+      ),
+      confirmText: 'Change and Sign Out',
+      cancelText: 'Cancel',
+      variant: 'destructive',
+    });
+    if (!confirmed) return;
     setBusy(which);
     try {
       await setLoginProxy(orgId, login.id, patch);
@@ -183,7 +217,7 @@ export function ProxyCard({
             value={login.proxy_ip_id}
             disabled={busy !== null}
             saving={busy === 'ip'}
-            onChange={(v) => save('ip', { ip_id: v }, 'IP changed — takes effect on the next run')}
+            onChange={(v) => save('ip', { ip_id: v }, 'IP changed — signed out; the next run starts fresh on the new IP')}
           />
         </CardContent>
       </Card>
@@ -213,7 +247,7 @@ export function ProxyCard({
                 v === true
                   ? { enabled: true, ...(login.proxy_ip_id || perBrowserIp ? {} : { ip_id: selectable[0]?.id ?? null }) }
                   : { enabled: false },
-                v === true ? 'Proxy on — takes effect on the next run' : 'Proxy off',
+                v === true ? 'Proxy on — signed out; the next run starts fresh through it' : 'Proxy off — signed out',
               )}
             />
             )}
@@ -228,8 +262,8 @@ export function ProxyCard({
             </span>
           </label>
           <InfoBubble>
-            Changes take effect on the next run — a browser already open on the old route is
-            restarted rather than reused. Several logins can share one IP.
+            Changing the route signs the browser out and wipes its saved session, like Log Out, so
+            the next run starts fresh on the new route. Several logins can share one IP.
           </InfoBubble>
         </div>
 
@@ -262,7 +296,7 @@ export function ProxyCard({
                   value={login.proxy_ip_id}
                   disabled={busy !== null}
                   saving={busy === 'ip'}
-                  onChange={(v) => save('ip', { ip_id: v }, 'IP changed — takes effect on the next run')}
+                  onChange={(v) => save('ip', { ip_id: v }, 'IP changed — signed out; the next run starts fresh on the new IP')}
                 />
               </>
             )}
