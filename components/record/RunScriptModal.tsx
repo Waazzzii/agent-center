@@ -38,6 +38,7 @@ import {
   interruptStepRun,
   jumpStepRunToIndex,
   abortStepRun,
+  startConfiguredRun,
   startStepRunRecording,
   stopStepRunRecording,
   updateStepRunStep,
@@ -62,6 +63,7 @@ import { listLogins, getLoginCredentialKeys, assignableLogins, type Login } from
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { isReservedParam } from '@/lib/script-params';
 import { GuidedRecordDialog } from './GuidedRecordDialog';
+import { BrowserModeSettings, browserModeSummary } from './BrowserModeSettings';
 import type { ScriptKind } from '@/lib/api/scripts';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
@@ -683,6 +685,27 @@ export function RunScriptModal({
   const [dragStepIdx, setDragStepIdx] = useState<number | null>(null);
   const [dropStepIdx, setDropStepIdx] = useState<number | null>(null);
   const cancelAutoRunRef = useRef(false);
+
+  // ── Browser settings (headless / first-party only) ───────────
+  // Local copy of the script's two browser settings, so the toolbar control
+  // can change them without reloading the script. Agent runs and Auto follow
+  // them; recording and single steps stay headed but honour first-party only.
+  const [browserMode, setBrowserMode] = useState({
+    headless: script?.headless === true,
+    first_party_only: script?.first_party_only === true,
+  });
+  useEffect(() => {
+    setBrowserMode({ headless: script?.headless === true, first_party_only: script?.first_party_only === true });
+  }, [script?.id, script?.headless, script?.first_party_only]);
+  // What the last run-as-configured showed. A headless run has no live view,
+  // so its screenshot and outcome sit over the live browser until dismissed.
+  const [configuredView, setConfiguredView] = useState<{
+    running: boolean;
+    screenshot: string | null;
+    summary: string;
+    outcome: string | null;
+    ok: boolean;
+  } | null>(null);
   const resizeDragRef = useRef<{ startY: number; startH: number } | null>(null);
 
   const handleResizeMouseDown = (e: React.MouseEvent) => {
@@ -1762,6 +1785,100 @@ export function RunScriptModal({
    * prior click, where Auto Test's ~150ms inter-step gap is enough for
    * the page to settle but the agent runtime outruns the settle.
    */
+  /**
+   * Auto on a HEADLESS script: run it as configured. The live browser here has
+   * a screen by definition, so the run happens in a fresh headless browser of
+   * its own, from the first step — the script's current (even unsaved) steps
+   * and its first-party setting, exactly as an agent run would. Progress shows
+   * in the step list and in a panel over the live view; the live browser is
+   * left as it was.
+   */
+  const handleRunConfigured = async () => {
+    if (!runId || !orgId || !stepRunState) return;
+    setRunMode('agent');
+    setApprovedGates(new Set());
+    setPendingGateIndex(null);
+    startReplayActivity(0, {});
+    cancelAutoRunRef.current = false;
+    const controller = new AbortController();
+    autoRunAbortRef.current = controller;
+    const summary = browserModeSummary(browserMode);
+    setConfiguredView({ running: true, screenshot: null, summary, outcome: null, ok: false });
+    setStepRunState((s) => s ? { ...s, status: 'running', currentIndex: 0, done: false } : s);
+    setError(null);
+    pushActivity('step', `Running as configured (${summary}) in a separate browser, from the first step`);
+
+    let testRunId: string | null = null;
+    let pollId: number | null = null;
+    try {
+      const started = await startConfiguredRun(orgId, runId, params);
+      testRunId = started.runId;
+      const pollRunId = testRunId;
+      pollId = window.setInterval(async () => {
+        try {
+          const snap = await getStepRun(orgId, pollRunId);
+          setStepRunState((s) => s ? {
+            ...s,
+            currentIndex: snap.currentIndex,
+            totalSteps:   snap.totalSteps,
+            step:         snap.step,
+            extracted:    snap.extracted ?? s.extracted,
+          } : s);
+          if (snap.lastScreenshot) {
+            setConfiguredView((v) => v ? { ...v, screenshot: snap.lastScreenshot } : v);
+          }
+        } catch { /* best-effort, like Auto's own poll */ }
+      }, 750);
+
+      const res = await runRemainingStepsAgentMode(orgId, testRunId, params, controller.signal, [], script?.id ?? tempScriptId, buildReservedHints());
+      const outcome = res.done
+        ? `Completed all ${res.totalSteps} steps`
+        : res.awaiting_approval
+          ? `Stopped before step ${res.currentIndex + 1} — it submits, and a run as configured does not approve submits. Step through it in the live browser.`
+          : res.interrupted ? 'Stopped' : `Stopped at step ${res.currentIndex + 1}`;
+      setConfiguredView((v) => v ? { ...v, running: false, screenshot: res.screenshot ?? v.screenshot, outcome, ok: res.done === true } : v);
+      if (res.extracted && Object.keys(res.extracted).length > 0) {
+        setParams((p) => ({ ...p, ...asParamMap(res.extracted) }));
+      }
+      if (res.done) toast.success('Ran as configured — all steps completed');
+      else if (res.interrupted) toast.info('Run stopped');
+      else pushActivity('error', `✗ ${outcome}`);
+    } catch (err: any) {
+      if (err?.name === 'AbortError' || err?.name === 'CanceledError' || cancelAutoRunRef.current) {
+        setConfiguredView((v) => v ? { ...v, running: false, outcome: 'Stopped', ok: false } : v);
+        toast.info('Run stopped');
+      } else {
+        const msg = err?.response?.data?.error || err?.message || 'Run failed';
+        const screenshot = err?.response?.data?.screenshot ?? null;
+        setConfiguredView((v) => v ? { ...v, running: false, screenshot: screenshot ?? v.screenshot, outcome: msg, ok: false } : v);
+        setError(msg);
+        pushActivity('error', `✗ ${msg}`);
+      }
+    } finally {
+      if (pollId !== null) window.clearInterval(pollId);
+      autoRunAbortRef.current = null;
+      // The test browser is done either way — free it.
+      if (testRunId) void abortStepRun(orgId, testRunId).catch(() => { /* swept if this fails */ });
+      // Point the step list back at where the LIVE browser is, so the next
+      // single step runs where it says it will. The test's outcome stays in the
+      // panel and the activity log.
+      try {
+        const live = await getStepRun(orgId, runId);
+        startReplayActivity(live.currentIndex, live.extracted ?? {});
+        setStepRunState((s) => s ? {
+          ...s,
+          currentIndex: live.currentIndex,
+          totalSteps:   live.totalSteps,
+          step:         live.step,
+          done:         live.status === 'done',
+          status:       'waiting',
+        } : s);
+      } catch {
+        setStepRunState((s) => s ? { ...s, status: 'waiting' } : s);
+      }
+    }
+  };
+
   const handleRunAgentMode = async (gates?: Set<number>) => {
     if (!runId || !orgId || !stepRunState || stepRunState.done) return;
     // See handleExecuteStep — records the flow for gate resume.
@@ -3515,6 +3632,18 @@ export function RunScriptModal({
             runs. */}
         <div className="flex items-center gap-1.5 shrink-0">
 
+          {/* Browser settings — how agent runs and Auto run this script. Beside
+              Auto because Auto is what follows them. */}
+          {runId && orgId && (
+            <BrowserModeSettings
+              variant="toolbar"
+              orgId={orgId}
+              liveRunId={runId}
+              script={script?.id ? { ...script, kind: scriptKind, ...browserMode } : null}
+              onChange={(fields) => setBrowserMode(fields)}
+            />
+          )}
+
           {/* Run + Auto. In the TOOLBAR, next to the mode icons, because that
               is where the run-looking ▷ already was — and where the operator
               kept reaching. Hidden outside Test: there is nothing to run while
@@ -3549,7 +3678,9 @@ export function RunScriptModal({
                     'flex items-center gap-1.5 text-[11px] select-none',
                     hasSteps ? 'cursor-pointer text-muted-foreground hover:text-foreground' : 'text-muted-foreground/50',
                   )}
-                  title="Run every remaining step instead of stopping after the next one"
+                  title={browserMode.headless && script?.id
+                    ? 'Run the whole script as configured — headless, in a separate browser — instead of one step'
+                    : 'Run every remaining step instead of stopping after the next one'}
                 >
                   <input
                     type="checkbox"
@@ -3563,11 +3694,16 @@ export function RunScriptModal({
                 <Button
                   size="sm"
                   className="h-7 w-20 shrink-0 justify-center bg-green-600 text-white hover:bg-green-700"
-                  onClick={() => runAuto ? handleRunAgentMode() : handleExecuteStep()}
+                  onClick={() => runAuto
+                    ? (browserMode.headless && script?.id ? handleRunConfigured() : handleRunAgentMode())
+                    : handleExecuteStep()}
                   disabled={isRecording || isCapturingWaitFor || isCapturingExtract || !hasSteps || !!stepRunState?.done}
                   title={
                     stepRunState?.done ? 'Run complete — click any step to re-run from there.'
-                    : runAuto ? 'Run every remaining step, with agent-runtime timing'
+                    : runAuto
+                      ? (browserMode.headless && script?.id
+                        ? `Run the whole script as configured (${browserModeSummary(browserMode)}) in a separate browser`
+                        : 'Run every remaining step, with agent-runtime timing')
                     : 'Run the next step only'
                   }
                 >
@@ -3706,14 +3842,55 @@ export function RunScriptModal({
               ) : null}
             </div>
           ) : viewerUrl ? (
-            <iframe
-              ref={vncIframeRef}
-              src={`${agentApiUrl}${viewerUrl}`}
-              className="w-full h-full border-0 block"
-              scrolling="no"
-              title="Browser"
-              allow="clipboard-read; clipboard-write"
-            />
+            <div className="relative w-full h-full">
+              <iframe
+                ref={vncIframeRef}
+                src={`${agentApiUrl}${viewerUrl}`}
+                className="w-full h-full border-0 block"
+                scrolling="no"
+                title="Browser"
+                allow="clipboard-read; clipboard-write"
+              />
+              {/* A run as configured happens in a headless browser of its own,
+                  which has no live view — so what it saw goes here, over the
+                  live browser, until dismissed. */}
+              {configuredView && (
+                <div className="absolute inset-0 z-10 flex flex-col bg-background/95">
+                  <div className="flex items-center gap-2 border-b px-3 py-2 text-xs">
+                    {configuredView.running
+                      ? <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />
+                      : configuredView.ok
+                        ? <span className="h-2 w-2 shrink-0 rounded-full bg-green-600" />
+                        : <span className="h-2 w-2 shrink-0 rounded-full bg-amber-500" />}
+                    <span className="min-w-0 flex-1">
+                      <span className="font-medium">Run as configured · {configuredView.summary}</span>
+                      <span className="text-muted-foreground">
+                        {configuredView.running
+                          ? ' — in a separate browser with no live view, as an agent run. The live browser underneath is unchanged.'
+                          : ` — ${configuredView.outcome}`}
+                      </span>
+                    </span>
+                    {!configuredView.running && (
+                      <Button size="sm" variant="outline" className="h-6 px-2 text-xs" onClick={() => setConfiguredView(null)}>
+                        Back to live browser
+                      </Button>
+                    )}
+                  </div>
+                  <div className="min-h-0 flex-1 overflow-auto p-3">
+                    {configuredView.screenshot ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={`data:image/jpeg;base64,${configuredView.screenshot}`}
+                        alt="What the run as configured saw"
+                        className="mx-auto max-w-full rounded border"
+                      />
+                    ) : (
+                      <p className="pt-10 text-center text-xs text-muted-foreground">Starting a headless browser…</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           ) : isProvisioning ? (
             <div className="w-full h-full flex flex-col items-center justify-center gap-3 text-muted-foreground">
               <Loader2 className="h-8 w-8 animate-spin opacity-50" />

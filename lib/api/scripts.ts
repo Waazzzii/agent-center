@@ -297,6 +297,17 @@ export interface BrowserScript {
    */
   requires_login: boolean;
   /**
+   * Agent runs use a Chrome with no display (no live view) — cheaper on the
+   * worker. Only for scripts that need no login; the editor stays headed.
+   */
+  headless: boolean;
+  /**
+   * Other sites' scripts, data calls, frames and beacons are refused in this
+   * script's runs (stylesheets, images and fonts still load). Applies to the
+   * editor's browser too, so what is recorded is what the agent sees.
+   */
+  first_party_only: boolean;
+  /**
    * What this script is for. 'login' and 'login_verify' belong to a login
    * profile: they're edited from that login's page and hidden from the
    * general Scripts list and the agent action picker.
@@ -425,6 +436,10 @@ export async function updateScript(
      * script stopped needing auth.
      */
     requires_login: boolean;
+    /** Run agent runs headless. Refused while the script requires a login. */
+    headless: boolean;
+    /** Refuse other sites' scripts and data calls in this script's runs. */
+    first_party_only: boolean;
     /** Reclassify the script. Omit to leave unchanged. */
     kind: ScriptKind;
     /** Replace the script's tag set. Omit to leave unchanged. */
@@ -824,6 +839,35 @@ export async function jumpStepRunToIndex(
 
 export async function abortStepRun(orgId: string, runId: string): Promise<void> {
   await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}`);
+}
+
+/**
+ * Apply the script's first-party-only setting to the editor's live browser,
+ * after changing it with the browser open. Saving the setting is updateScript;
+ * this brings the open window in line. A reload shows the page as agents see it.
+ */
+export async function setStepRunFirstPartyOnly(orgId: string, runId: string, on: boolean): Promise<boolean> {
+  const res = await agentClient.post<{ first_party_only: boolean }>(
+    `/api/admin/${orgId}/step-runs/${runId}/first-party-only`, { on },
+  );
+  return res.data.first_party_only;
+}
+
+/**
+ * Auto on a HEADLESS script: start a run of the editor's current steps in a
+ * fresh headless browser, the way its agent runs will run them. Drive the
+ * returned run with runRemainingStepsAgentMode, poll it with getStepRun, and
+ * end it with abortStepRun.
+ */
+export async function startConfiguredRun(
+  orgId: string,
+  liveRunId: string,
+  params?: Record<string, string>,
+): Promise<StepRun & { runId: string }> {
+  const res = await agentClient.post<StepRun & { runId: string }>(
+    `/api/admin/${orgId}/step-runs/${liveRunId}/configured-run`, { params: params ?? {} },
+  );
+  return res.data;
 }
 
 /** Sync the full step list to the worker after local edits (insert, reorder, delete). */

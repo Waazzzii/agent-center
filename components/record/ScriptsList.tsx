@@ -17,6 +17,7 @@ import { Trash2, Pencil, Copy, KeyRound } from 'lucide-react';
 import { listScripts, deleteScript, createScript, updateScript, getScriptLoginUsage, type BrowserScript, type ScriptKind } from '@/lib/api/scripts';
 import { Switch } from '@/components/ui/switch';
 import { RunScriptModal } from './RunScriptModal';
+import { BrowserModeSettings } from './BrowserModeSettings';
 import { useTags } from '@/lib/hooks/use-tags';
 import { TagFilter } from '@/components/tags/tag-filter';
 import { TagList } from '@/components/tags/tag-badge';
@@ -453,6 +454,29 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSea
                         )}
                       </div>
                     )
+                  ),
+                },
+                {
+                  key: 'browser',
+                  label: (
+                    <span className="inline-flex items-center gap-1">
+                      Browser
+                      <HeaderHelp>
+                        How this script&apos;s browser runs in agent runs and the editor&apos;s Auto
+                        run. <em>Headless</em> has no screen (a little cheaper; no live view, and
+                        never with a login). <em>First-party</em> blocks other sites&apos; scripts —
+                        analytics, chat, ads — which is most of what a page costs. Click to change.
+                      </HeaderHelp>
+                    </span>
+                  ),
+                  thClassName: 'w-40',
+                  tdClassName: 'w-40',
+                  render: (s) => (
+                    <BrowserModeSettings
+                      orgId={orgId!}
+                      script={s}
+                      onChange={(fields) => setScripts((prev) => prev.map((x) => (x.id === s.id ? { ...x, ...fields } : x)))}
+                    />
                   ),
                 },
                 {
