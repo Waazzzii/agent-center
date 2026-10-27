@@ -3,8 +3,8 @@
 /**
  * components/logins/ProxyCard.tsx
  *
- * Whether this login goes out through the organisation's dedicated proxy, and
- * which of its IPs.
+ * Whether this login goes out through one of the organisation's proxies: a
+ * dedicated IP (which one), or the rotating residential account.
  *
  * The account and its IPs are the organisation's — entered once in Agent
  * settings, where saving discovers the IPs and where each one is. Here a login
@@ -23,8 +23,15 @@
  *     with SEPARATE credentials, where each browser is a different account and
  *     picks its own. Renders nothing otherwise.
  *
- * This mirrors the data exactly: proxy_enabled always follows the parent;
- * proxy_ip_id follows the credential mode.
+ * This mirrors the data exactly: proxy_enabled and proxy_mode always follow
+ * the parent; proxy_ip_id follows the credential mode.
+ *
+ * DEDICATED OR ROTATING. A dedicated IP is the same address every time — what
+ * a signed-in session needs. Rotating draws a fresh household IP every few
+ * minutes and starts each one on an empty profile — for public pages behind
+ * bot protection, where a fixed IP gets challenged. The org may have either
+ * account or both; the choice shows only when both exist. A rotating login has
+ * no IP to pick, so its Credentials-tab card renders nothing.
  *
  * A CHANGE OF ROUTE SIGNS THE BROWSER OUT. The saved session's cookies were
  * issued to the old IP, and bot protection treats a session that reappears on
@@ -35,10 +42,11 @@
 import { useEffect, useState } from 'react';
 import { Globe2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-import type { Login, ProxyIpOption } from '@/lib/api/logins';
+import type { Login, ProxyAccounts, ProxyIpOption, ProxyMode } from '@/lib/api/logins';
 import { setLoginProxy, getProxyAccountConfigured } from '@/lib/api/logins';
 import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Pills } from '@/components/ui/pills';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { InfoBubble } from '@/components/actions/login-fields';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
@@ -112,7 +120,7 @@ function IpPicker({
  * picker showed "Choose an IP" for a moment on every step, then snapped to
  * the saved one.
  */
-const accountCache = new Map<string, { configured: boolean; ips: ProxyIpOption[] }>();
+const accountCache = new Map<string, ProxyAccounts>();
 
 export function ProxyCard({
   mode,
@@ -132,14 +140,14 @@ export function ProxyCard({
   onSaved: () => void | Promise<void>;
   className?: string;
 }) {
-  const [account, setAccount] = useState<{ configured: boolean; ips: ProxyIpOption[] } | null>(
+  const [account, setAccount] = useState<ProxyAccounts | null>(
     () => accountCache.get(orgId) ?? null,
   );
   // WHICH control is saving, so the spinner sits in that control's place:
   // the switch's spinner replaces the checkbox, the IP's sits beside the
   // select. A spinner on a line of its own grew the card by a row while it
   // spun and shrank it again after — the bounce this replaced.
-  const [busy, setBusy] = useState<'toggle' | 'ip' | null>(null);
+  const [busy, setBusy] = useState<'toggle' | 'ip' | 'mode' | null>(null);
   const { confirm } = useConfirmDialog();
 
   const loadAccount = () =>
@@ -149,13 +157,13 @@ export function ProxyCard({
   useEffect(() => { void loadAccount(); }, [orgId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const save = async (
-    which: 'toggle' | 'ip',
+    which: 'toggle' | 'ip' | 'mode',
     patch: Parameters<typeof setLoginProxy>[2],
     ok: string,
   ) => {
     // Whose session goes: a shared pool's IP and the on/off switch move every
     // browser in the pool; a separate pool's IP moves only this browser.
-    const wholePool = pooled && (which === 'toggle' || sharedCredentials);
+    const wholePool = pooled && (which !== 'ip' || sharedCredentials);
     const confirmed = await confirm({
       title: 'Change the Proxy and Sign Out?',
       description: (
@@ -197,10 +205,14 @@ export function ProxyCard({
   const ips = account?.ips ?? [];
   const selectable = ips.filter((i) => i.available);
   const perBrowserIp = pooled && !sharedCredentials;
+  const rotating = login.proxy_mode === 'rotating';
+  const staticReady = account?.configured === true && selectable.length > 0;
+  const rotatingReady = account?.rotating?.configured === true;
+  const minutes = account?.rotating?.session_minutes ?? 8;
 
   // ── Credentials tab: this browser's own IP, separate-credentials pools only ──
   if (mode === 'browser') {
-    if (!perBrowserIp || !login.proxy_enabled) return null;
+    if (!perBrowserIp || !login.proxy_enabled || rotating) return null;
     return (
       <Card className={className}>
         <CardContent className="p-5 space-y-3">
@@ -225,7 +237,12 @@ export function ProxyCard({
   }
 
   // ── Setup tab: the switch, and the IP when it is the login's ──
-  const canEnable = account?.configured === true && selectable.length > 0;
+  const canEnable = staticReady || rotatingReady;
+  // Switching on: keep the login's mode when its account is there, else the
+  // one that is.
+  const enableMode: ProxyMode = (rotating ? rotatingReady : staticReady)
+    ? login.proxy_mode
+    : staticReady ? 'static' : 'rotating';
   return (
     <Card className={className}>
       <CardContent className="p-5 space-y-4">
@@ -245,7 +262,11 @@ export function ProxyCard({
                 // Switching on with no IP yet: give it the first one, so the
                 // login is never left enabled-but-unroutable.
                 v === true
-                  ? { enabled: true, ...(login.proxy_ip_id || perBrowserIp ? {} : { ip_id: selectable[0]?.id ?? null }) }
+                  ? {
+                    enabled: true,
+                    ...(enableMode !== login.proxy_mode ? { mode: enableMode } : {}),
+                    ...(enableMode === 'rotating' || login.proxy_ip_id || perBrowserIp ? {} : { ip_id: selectable[0]?.id ?? null }),
+                  }
                   : { enabled: false },
                 v === true ? 'Proxy on — signed out; the next run starts fresh through it' : 'Proxy off — signed out',
               )}
@@ -254,26 +275,27 @@ export function ProxyCard({
             <span>
               <span className="flex items-center gap-1.5 text-sm font-medium">
                 <Globe2 className="h-3.5 w-3.5 text-muted-foreground" />
-                Route through a dedicated proxy IP
+                Route through a proxy
               </span>
               <span className="block text-xs text-muted-foreground">
-                For sites that block datacentre addresses. Traffic comes from one fixed home-ISP IP.
+                For sites that block datacentre addresses.
               </span>
             </span>
           </label>
           <InfoBubble>
-            Changing the route signs the browser out and wipes its saved session, like Log Out, so
-            the next run starts fresh on the new route. Several logins can share one IP.
+            A dedicated IP is the same address every time, for signed-in sessions; several logins
+            can share one. Rotating takes a fresh household IP every few minutes, for public pages.
+            Changing the route signs the browser out and wipes its saved session, like Log Out.
           </InfoBubble>
         </div>
 
-        {account && !account.configured && (
+        {account && !account.configured && !rotatingReady && (
           <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
             This organisation has no proxy account yet. An admin adds it under Agent settings →
             Residential Proxy, beside the Anthropic key.
           </p>
         )}
-        {account?.configured && selectable.length === 0 && (
+        {account?.configured && selectable.length === 0 && !rotatingReady && (
           <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">
             The proxy account has no reachable IPs. Refresh them under Agent settings → Residential Proxy.
           </p>
@@ -281,7 +303,44 @@ export function ProxyCard({
 
         {login.proxy_enabled && (
           <div className="space-y-2 border-t pt-4">
-            {perBrowserIp ? (
+            {staticReady && rotatingReady && (
+              <div className="flex items-center gap-2">
+                <Pills
+                  value={login.proxy_mode}
+                  onChange={(v) => {
+                    if (busy !== null || v === login.proxy_mode) return;
+                    void save(
+                      'mode',
+                      v === 'rotating'
+                        ? { mode: 'rotating' }
+                        // Back to a dedicated IP: the one it had, else the first.
+                        : { mode: 'static', ...(login.proxy_ip_id || perBrowserIp ? {} : { ip_id: selectable[0]?.id ?? null }) },
+                      v === 'rotating'
+                        ? 'Rotating — signed out; each run takes a fresh IP'
+                        : 'Dedicated IP — signed out; the next run starts fresh on it',
+                    );
+                  }}
+                  options={[
+                    { value: 'static', label: 'Dedicated IP' },
+                    { value: 'rotating', label: 'Rotating' },
+                  ]}
+                />
+                {busy === 'mode' && <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin text-muted-foreground" />}
+              </div>
+            )}
+            {rotating ? (
+              <p className="text-xs text-muted-foreground">
+                A fresh household IP every {minutes} {minutes === 1 ? 'minute' : 'minutes'}, each starting on an
+                empty profile{pooled ? ', for every browser in this pool' : ''}. For public pages that need
+                no sign-in: a session never survives the next IP.
+                {!rotatingReady && (
+                  <span className="mt-1 block text-amber-600 dark:text-amber-500">
+                    This organisation has no rotating account, so this login cannot launch. Add it under
+                    Agent settings → Residential Proxy, or turn the proxy off.
+                  </span>
+                )}
+              </p>
+            ) : perBrowserIp ? (
               <p className="text-xs text-muted-foreground">
                 Each browser in this pool has its own account, so each picks its own IP on the
                 <strong className="font-medium text-foreground"> Credentials</strong> tab.
