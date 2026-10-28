@@ -16,7 +16,7 @@ import {
 import {
   CheckCircle2, ChevronRight, ChevronLeft, Play, AlertCircle, Loader2,
   CircleDot, X, XCircle, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
-  Variable, MousePointer2, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
+  Variable, MousePointer2, Crosshair, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
   Scissors, ShieldAlert, Undo2, GitBranch, SkipForward, CircleSlash,
   Download, Upload, FileText,
 } from 'lucide-react';
@@ -40,6 +40,7 @@ import {
   abortStepRun,
   startConfiguredRun,
   startStepRunRecording,
+  setStepRunRecordMode,
   stopStepRunRecording,
   updateStepRunStep,
   deleteStepRunStep,
@@ -168,7 +169,7 @@ function parseStepTargets(text: string, count: number): { indices: number[]; men
 function autoStepLabel(step: RecordedStep): string {
   switch (step.action) {
     case 'navigate':   return `Navigate → ${step.url ?? ''}`;
-    case 'click':      return `Click: ${step.text || step.selector || ''}`;
+    case 'click':      return step.point && !step.selector ? `Click at ${step.point.x}, ${step.point.y}` : `Click: ${step.text || step.selector || ''}`;
     case 'fill':       return `Fill: ${step.selector ?? ''} = ${step.value ?? ''}`;
     case 'select':     return `Select: ${step.value ?? ''} in ${step.selector ?? ''}`;
     case 'press_key':  return `Press: ${step.key ?? ''}`;
@@ -412,6 +413,11 @@ export function RunScriptModal({
 
   // ── Hybrid record+replay (within test mode) ───────────────────
   const [isRecording, setIsRecording]           = useState(false);
+  // The current recording captures clicks by position (x, y) rather than by element.
+  const [recordByPoint, setRecordByPoint]       = useState(false);
+  // Every way a recording ends (stop, session restart, close) clears it: the
+  // next recording starts by element unless asked otherwise.
+  useEffect(() => { if (!isRecording) setRecordByPoint(false); }, [isRecording]);
   const [liveRecordedSteps, setLiveRecordedSteps] = useState<RecordedStep[]>([]);
   const [newStepIndices, setNewStepIndices]     = useState<Set<number>>(new Set());
   const recordingPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -3254,7 +3260,10 @@ export function RunScriptModal({
     }
   };
 
-  const handleToggleRecording = async () => {
+  // byPoint: record clicks by POSITION — where on the page, no element — for
+  // design canvases and widgets nothing describes. Only === true counts: this is
+  // also wired straight to onClick handlers, which pass an event.
+  const handleToggleRecording = async (byPoint?: unknown) => {
     if (!runId || !orgId) return;
     try {
       if (isRecording) {
@@ -3273,7 +3282,11 @@ export function RunScriptModal({
         }
       } else {
         setNewStepIndices(new Set());
+        // Set before starting, so the very first click is captured the right way.
+        const positions = byPoint === true;
+        await setStepRunRecordMode(orgId, runId, positions);
         await startStepRunRecording(orgId, runId);
+        setRecordByPoint(positions);
         setIsRecording(true);
       }
     } catch (err: any) {
@@ -3726,7 +3739,9 @@ export function RunScriptModal({
               isCapturingExtract={isCapturingExtract}
               isExecuting={isExecuting}
               disabled={starting}
-              onStartRecording={handleToggleRecording}
+              onStartRecording={() => handleToggleRecording(false)}
+              onStartRecordingByPoint={() => handleToggleRecording(true)}
+              recordByPoint={recordByPoint}
               onStopRecording={isRecordMode ? handleStopRecordSession : handleToggleRecording}
               onSelectRecordWait={handleAddWaitStep}
               onCancelWait={() => {
@@ -4931,6 +4946,9 @@ interface ModeActionPickerProps {
   isExecuting: boolean;
   disabled: boolean;
   onStartRecording: () => void;
+  onStartRecordingByPoint: () => void;
+  /** The live recording captures clicks by position. */
+  recordByPoint: boolean;
   onStopRecording: () => void;
   onSelectRecordWait: () => void;
   onCancelWait: () => void;
@@ -4960,7 +4978,7 @@ const MODE_META: { key: ToolMode; label: string; icon: React.ComponentType<{ cla
 
 function ModeActionPicker({
   toolMode, setToolMode, runMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
-  onStartRecording, onStopRecording, onSelectRecordWait, onCancelWait,
+  onStartRecording, onStartRecordingByPoint, recordByPoint, onStopRecording, onSelectRecordWait, onCancelWait,
   onSelectAddPause, onSelectAddFileStep, onSelectExtractElement, onCancelExtract, onSelectExtractUrl, onSelectCopyPage,
 }: ModeActionPickerProps) {
   // Remember the action last chosen per mode so the left chip can show it.
@@ -4975,7 +4993,7 @@ function ModeActionPicker({
   // another mode. The box itself is NEVER a button — it stays purely
   // informational.
   const activeStatus =
-    isRecording        ? { label: 'Recording…',       stopIcon: Square, stopTitle: 'Stop recording', onStop: onStopRecording, mode: 'record' as ToolMode } :
+    isRecording        ? { label: recordByPoint ? 'Recording positions…' : 'Recording…',       stopIcon: Square, stopTitle: 'Stop recording', onStop: onStopRecording, mode: 'record' as ToolMode } :
     isCapturingWaitFor ? { label: 'Waiting for click', stopIcon: X,      stopTitle: 'Cancel wait',     onStop: onCancelWait,     mode: 'record' as ToolMode } :
     isCapturingExtract ? { label: 'Click to extract',  stopIcon: X,      stopTitle: 'Cancel extract',  onStop: onCancelExtract,  mode: 'extract' as ToolMode } :
     null;
@@ -4990,6 +5008,7 @@ function ModeActionPicker({
     test: [],
     record: [
       { label: 'Record Interactions', desc: 'Capture clicks, fills, and navigations on the page', icon: CircleDot, onClick: onStartRecording },
+      { label: 'Record Clicks By Position', desc: 'Capture only where you click (x, y) — for canvases and design tools', icon: Crosshair, onClick: onStartRecordingByPoint },
       { label: 'Record Wait', desc: 'Click an element to insert a wait-for step', icon: Clock, onClick: onSelectRecordWait },
       { label: 'Add Pause', desc: 'Fixed-duration delay before the next step (no element required)', icon: Hourglass, onClick: onSelectAddPause },
       { label: 'Add Download', desc: 'Click something that produces a file and keep the file', icon: Download, onClick: () => onSelectAddFileStep('download') },

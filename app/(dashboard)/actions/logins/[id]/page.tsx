@@ -1854,6 +1854,7 @@ Agents sign in unattended when the script and its values are set.
             onChange={(v) => { setScriptId(v); if (v) setScriptNudge(false); }}
             manageHref="/actions/logins/scripts"
             manageLabel="Manage login scripts"
+            editHref={(id) => `/actions/logins/scripts?edit=${id}`}
             emptyHint="No login scripts yet — record one to sign this login in."
             required
           />

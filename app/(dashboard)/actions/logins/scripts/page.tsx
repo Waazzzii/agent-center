@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
@@ -34,6 +35,9 @@ export default function LoginScriptsPage() {
 
   const [recordModalOpen, setRecordModalOpen] = useState(false);
   const [scriptsRefreshKey, setScriptsRefreshKey] = useState(0);
+  // ?edit=<id> opens that script straight in the editor — the Edit button on a
+  // login's script slot.
+  const editId = useSearchParams().get('edit') ?? undefined;
 
   if (!permitted) return <NoPermissionContent />;
 
@@ -97,6 +101,7 @@ export default function LoginScriptsPage() {
           orgId={selectedOrgId}
           refreshKey={scriptsRefreshKey}
           kinds={['login']}
+          initialOpenId={editId}
         />
       ) : (
         <Card>

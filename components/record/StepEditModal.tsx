@@ -354,6 +354,36 @@ export function StepEditModal({
                   />
                 </div>
                 )}
+
+                {/* A click recorded by position: where on the page, editable. */}
+                {draft.action === 'click' && draft.point && (
+                <div className="flex items-start justify-between gap-4">
+                  <div className="space-y-0.5">
+                    <p className="text-[11px] font-medium">Click position</p>
+                    <p className="text-[10px] text-muted-foreground">
+                      Where on the page this clicks, in pixels from the top-left of the browser
+                      window's page area (1279 × 812). No element is looked up.
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    {(['x', 'y'] as const).map((axis) => (
+                      <Input
+                        key={axis}
+                        type="number"
+                        min={0}
+                        className="h-7 w-16 text-xs"
+                        placeholder={axis.toUpperCase()}
+                        aria-label={`Click position ${axis.toUpperCase()}`}
+                        value={draft.point?.[axis] ?? ''}
+                        onChange={(e) => {
+                          const n = Math.max(0, Math.round(Number(e.target.value) || 0));
+                          setDraft((d) => (d?.point ? { ...d, point: { ...d.point, [axis]: n } } : d));
+                        }}
+                      />
+                    ))}
+                  </div>
+                </div>
+                )}
               </div>
               </>)}
             </div>
@@ -512,7 +542,7 @@ function autoLabelHint(step: RecordedStep): string {
     // A group's auto label is the branch it guards, matching the step list.
     case 'group':      return (step as { label?: string }).label?.trim() || 'Optional branch';
     case 'navigate':   return `Navigate → ${step.url ?? ''}`;
-    case 'click':      return `Click: ${step.text || step.selector || ''}`;
+    case 'click':      return step.point && !step.selector ? `Click at ${step.point.x}, ${step.point.y}` : `Click: ${step.text || step.selector || ''}`;
     case 'fill':       return `Fill: ${step.selector ?? ''} = ${step.value ?? ''}`;
     case 'select':     return `Select: ${step.value ?? ''} in ${step.selector ?? ''}`;
     case 'press_key':  return `Press: ${step.key ?? ''}`;

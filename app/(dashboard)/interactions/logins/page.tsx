@@ -134,11 +134,12 @@ export default function InteractionsPage() {
   // browser it parked on; one still signed out simply parks again.
   const handleRetry = async (loginId: string, group: AgentApprovalItem[]) => {
     setRetrying((s) => ({ ...s, [loginId]: true }));
-    const results = await Promise.allSettled(group.map((g) => retryParkedRun(g.execution_log_id)));
+    const runs = group.flatMap((g) => (g.execution_log_id ? [g.execution_log_id] : []));
+    const results = await Promise.allSettled(runs.map((id) => retryParkedRun(id)));
     setRetrying((s) => ({ ...s, [loginId]: false }));
     const failed = results.filter((r) => r.status === 'rejected').length;
-    if (failed === 0) toast.success(group.length === 1 ? 'Retrying the run' : `Retrying ${group.length} runs`);
-    else toast.error(`${failed} of ${group.length} could not be retried`);
+    if (failed === 0) toast.success(runs.length === 1 ? 'Retrying the run' : `Retrying ${runs.length} runs`);
+    else toast.error(`${failed} of ${runs.length} could not be retried`);
     // Clear the row promptly rather than waiting for the 60s poll. The run takes
     // a moment to pick the step back up and drop its awaiting_approval park, so
     // refresh now and again shortly after.
@@ -231,7 +232,7 @@ export default function InteractionsPage() {
       <PageHeader
         icon={Globe}
         title="Logins"
-        description="Agent runs waiting for a human to sign a browser in"
+        description="Browsers waiting for a person to sign them in"
         actions={
           <Button variant="outline" size="icon-sm" onClick={() => load()} disabled={loading || !selectedOrgId} aria-label="Refresh" title="Refresh">
             <RefreshCw className={cn('h-3.5 w-3.5', loading && 'animate-spin')} />
@@ -273,14 +274,19 @@ export default function InteractionsPage() {
 
               <div className="divide-y divide-border/40">
                 {groups.map(({ key, loginId, group }) => {
-                  const primary = group[0]!;
-                  const count = group.length;
+                  // The runs parked on this browser. A browser out of rotation can
+                  // have none (waiting_only): its run moved on to another browser.
+                  const parked = group.filter((g) => g.execution_log_id);
+                  const primary = parked[0] ?? group[0]!;
+                  const count = parked.length;
                   const active = loginId ? activeLoginSessions[loginId] : undefined;
                   const starting = loginId ? !!startingLogin[loginId] : false;
                   const isRetrying = !!retrying[key];
-                  const agentsLabel = count === 1
-                    ? `${primary.agent_name} · ${primary.action_name}`
-                    : group.map((g) => g.agent_name).filter((v, i, a) => a.indexOf(v) === i).join(', ');
+                  const agentsLabel = count === 0
+                    ? 'Out of rotation'
+                    : count === 1
+                      ? `${primary.agent_name} · ${primary.action_name}`
+                      : parked.map((g) => g.agent_name).filter((v, i, a) => a.indexOf(v) === i).join(', ');
                   // pg returns bigint as a string — coerce. member/size null for a
                   // park that carries no pool info; pod null for one with no pin.
                   const memberIdx = Number(primary.pool_member_index ?? 0) || null;
@@ -327,14 +333,18 @@ export default function InteractionsPage() {
                             When more than one run waits on this member, link the
                             oldest and flag the rest (they're the "N runs blocked"
                             in the Login cell). */}
-                        <Link
-                          href={`/agent-history/${primary.execution_log_id}`}
-                          className="inline-flex items-center gap-1 text-brand hover:underline"
-                          title={primary.execution_log_id}
-                        >
-                          <span className="font-mono">{primary.execution_log_id.slice(0, 8)}</span>
-                          <ArrowUpRight className="h-3 w-3 shrink-0" />
-                        </Link>
+                        {primary.execution_log_id ? (
+                          <Link
+                            href={`/agent-history/${primary.execution_log_id}`}
+                            className="inline-flex items-center gap-1 text-brand hover:underline"
+                            title={primary.execution_log_id}
+                          >
+                            <span className="font-mono">{primary.execution_log_id.slice(0, 8)}</span>
+                            <ArrowUpRight className="h-3 w-3 shrink-0" />
+                          </Link>
+                        ) : (
+                          <span className="text-muted-foreground opacity-50">—</span>
+                        )}
                         {count > 1 && <span className="ml-1 text-muted-foreground opacity-70">+{count - 1}</span>}
                       </div>
 
@@ -348,12 +358,14 @@ export default function InteractionsPage() {
                           </Button>
                         ) : (
                           <>
-                            <Button size="sm" variant="outline" onClick={() => handleRetry(key, group)}
-                              disabled={isRetrying || starting} className="text-xs"
-                              title="Run the waiting step again without signing in — for a hiccup, not a real sign-out">
-                              {isRetrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
-                              <span className="ml-1">Retry</span>
-                            </Button>
+                            {count > 0 && (
+                              <Button size="sm" variant="outline" onClick={() => handleRetry(key, parked)}
+                                disabled={isRetrying || starting} className="text-xs"
+                                title="Run the waiting step again without signing in — for a hiccup, not a real sign-out">
+                                {isRetrying ? <Loader2 className="h-3 w-3 animate-spin" /> : <RotateCcw className="h-3 w-3" />}
+                                <span className="ml-1">Retry</span>
+                              </Button>
+                            )}
                             <Button size="sm" onClick={() => loginId && handleManualLogin(loginId, primary.login_name ?? 'Login')}
                               disabled={!loginId || starting} className="bg-warning hover:bg-warning/90 text-white text-xs"
                               title={loginId ? 'Sign this browser in and resume every run waiting on it' : 'No login profile recorded for this park'}>

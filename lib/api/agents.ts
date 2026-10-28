@@ -105,7 +105,8 @@ export interface AgentWebhookKey {
 
 export interface AgentApprovalItem {
   id: string;
-  execution_log_id: string;
+  /** Null on a waiting_only row: no run is parked on that browser. */
+  execution_log_id: string | null;
   action_id: string;
   action_name: string;
   action_type: string;
@@ -130,6 +131,9 @@ export interface AgentApprovalItem {
    *  bigint as a string, so coerce before display. 1 / 1 for a lone login. */
   pool_member_index?: number | string | null;
   pool_size?: number | string | null;
+  /** A pool browser out of rotation waiting for a sign-in that no run is parked
+   *  on — its run moved on to another browser. Agent and run fields are null. */
+  waiting_only?: boolean;
 }
 
 /**

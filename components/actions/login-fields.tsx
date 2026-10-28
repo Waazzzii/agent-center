@@ -2,7 +2,7 @@
 
 import * as React from 'react';
 import Link from 'next/link';
-import { Info, Settings2 } from 'lucide-react';
+import { Info, Pencil, Settings2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { Tooltip, TooltipTrigger, TooltipContent } from '@/components/ui/tooltip';
@@ -106,7 +106,7 @@ export function FieldNest({ children }: { children: React.ReactNode }) {
  * "do this next", and that is the common case on a brand-new login.
  */
 export function ScriptSlot({
-  label, info, scripts, value, onChange, manageHref, manageLabel,
+  label, info, scripts, value, onChange, manageHref, manageLabel, editHref,
   emptyHint, required = false,
   disabled = false,
 }: {
@@ -118,6 +118,8 @@ export function ScriptSlot({
   /** The Login Scripts page — where recording, editing and deleting happen. */
   manageHref: string;
   manageLabel?: string;
+  /** Where Edit opens the SELECTED script in the editor. No Edit button without it. */
+  editHref?: (scriptId: string) => string;
   emptyHint?: string;
   required?: boolean;
   /** Greys the whole slot out — used where a login row must exist first. */
@@ -162,6 +164,19 @@ export function ScriptSlot({
               {scripts.length} available
             </span>
           </button>
+          {selected && editHref && (
+            <Button
+              type="button" variant="outline" size="sm"
+              className="h-9 shrink-0"
+              disabled={disabled}
+              title={`Edit ${selected.name}`}
+              asChild={!disabled}
+            >
+              {disabled
+                ? <span><Pencil className="h-3.5 w-3.5 mr-1 inline" />Edit</span>
+                : <Link href={editHref(selected.id)}><Pencil className="h-3.5 w-3.5 mr-1" />Edit</Link>}
+            </Button>
+          )}
           <Button
             type="button" variant="outline" size="icon"
             className="h-9 w-9 shrink-0"

@@ -138,6 +138,9 @@ export interface RecordedStep {
    * means the step targets the top-level page (default).
    */
   frame_selector?: string;
+  /** click only — a spot on the PAGE (viewport pixels) clicked with no element:
+   *  what "Record Clicks By Position" records. */
+  point?: { x: number; y: number };
   /** Rich element snapshot captured at recording time; used for robust replay */
   elementSnapshot?: ElementSnapshot;
   /**
@@ -874,6 +877,14 @@ export async function startConfiguredRun(
 export async function syncStepRunSteps(orgId: string, runId: string, steps: RecordedStep[]): Promise<StepRun> {
   const res = await agentClient.put<StepRun>(`/api/admin/${orgId}/step-runs/${runId}/steps`, { steps });
   return res.data;
+}
+
+/** Record clicks by position (true) or by element (false) in the live session. */
+export async function setStepRunRecordMode(orgId: string, runId: string, byPoint: boolean): Promise<boolean> {
+  const res = await agentClient.post<{ recordByPoint: boolean }>(
+    `/api/admin/${orgId}/step-runs/${runId}/record-mode`, { by_point: byPoint },
+  );
+  return res.data.recordByPoint;
 }
 
 export async function startStepRunRecording(orgId: string, runId: string): Promise<StepRun & { recordingActive: boolean }> {

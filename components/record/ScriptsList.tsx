@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { DataTable } from '@/components/ui/data-table';
@@ -97,15 +97,29 @@ interface ScriptsListProps {
    * name, which is a filter you cannot get out of.
    */
   initialSearch?: string;
+  /**
+   * Open this script in the editor once the list has loaded — a direct "Edit"
+   * from somewhere that names one script (a login's script slot). Once only.
+   */
+  initialOpenId?: string;
 }
 
-export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSearch = '' }: ScriptsListProps) {
+export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSearch = '', initialOpenId }: ScriptsListProps) {
   const [scripts, setScripts] = useState<BrowserScript[]>([]);
   const [loginTogglePending, setLoginTogglePending] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   // Only gates the first-load spinner — filter/search reloads update in place.
   const [initialLoad, setInitialLoad] = useState(true);
   const [runModalScript, setRunModalScript] = useState<BrowserScript | null>(null);
+  // initialOpenId opens its script once, not again after every reload.
+  const openedInitialRef = useRef(false);
+  useEffect(() => {
+    if (!initialOpenId || openedInitialRef.current) return;
+    const target = scripts.find((s) => s.id === initialOpenId);
+    if (!target) return;
+    openedInitialRef.current = true;
+    setRunModalScript(target);
+  }, [initialOpenId, scripts]);
   const [scriptToDelete, setScriptToDelete] = useState<BrowserScript | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   // Login-usage check for the delete-confirmation dialog. Set when the
@@ -258,6 +272,9 @@ export function ScriptsList({ orgId, refreshKey, kinds = ['regular'], initialSea
         steps: script.steps,
         parameters: script.parameters,
         test_values: script.test_values,
+        // A login script's copy is a login script: without this it came back
+        // as a regular browser script, in the wrong list and the wrong pickers.
+        kind: script.kind,
         tag_ids: script.tags?.map((t) => t.id),
       });
       toast.success(`Duplicated → ${candidate}`);

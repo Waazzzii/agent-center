@@ -90,7 +90,9 @@ export function StepDescription({ step }: { step: RecordedStep }) {
           {ACTION_ICONS.click}
           <span className="text-muted-foreground">Click</span>
           <span className="font-mono text-xs">
-            {step.text ? truncate(step.text, 40) : truncate(step.selector ?? '', 40)}
+            {step.point && !step.selector
+              ? `at ${step.point.x}, ${step.point.y}`
+              : step.text ? truncate(step.text, 40) : truncate(step.selector ?? '', 40)}
           </span>
         </span>
       );
