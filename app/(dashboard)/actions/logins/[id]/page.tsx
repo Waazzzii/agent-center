@@ -5,7 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
-  getLogin, listLogins, updateLogin, deleteLogin, startLogout, setPoolSize, setPoolCredentialMode, previewPoolCredentialMode,
+  getLogin, listLogins, updateLogin, deleteLogin, startLogout, setPoolSize, setPoolStrategy, setPoolCredentialMode, previewPoolCredentialMode,
   setLoginCredentials, clearLoginCredentials, testAutoLogin,
   getLoginCredentialKeys, deleteLoginCredentialKey,
   setLoginTotp, clearLoginTotp, previewLoginTotp,
@@ -28,6 +28,7 @@ import { useStartManualLogin } from '@/lib/hooks/use-start-manual-login';
 import { PoolStepper, PoolSizeControl, poolParentOf, poolOf } from '@/components/logins/PoolSelector';
 import { ProxyCard } from '@/components/logins/ProxyCard';
 import { Checkbox } from '@/components/ui/checkbox';
+import { Pills } from '@/components/ui/pills';
 import { InfoBubble } from '@/components/actions/login-fields';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -336,6 +337,8 @@ export default function EditLoginPage() {
     }
   }, [login?.status]);
   const [editingName, setEditingName] = useState(false);
+  // Save was pressed with no login script: outline the field until one is picked.
+  const [scriptNudge, setScriptNudge] = useState(false);
 
   // ── TOTP (authenticator 2FA) state ───────────────────────────────
   // Same write-only model as credentials: the seed goes up once and is
@@ -706,6 +709,18 @@ export default function EditLoginPage() {
 
   const handleSave = async () => {
     if (!selectedOrgId || !id) return;
+    // A login can't be saved without its sign-in script, but Save stays
+    // clickable: a dead button with the reason one tab away read as a broken
+    // page. Say why, and take them to the field.
+    if (!scriptId) {
+      toast.warning('Choose a login script before saving — it is how this login signs in.');
+      setScriptNudge(true);
+      changeTab('credentials');
+      setTimeout(() => {
+        document.getElementById('login-script-slot')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 50);
+      return;
+    }
     setSaving(true);
     try {
       // Compare scriptId against what's persisted on the login. If it
@@ -1218,6 +1233,17 @@ export default function EditLoginPage() {
     }
   };
 
+  /** How runs pick one of this pool's browsers ('warm' | 'spread'). */
+  const handlePoolStrategy = async (strategy: 'warm' | 'spread') => {
+    if (!selectedOrgId || !poolParent || poolParent.pool_strategy === strategy) return;
+    try {
+      await setPoolStrategy(selectedOrgId, poolParent.id, strategy);
+      await load(true);
+    } catch (err) {
+      toast.error(apiError(err) || 'Failed to change how runs pick a browser');
+    }
+  };
+
   /**
    * Change how many browsers this login may use at once.
    *
@@ -1437,8 +1463,7 @@ export default function EditLoginPage() {
           <Button
             size="sm"
             onClick={handleSave}
-            disabled={saving || !form.name.trim() || !scriptId}
-            title={!scriptId ? 'Choose a login script first — a login cannot sign in without one.' : undefined}
+            disabled={saving || !form.name.trim()}
           >
             {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Save className="h-3.5 w-3.5 mr-1" />}
             Save
@@ -1526,18 +1551,34 @@ export default function EditLoginPage() {
               </div>
             )}
             {pooled && (
-              <p className="border-t pt-4 text-xs text-muted-foreground">
-                Agents and scripts use this login as a whole: each run is handed whichever browser
-                is free, so a single browser can&apos;t be picked. To run as one specific browser
-                every time, create a separate login.
-              </p>
+              <div className="flex flex-wrap items-center gap-3 border-t pt-4">
+                <span className="text-sm font-medium">Runs use</span>
+                <Pills
+                  value={poolParent?.pool_strategy ?? 'warm'}
+                  onChange={(v) => void handlePoolStrategy(v as 'warm' | 'spread')}
+                  options={[
+                    { value: 'spread', label: 'Spread evenly' },
+                    { value: 'warm', label: 'Warm browsers first' },
+                  ]}
+                />
+                <InfoBubble>
+                  A pool is one login with several interchangeable browsers: every browser can do
+                  every job, even with separate credentials, and agents use the login as a whole —
+                  one specific browser can&apos;t be picked (for that, create a separate login).
+                  Spread evenly hands each run the browser used longest ago, so every browser — and
+                  its proxy IP — does an equal share. Warm browsers first keeps using the browsers
+                  already running and adds one only when all are busy. Either way, a browser that
+                  needs a person to sign in is skipped: the run moves to another browser and the
+                  waiting one is flagged in Slack until someone signs it in.
+                </InfoBubble>
+              </div>
             )}
           </CardContent>
         </Card>
       )}
 
-      {/* Whether the login goes out through the proxy, and — when the IP is the
-          login's rather than each browser's — which IP. */}
+      {/* Whether the login goes out through the proxy, and — for a login of one
+          browser — its IP. A pool's browsers show theirs on Credentials. */}
       {login && selectedOrgId && (
         <ProxyCard
           mode="login"
@@ -1545,7 +1586,6 @@ export default function EditLoginPage() {
           orgId={selectedOrgId}
           login={login}
           pooled={pooled}
-          sharedCredentials={sharedCreds}
           onSaved={() => load(true)}
         />
       )}
@@ -1802,22 +1842,26 @@ Agents sign in unattended when the script and its values are set.
               Login Scripts page — they are script operations, and doing them
               from here meant selecting a script just to delete it, which
               silently repointed this login on the way past. */}
+          <div
+            id="login-script-slot"
+            className={cn('rounded-md transition-shadow', scriptNudge && !scriptId && 'ring-2 ring-amber-500/60 ring-offset-4 ring-offset-background')}
+          >
           <ScriptSlot
             label="Login script"
             info={<>Fills the sign-in form and submits. Every <code className="font-mono">{'{{variable}}'}</code> it declares becomes a credential below, stored encrypted.</>}
             scripts={scripts}
             value={scriptId}
-            onChange={setScriptId}
+            onChange={(v) => { setScriptId(v); if (v) setScriptNudge(false); }}
             manageHref="/actions/logins/scripts"
             manageLabel="Manage login scripts"
             emptyHint="No login scripts yet — record one to sign this login in."
             required
           />
+          </div>
 
-          {/* Says why Save is disabled. A login lands here straight from the
-              New Login dialog with nothing attached, so this is the first
-              state most logins are in — leaving the button dead with no
-              explanation reads as a broken page. */}
+          {/* Says what Save needs. A login lands here straight from the New
+              Login dialog with nothing attached, so this is the first state
+              most logins are in. */}
           {!scriptId && scripts.length > 0 && (
             <p className="text-xs text-amber-600 dark:text-amber-500 -mt-1">
               Choose a login script before saving — it is how this login signs in,
@@ -2171,8 +2215,8 @@ Agents sign in unattended when the script and its values are set.
       </Card>
       </SharedCredentialsMask>
 
-      {/* This browser's own proxy IP — separate-credentials pools only. Renders
-          nothing otherwise: the IP is then the login's, and lives in Setup. */}
+      {/* This browser's own proxy IP, in a pool. Renders nothing for a login of
+          one browser: its IP is on Setup. */}
       {login && selectedOrgId && (
         <ProxyCard
           mode="browser"
@@ -2180,7 +2224,6 @@ Agents sign in unattended when the script and its values are set.
           orgId={selectedOrgId}
           login={login}
           pooled={pooled}
-          sharedCredentials={sharedCreds}
           onSaved={() => load(true)}
         />
       )}

@@ -119,20 +119,22 @@ export interface Login {
   pool_removing_at: string | null;
   /**
    * PROXY. Whether this login goes out through the org's dedicated proxy, and
-   * which of its IPs.
+   * the IP this browser has.
    *
    * `proxy_enabled` is login-level: every browser in a pool follows the parent.
-   * `proxy_ip_id` follows the pool's CREDENTIAL MODE, like credentials do — in
-   * a shared pool every browser is on the login's IP (one account, one home);
-   * in a separate pool each browser chooses its own. Any number of logins may
-   * share an IP.
+   * `proxy_ip_id` is each browser's own, assigned automatically at its first
+   * launch with the proxy on (migration 443) — read-only here; Change IP moves
+   * it. Any number of logins may share an IP.
    */
   proxy_enabled: boolean;
-  /** Which proxy when enabled: 'static' = proxy_ip_id; 'rotating' = the org's
-   *  rotating residential account (a fresh IP and empty profile every session).
-   *  Login-level, like proxy_enabled. */
-  proxy_mode: ProxyMode;
   proxy_ip_id: string | null;
+  /** Pool parent: how runs pick a browser. 'warm' = browsers already in use
+   *  first, a new one only when every one is busy; 'spread' = the one used
+   *  longest ago. Read off the parent; ignored on a member. */
+  pool_strategy: 'warm' | 'spread';
+  /** When this browser failed its sign-in check with nothing able to sign it
+   *  in by itself. Runs skip it until it is signed in; null otherwise. */
+  pool_waiting_since: string | null;
   /**
    * GET /logins/:id only: this browser's sign-in state on each LIVE pod. A
    * profile is a pod-local copy, so `status` above (one value) can be true of
@@ -377,6 +379,15 @@ export async function setPoolSize(
   return res.data;
 }
 
+/** How runs pick a browser of this pool. Applies to the whole pool whichever
+ *  browser's id is passed. */
+export async function setPoolStrategy(
+  orgId: string, id: string, strategy: 'warm' | 'spread',
+): Promise<{ id: string; pool_strategy: 'warm' | 'spread' }> {
+  const res = await agentClient.patch(`/api/admin/${orgId}/logins/${id}/pool`, { strategy });
+  return res.data;
+}
+
 /**
  * Switch a pool between one shared set of credentials and one per browser.
  * Applies to the whole pool whichever browser's id is passed.
@@ -403,18 +414,15 @@ export async function previewPoolCredentialMode(
   return res.data;
 }
 
-export type ProxyMode = 'static' | 'rotating';
-
 export interface LoginProxyPatch {
   enabled?: boolean;
-  mode?: ProxyMode;
-  /** One of the org's discovered IPs. null unassigns. */
-  ip_id?: string | null;
+  /** Move the browser named to another of the org's IPs, picked automatically. */
+  change_ip?: boolean;
 }
 
 /**
- * Proxy for a login. `enabled` applies to the whole pool; `ip_id` to the login
- * in a shared pool and to this browser in a separate one.
+ * Proxy for a login. `enabled` applies to the whole pool; `change_ip` to the
+ * browser named (a member or the parent).
  */
 export async function setLoginProxy(
   orgId: string, id: string, patch: LoginProxyPatch,
@@ -438,21 +446,12 @@ export interface ProxyIpOption {
   logins_using: number;
 }
 
-/** The org's proxy accounts as a login sees them. Never any credential. */
-export interface ProxyAccounts {
-  /** The dedicated-IP account, and its IPs. */
-  configured: boolean;
-  ips: ProxyIpOption[];
-  /** The rotating residential account. Absent from an older backend. */
-  rotating?: { configured: boolean; endpoint: string | null; session_minutes: number | null };
-}
-
 /**
- * Whether the org has proxy accounts (set in Agent settings), and the IPs a
+ * Whether the org has a proxy account (set in Agent settings), and the IPs a
  * login can choose from. Never any credential.
  */
-export async function getProxyAccountConfigured(orgId: string): Promise<ProxyAccounts> {
-  const res = await agentClient.get<ProxyAccounts>(`/api/admin/${orgId}/proxy-account`);
+export async function getProxyAccountConfigured(orgId: string): Promise<{ configured: boolean; ips: ProxyIpOption[] }> {
+  const res = await agentClient.get<{ configured: boolean; ips: ProxyIpOption[] }>(`/api/admin/${orgId}/proxy-account`);
   return res.data;
 }
 

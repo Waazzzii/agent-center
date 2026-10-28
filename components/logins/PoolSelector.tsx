@@ -46,9 +46,13 @@ export function poolParentOf(login: Login, all: Login[]): Login {
     : login;
 }
 
-function statusBits(status: Login['status'], removing = false) {
+function statusBits(status: Login['status'], removing = false, waiting = false) {
   if (removing) {
     return { Icon: Hourglass, label: 'Removing after its current run', cls: 'text-muted-foreground' };
+  }
+  // Failed its sign-in check with nothing able to sign it in: runs skip it.
+  if (waiting) {
+    return { Icon: AlertCircle, label: 'Waiting for a sign-in — runs skip it', cls: 'text-amber-600 dark:text-amber-500' };
   }
   if (status === 'valid') {
     return { Icon: CheckCircle2, label: 'Signed in', cls: 'text-emerald-600 dark:text-emerald-500' };
@@ -73,7 +77,7 @@ export function PoolStepper({ login, all }: { login: Login; all: Login[] }) {
   const router = useRouter();
   const pool = poolOf(login, all);
   if (pool.length < 2) return null;
-  const needing = pool.filter((m) => m.status === 'needs_login' && !m.pool_removing_at).length;
+  const needing = pool.filter((m) => (m.status === 'needs_login' || m.pool_waiting_since) && !m.pool_removing_at).length;
 
   return (
     <div className="flex flex-wrap items-center gap-3">
@@ -82,7 +86,7 @@ export function PoolStepper({ login, all }: { login: Login; all: Login[] }) {
         value={login.id}
         onChange={(id) => { if (id !== login.id) router.push(`/actions/logins/${id}?tab=credentials`, { scroll: false }); }}
         items={pool.map((m, i) => {
-          const s = statusBits(m.status, !!m.pool_removing_at);
+          const s = statusBits(m.status, !!m.pool_removing_at, !!m.pool_waiting_since);
           return {
             value: m.id,
             label: `Browser ${i + 1} of ${pool.length}`,
