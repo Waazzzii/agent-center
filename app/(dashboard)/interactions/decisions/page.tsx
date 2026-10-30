@@ -27,6 +27,7 @@ import {
 } from '@/lib/api/agents';
 import { ColumnSelectFilter } from '@/components/ui/column-select-filter';
 import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
+import { DEFAULT_FROM, rangeParams, timeRangeLabel } from '@/lib/time-range';
 import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { StatTile } from '@/components/ui/stat-tile';
@@ -132,42 +133,12 @@ const FIRST_CLICK_DIR: Record<SortKey, SortDir> = {
   created: 'desc', decided: 'desc', status: 'asc', option: 'asc', source: 'asc', target: 'asc',
 };
 
-// ─── Time range ──────────────────────────────────────────────────────
-function daysAgo(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
-}
-
-const TIME_PRESETS = [
-  { label: 'Last hour',     days: 0 },
-  { label: 'Last 24 hours', days: 1 },
-  { label: 'Last 7 days',   days: 7 },
-  { label: 'Last 30 days',  days: 30 },
-  { label: 'Last 90 days',  days: 90 },
-];
-
-const DEFAULT_FROM_DAYS = 30;
-
-function formatShortDate(v: string) {
-  return new Date(v).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
-}
+// ─── Time range: lib/time-range.ts (shared with Executions + Factory Jobs) ───
 
 function formatDateTime(v: string) {
   return new Date(v).toLocaleString(undefined, {
     month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
   });
-}
-
-/** Label derived from the dates, never from a stored mode. */
-function timeRangeLabel(from: string, to: string): string {
-  if (!from && !to) return 'Any time';
-  if (from && !to) {
-    const p = TIME_PRESETS.find((x) => x.days > 0 && daysAgo(x.days) === from);
-    return p ? p.label : `Since ${formatShortDate(from)}`;
-  }
-  if (!from && to) return `Up to ${formatShortDate(to)}`;
-  return `${formatShortDate(from)} – ${formatShortDate(to)}`;
 }
 
 export default function DecisionsPage() {
@@ -190,7 +161,7 @@ export default function DecisionsPage() {
   const [statusFilters, setStatusFilters] = useState<string[]>([]);
   const [sourceAgent, setSourceAgent]     = useState('');
   const [targetAgent, setTargetAgent]     = useState('');
-  const [fromFilter, setFromFilter]       = useState(daysAgo(DEFAULT_FROM_DAYS));
+  const [fromFilter, setFromFilter]       = useState(DEFAULT_FROM);
   const [toFilter, setToFilter]           = useState('');
   const [sortBy, setSortBy]               = useState<SortKey>(DEFAULT_SORT);
   const [sortDir, setSortDir]             = useState<SortDir>(DEFAULT_SORT_DIR);
@@ -217,8 +188,7 @@ export default function DecisionsPage() {
         ...(statuses.length ? { status: statuses } : {}),
         ...(src ? { source_agent_id: src } : {}),
         ...(tgt ? { target_agent_id: tgt } : {}),
-        ...(from ? { from: new Date(`${from}T00:00:00`).toISOString() } : {}),
-        ...(to ? { to: (() => { const d = new Date(`${to}T00:00:00`); d.setHours(23, 59, 59, 999); return d.toISOString(); })() } : {}),
+        ...rangeParams(from, to),
         sort_by: sBy, sort_dir: sDir,
       });
       setItems(data.items ?? []);
@@ -308,8 +278,7 @@ export default function DecisionsPage() {
           <>
             {selectedOrgId && (
               <TimeRangePicker
-                from={fromFilter} to={toFilter} presets={TIME_PRESETS}
-                label={timeRangeLabel(fromFilter, toFilter)}
+                from={fromFilter} to={toFilter}
                 onApply={applyTimeRange} disabled={loading}
               />
             )}

@@ -9,6 +9,7 @@ import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import {
   getAgents,
   getExecutionHistory,
+  getExecutionCounts,
   abortBrowserRun,
   forceResumeRun,
   isInertLoginRow,
@@ -21,6 +22,7 @@ import { TriggerBadge } from '@/components/execution/TriggerBadge';
 import { ColumnSelectFilter } from '@/components/ui/column-select-filter';
 import { ActionProgress } from '@/components/execution/ActionProgress';
 import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
+import { DEFAULT_FROM, rangeParams, timeRangeLabel } from '@/lib/time-range';
 import { TokenUsage } from '@/components/execution/TokenUsage';
 import { StatusBadge } from '@/components/execution/status';
 import { StatTile } from '@/components/ui/stat-tile';
@@ -128,10 +130,6 @@ function formatStartedAt(iso: string): string {
     ...(sameYear ? {} : { year: 'numeric' }),
     hour: 'numeric', minute: '2-digit',
   });
-}
-
-function formatShortDate(dateStr: string): string {
-  return new Date(dateStr + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 
@@ -467,58 +465,13 @@ const FIRST_CLICK_DIR: Record<SortKey, SortDir> = {
   started: 'desc', duration: 'desc', tokens: 'desc',
 };
 
-/** N days ago as a plain yyyy-mm-dd, which is what from/to hold. */
-function daysAgo(days: number): string {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
-}
-
 /**
  * Time range, Cloud-Console style: its own control, separate from the
- * filters, and the ONLY way to set the window.
- *
- * The state behind it is just `fromFilter` / `toFilter`. There is no stored
- * preset and no 'custom' mode — picking "Last 30 days" sets a from-date and
- * nothing else, exactly as if it had been typed. The first cut of this kept
- * a `rangePreset` alongside the dates, and every consequence of that second
- * source of truth had to be papered over: pills that hid themselves, a
- * "Clear all" that skipped the range, a From filter that read blank while a
- * from-date was in force. All of it invisible on screen, which is what made
- * it surprising.
- *
- * The button's label is DERIVED from the dates each render, so it cannot
- * disagree with them. When they happen to match a preset it says so;
- * otherwise it shows the window it actually has.
- *
- * The honest cost of dropping the stored preset: these are absolute dates,
- * so the window does not follow you forward. Come back next week and the
- * button reads a date rather than "Last 30 days". It is on screen either way.
+ * filters, and the ONLY way to set the window. The state behind it is just
+ * `fromFilter` / `toFilter` — bounds in the lib/time-range.ts formats, so a
+ * preset ("now-60m") follows you forward and a custom range is exact to the
+ * minute. The button's label is derived from them every render.
  */
-const TIME_PRESETS = [
-  { label: 'Last hour',     days: 0 },
-  { label: 'Last 24 hours', days: 1 },
-  { label: 'Last 7 days',   days: 7 },
-  { label: 'Last 30 days',  days: 30 },
-  { label: 'Last 90 days',  days: 90 },
-];
-
-// A first visit starts 30 days back rather than on all of history, which
-// grows without bound. Applied only when NOTHING is stored for the org —
-// once a view exists, even an empty one, it is the user's.
-const DEFAULT_FROM_DAYS = 30;
-
-/** What the button says. A pure function of the dates — never a stored mode. */
-function timeRangeLabel(from: string, to: string): string {
-  if (!from && !to) return 'Any time';
-  if (from && !to) {
-    const preset = TIME_PRESETS.find((p) => p.days > 0 && daysAgo(p.days) === from);
-    if (preset) return preset.label;
-    return `Since ${formatShortDate(from)}`;
-  }
-  if (!from && to) return `Up to ${formatShortDate(to)}`;
-  return `${formatShortDate(from)} – ${formatShortDate(to)}`;
-}
 
 /**
  * Filter persistence.
@@ -739,8 +692,7 @@ export default function AgentExecutionsPage() {
       if (statuses.length > 0) params.status       = statuses;
       if (trigger)              params.trigger_type = trigger;
       if (agentId)              params.agent_id     = agentId;
-      if (from)                 params.from         = new Date(from + 'T00:00:00').toISOString();
-      if (to) { const d = new Date(to + 'T00:00:00'); d.setHours(23, 59, 59, 999); params.to = d.toISOString(); }
+      Object.assign(params, rangeParams(from, to));
       Object.assign(params, tagFilterParams(tagIds));
       params.sort_by  = sBy;
       params.sort_dir = sDir;
@@ -769,26 +721,15 @@ export default function AgentExecutionsPage() {
     if (!selectedOrgId) return;
     const from = range?.from !== undefined ? range.from : fromFilter;
     const to   = range?.to   !== undefined ? range.to   : toFilter;
-    const win: Record<string, string> = {};
-    if (from) win.from = new Date(from + 'T00:00:00').toISOString();
-    if (to)   { const d = new Date(to + 'T00:00:00'); d.setHours(23, 59, 59, 999); win.to = d.toISOString(); }
-    const [execRes, approvalRes, provisionRes, queuedRes, completedRes, failedRes, abortedRes] =
-      await Promise.allSettled([
-        getExecutionHistory(selectedOrgId, { ...win, status: 'executing',         limit: 1 }),
-        getExecutionHistory(selectedOrgId, { ...win, status: 'awaiting_approval', limit: 1 }),
-        getExecutionHistory(selectedOrgId, { ...win, status: 'provisioning',      limit: 1 }),
-        getExecutionHistory(selectedOrgId, { ...win, status: 'queued',            limit: 1 }),
-        getExecutionHistory(selectedOrgId, { ...win, status: 'completed',         limit: 1 }),
-        getExecutionHistory(selectedOrgId, { ...win, status: 'failed',            limit: 1 }),
-        getExecutionHistory(selectedOrgId, { ...win, status: 'aborted',           limit: 1 }),
-      ]);
-    const total = (r: PromiseSettledResult<{ total: number }>) =>
-      r.status === 'fulfilled' ? r.value.total : 0;
-    setSummaryActive(total(execRes) + total(approvalRes) + total(provisionRes));
-    if (queuedRes.status    === 'fulfilled') setSummaryQueued(queuedRes.value.total);
-    if (completedRes.status === 'fulfilled') setSummaryCompleted(completedRes.value.total);
+    // One grouped count, not a feed query per card.
+    let c: Record<string, number>;
+    try { c = await getExecutionCounts(selectedOrgId, rangeParams(from, to)); } catch { return; }
+    const n = (s: string) => c[s] ?? 0;
+    setSummaryActive(n('executing') + n('awaiting_approval') + n('provisioning'));
+    setSummaryQueued(n('queued'));
+    setSummaryCompleted(n('completed'));
     // Mirrors the 'failed' group: aborted counts as "did not succeed".
-    setSummaryFailed(total(failedRes) + total(abortedRes));
+    setSummaryFailed(n('failed') + n('aborted'));
   }, [selectedOrgId, fromFilter, toFilter]);
 
   // ─── Filter helpers ──────────────────────────────────────────
@@ -929,7 +870,7 @@ export default function AgentExecutionsPage() {
     const restored =
       fromUrl ??
       readStoredFilters(selectedOrgId) ??
-      { ...EMPTY_FILTERS, from: daysAgo(DEFAULT_FROM_DAYS) };
+      { ...EMPTY_FILTERS, from: DEFAULT_FROM };
 
     setStatusFilters(restored.statuses);
     setTriggerFilter(restored.trigger);
@@ -1102,8 +1043,6 @@ export default function AgentExecutionsPage() {
               <TimeRangePicker
                 from={fromFilter}
                 to={toFilter}
-                presets={TIME_PRESETS}
-                label={timeRangeLabel(fromFilter, toFilter)}
                 onApply={applyTimeRange}
                 disabled={loading}
               />

@@ -6,12 +6,11 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
+import {
+  TIME_PRESETS, boundToInput, presetBound, timeRangeLabel, type TimePreset,
+} from '@/lib/time-range';
 
-export interface TimePreset {
-  label: string;
-  /** Days back from today. 0 is allowed and means "today". */
-  days: number;
-}
+export type { TimePreset };
 
 /**
  * Time range control, Cloud-Console style.
@@ -23,70 +22,61 @@ export interface TimePreset {
  * the time range as a removable filter chip.
  *
  * It owns nothing. `from` and `to` are the caller's state and the only
- * representation of the window; a preset is just a button that computes a
- * date and hands it back. There is deliberately no "mode" — nothing here
- * remembers that you picked "Last 7 days" rather than typing that date, so
- * there is nothing that can fall out of step with the dates themselves.
- *
- * Both bounds are inclusive whole days. '' means unbounded on that side.
+ * representation of the window (bound formats in lib/time-range.ts). A preset
+ * applies a RELATIVE bound ("now-60m"), so "Last hour" keeps meaning the last
+ * hour; Custom applies exact local date-times, down to the minute, for finding
+ * what happened in a specific window.
  */
 export function TimeRangePicker({
-  from, to, presets, label, onApply, disabled,
+  from, to, presets = TIME_PRESETS, label, onApply, disabled,
 }: {
   from: string;
   to: string;
-  presets: TimePreset[];
-  /** Rendered on the button. The caller derives it from from/to. */
-  label: string;
+  presets?: TimePreset[];
+  /** Rendered on the button. Defaults to timeRangeLabel(from, to). */
+  label?: string;
   onApply: (from: string, to: string) => void;
   disabled?: boolean;
 }) {
   const [open, setOpen] = React.useState(false);
-  const [draftFrom, setDraftFrom] = React.useState(from);
-  const [draftTo, setDraftTo] = React.useState(to);
+  const [draftFrom, setDraftFrom] = React.useState('');
+  const [draftTo, setDraftTo] = React.useState('');
 
-  // Reopening always shows the window that is actually applied, not a draft
-  // abandoned last time.
+  // Reopening always shows the window that is actually applied (a relative
+  // bound resolved to the instant it means now), not a draft abandoned last time.
   React.useEffect(() => {
-    if (open) { setDraftFrom(from); setDraftTo(to); }
+    if (open) { setDraftFrom(boundToInput(from, 'from')); setDraftTo(boundToInput(to, 'to')); }
   }, [open, from, to]);
-
-  const daysAgo = (days: number) => {
-    const d = new Date();
-    d.setDate(d.getDate() - days);
-    return d.toISOString().slice(0, 10);
-  };
 
   const commit = (nextFrom: string, nextTo: string) => {
     onApply(nextFrom, nextTo);
     setOpen(false);
   };
 
-  // A preset is "active" when the applied window is exactly what it would
-  // produce — computed, not remembered.
-  const activePreset = (p: TimePreset) => !to && from === daysAgo(p.days);
+  // datetime-local values are fixed-width, so string order is time order.
   const customInvalid = !!draftFrom && !!draftTo && draftFrom > draftTo;
+  const customEmpty = !draftFrom && !draftTo;
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" className="gap-1.5 text-xs font-medium" disabled={disabled}>
           <CalendarRange className="h-3.5 w-3.5 text-muted-foreground" />
-          {label}
+          {label ?? timeRangeLabel(from, to)}
           <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="end" className="w-64 p-0">
+      <PopoverContent align="end" className="w-72 p-0">
         <div className="py-1">
           {presets.map((p) => (
             <button
               key={p.label}
               type="button"
-              onClick={() => commit(daysAgo(p.days), '')}
+              onClick={() => commit(presetBound(p), '')}
               className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-left hover:bg-muted/60 transition-colors"
             >
               <span className="h-3.5 w-3.5 shrink-0">
-                {activePreset(p) && <Check className="h-3.5 w-3.5 text-brand" />}
+                {!to && from === presetBound(p) && <Check className="h-3.5 w-3.5 text-brand" />}
               </span>
               <span className="flex-1 min-w-0 truncate">{p.label}</span>
             </button>
@@ -103,32 +93,36 @@ export function TimeRangePicker({
           </button>
         </div>
 
-        {/* Custom is not a mode you switch into — it is just the two dates,
-            always visible, always showing what is applied. */}
+        {/* Custom is not a mode you switch into — it is just the two bounds,
+            always visible, opening on what is applied. Either may be left
+            empty for an open-ended window. */}
         <div className="border-t p-2 space-y-2">
           <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground px-0.5">
             Custom
           </p>
-          <div className="flex items-center gap-1.5">
+          <label className="block space-y-1">
+            <span className="text-[11px] text-muted-foreground px-0.5">From</span>
             <Input
-              type="date" aria-label="Start date" value={draftFrom}
+              type="datetime-local" aria-label="Start" value={draftFrom}
               onChange={(e) => setDraftFrom(e.target.value)}
               className="h-8 text-xs"
             />
-            <span className="text-xs text-muted-foreground shrink-0">to</span>
+          </label>
+          <label className="block space-y-1">
+            <span className="text-[11px] text-muted-foreground px-0.5">To</span>
             <Input
-              type="date" aria-label="End date" value={draftTo}
+              type="datetime-local" aria-label="End" value={draftTo}
               onChange={(e) => setDraftTo(e.target.value)}
               className="h-8 text-xs"
             />
-          </div>
+          </label>
           {customInvalid && (
-            <p className="text-[10px] text-destructive px-0.5">Start date is after the end date.</p>
+            <p className="text-[10px] text-destructive px-0.5">Start is after the end.</p>
           )}
           <Button
             size="sm"
             className={cn('w-full text-xs')}
-            disabled={customInvalid || (draftFrom === from && draftTo === to)}
+            disabled={customInvalid || customEmpty}
             onClick={() => commit(draftFrom, draftTo)}
           >
             Apply

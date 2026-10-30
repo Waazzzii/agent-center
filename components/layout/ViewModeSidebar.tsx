@@ -29,6 +29,9 @@ import {
   Cog,
   Tags as TagsIcon,
   Activity as ActivityIcon,
+  Factory,
+  Briefcase,
+  LayoutTemplate,
 } from 'lucide-react';
 import Image from 'next/image';
 import { Button } from '@/components/ui/button';
@@ -53,6 +56,9 @@ const ICON_BY_HREF: Record<string, React.ElementType> = {
   '/authorization/clients':   Package,
   '/access':                  ShieldCheck,
   '/tags':                    TagsIcon,
+  '/factory/crews':           Users,
+  '/factory/jobs':            Briefcase,
+  '/factory/templates':       LayoutTemplate,
 };
 const ICON_BY_LABEL: Record<string, React.ElementType> = {
   'Authorization': ShieldCheck,
@@ -63,6 +69,7 @@ const ICON_BY_LABEL: Record<string, React.ElementType> = {
   // duplicate rather than a hierarchy.
   'Activity': ActivityIcon,
   'Settings': Cog,
+  'Agent Factory': Factory,
 };
 
 /**
@@ -153,7 +160,8 @@ export function ViewModeSidebar() {
   };
 
   const permitted = (item: NavItem) =>
-    !item.permissionKeys || !selectedOrgId || item.permissionKeys.some((k) => hasPermission(selectedOrgId, k));
+    (!item.superAdminOnly || admin?.is_super_admin === true) &&
+    (!item.permissionKeys || !selectedOrgId || item.permissionKeys.some((k) => hasPermission(selectedOrgId, k)));
 
   const closeMobile = () => { if (sidebarOpen) toggleSidebar(); };
 

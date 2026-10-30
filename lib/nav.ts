@@ -10,6 +10,8 @@ export interface NavItem {
   children?: NavItem[];
   /** Non-clickable section caption (e.g. "Building blocks"). No href/icon. */
   heading?: boolean;
+  /** Only Wazzi super admins see it (features still in development). */
+  superAdminOnly?: boolean;
 }
 
 /**
@@ -86,6 +88,28 @@ export const orgMainNavItems: NavItem[] = [
     ],
   },
   {
+    // AGENT FACTORY — Template → Crew → Job → Task → Attempt → (agent) Execution.
+    // A CREW is a template set up for this org (tracker, intake label, an agent
+    // per task). Every parent ticket it picks up is a JOB, worked through the
+    // template's TASKS — one sub-task each in the org's tracker. The coordinator
+    // is code (wazzi-backend factory tick). Viewing is agent_center_user; setting
+    // up is manager (the pages gate their own edit controls).
+    // IN DEVELOPMENT: super admins only — nav, pages (factory/layout.tsx) and
+    // the wazzi-backend factory routes all refuse everyone else.
+    //   CREWS     — set them up, switch them on, see each one's jobs.
+    //   JOBS      — every job across crews: what's waiting on a review, what stopped.
+    //   TEMPLATES — the task lists a crew starts from.
+    label: 'Agent Factory',
+    href: '',
+    permissionKeys: ['agent_center_user'],
+    superAdminOnly: true,
+    children: [
+      { label: 'Crews',     href: '/factory/crews',     permissionKeys: ['agent_center_user'] },
+      { label: 'Jobs',      href: '/factory/jobs',      permissionKeys: ['agent_center_user'] },
+      { label: 'Templates', href: '/factory/templates', permissionKeys: ['agent_center_user'] },
+    ],
+  },
+  {
     // INTERACTIONS — the human action queues, both waiting on a person.
     //   DECISIONS — answer what an agent's on-completion rule raised; scoped to
     //               the agents a user may decide on (decision grain).
@@ -154,8 +178,9 @@ export function firstPermittedHref(
   hasPermFn: (orgId: string, key: string) => boolean,
   orgId: string
 ): string | null {
+  // Super-admin-only items are never a landing page: nobody else can open them.
   const permitted = (item: NavItem) =>
-    bypass || !item.permissionKeys || item.permissionKeys.some((k) => hasPermFn(orgId, k));
+    !item.superAdminOnly && (bypass || !item.permissionKeys || item.permissionKeys.some((k) => hasPermFn(orgId, k)));
 
   for (const item of items) {
     // Prefer the item's OWN page when it has one (e.g. Agents → /agents),

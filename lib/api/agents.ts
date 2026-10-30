@@ -789,6 +789,20 @@ export async function getExecutionHistory(
   return res.data;
 }
 
+/**
+ * Runs per status over the same window/filters as the feed (status itself
+ * ignored) — one grouped count for the summary cards.
+ */
+export async function getExecutionCounts(
+  orgId: string,
+  params?: { from?: string; to?: string; agent_id?: string; trigger_type?: string; tag_ids?: string; tag_match?: 'any' | 'all' },
+): Promise<Record<string, number>> {
+  const res = await agentClient.get<{ counts: Record<string, number> }>(
+    `/api/admin/${orgId}/execution-history/counts`, { params },
+  );
+  return res.data.counts ?? {};
+}
+
 // ─── Browser HITL (agent-backend in-memory run tracking) ──────
 
 /**
