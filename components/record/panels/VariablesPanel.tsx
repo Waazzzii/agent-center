@@ -27,6 +27,7 @@ import { Plus, Trash2, ChevronRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isReservedParam, isLoginSecretParam, reservedParamMeta } from '@/lib/script-params';
 import type { RecordedStep } from '@/lib/api/scripts';
+import { fileStepField, fileStepOutputs, isFileStep } from '@/lib/file-steps';
 import { JsonNode } from './JsonTree';
 
 export interface VariableRef {
@@ -61,10 +62,12 @@ interface VariablesPanelProps {
 
 // ── The script's output model ───────────────────────────────────────────────
 
-const FILE_OUTPUTS: Record<string, { base: string; fields: string[]; kind: string }> = {
-  download:  { base: 'download', kind: 'Download',  fields: ['file', 'filename', 'bytes', 'sha256', 'object', 'uploaded', 'ms'] },
-  upload:    { base: 'upload',   kind: 'Upload',    fields: ['file', 'filename', 'bytes', 'sha256', 'count'] },
-  save_page: { base: 'page',     kind: 'Save page', fields: ['file', 'filename', 'bytes', 'sha256', 'object'] },
+// Names come from lib/file-steps (fileStepOutputs), the one list the editor keeps.
+const FILE_KINDS: Record<string, string> = {
+  download: 'Download',
+  upload: 'Upload',
+  save_page: 'Save page',
+  analyze_image: 'Analyze image',
 };
 
 interface OutputGroup { step: number; key: string; kind: string; names: string[] }
@@ -73,11 +76,10 @@ function outputGroups(steps: RecordedStep[]): OutputGroup[] {
   const out: OutputGroup[] = [];
   steps.forEach((s, i) => {
     if (s.action === 'extract' && s.field_name) out.push({ step: i, key: s.field_name, kind: 'Extract', names: [s.field_name] });
-    const spec = FILE_OUTPUTS[s.action];
-    if (spec) {
-      const key = s.field_name?.trim() || spec.base;
-      out.push({ step: i, key, kind: spec.kind, names: spec.fields.map((f) => `${key}_${f}`) });
+    if (isFileStep(s)) {
+      out.push({ step: i, key: fileStepField(s), kind: FILE_KINDS[s.action] ?? s.action, names: fileStepOutputs(s) });
     }
+
   });
   return out;
 }

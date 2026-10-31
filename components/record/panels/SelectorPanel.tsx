@@ -1,9 +1,13 @@
 'use client';
 
-import { AlertTriangle, Link2 } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, ChevronRight, Link2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import type { RecordedStep, SelectorCandidate } from '@/lib/api/scripts';
+import { primarySelector, replaceInLocators, setPrimarySelector, staticFallbacks } from '@/lib/step-locator';
+import { VariableInput } from '../VariableInput';
 
 // Order matches the runtime locator priority in
 // browser-step-run-worker.service.js so the editor reads top-down the
@@ -23,17 +27,52 @@ interface SelectorPanelProps {
   step: RecordedStep;
   stepIndex: number;
   onUpdateStep: (updated: RecordedStep) => void;
+  /** For the {{variable}} insert menu. */
+  variableNames?: string[];
 }
 
-export function SelectorPanel({ step, stepIndex, onUpdateStep }: SelectorPanelProps) {
+export function SelectorPanel({ step, stepIndex, onUpdateStep, variableNames = [] }: SelectorPanelProps) {
   // ── URL extract steps get a dedicated editor ──────────────────
   if (step.selector === '__url__') {
     return <UrlExtractionPanel step={step} stepIndex={stepIndex} onUpdateStep={onUpdateStep} />;
   }
+  return <DomSelectorPanel step={step} onUpdateStep={onUpdateStep} variableNames={variableNames} />;
+}
 
-  // ── Standard DOM selector panel ───────────────────────────────
+/**
+ * Where a DOM step acts. ONE editable selector; every change goes through
+ * lib/step-locator so the action, its wait, the fallbacks and a skip probe
+ * cannot disagree — a {{variable}} put in here reaches all of them. The
+ * recorder's ranked fallbacks are folded away: they are the engine's business
+ * until the selector needs replacing.
+ */
+function DomSelectorPanel({ step, onUpdateStep, variableNames }: { step: RecordedStep; onUpdateStep: (s: RecordedStep) => void; variableNames: string[] }) {
+  const [showFallbacks, setShowFallbacks] = useState(false);
+  const [note, setNote] = useState<string | null>(null);
   const candidates = step.elementSnapshot?.candidates ?? [];
-  const activeSel = step.selector ?? step.waitFor?.selector ?? null;
+  const activeSel = primarySelector(step) || null;
+  const waitSel = step.waitFor?.selector ?? null;
+  const waitDiffers = !!waitSel && !!step.selector && waitSel !== step.selector;
+  const staticCount = staticFallbacks(step);
+
+  // Selected text + a variable → that value becomes the variable EVERYWHERE
+  // on the step, and fallbacks that would still find the recorded element go.
+  const pickVariable = (variable: string, selected: string) => {
+    if (!selected.trim()) return false; // plain insert at the cursor
+    const r = replaceInLocators(step, selected, variable, true);
+    onUpdateStep(r.step);
+    setNote(
+      `Replaced "${selected}" with {{${variable}}} in ${r.changed} place${r.changed === 1 ? '' : 's'}` +
+      (r.dropped ? `; removed ${r.dropped} fallback${r.dropped === 1 ? '' : 's'} that ignored it.` : '.'),
+    );
+    return true;
+  };
+  const dropStatic = () => {
+    const vars = (primarySelector(step).match(/\{\{\s*\w+\s*\}\}/g) ?? []);
+    const kept = candidates.filter((c) => vars.some((v) => c.sel.includes(v)));
+    onUpdateStep({ ...step, elementSnapshot: { ...step.elementSnapshot!, candidates: kept } });
+    setNote(`Removed ${candidates.length - kept.length} fallback(s) that ignored the variable.`);
+  };
 
   const byType = new Map<string, { sel: string; type: string }>();
   for (const c of candidates) byType.set(c.type, c);
@@ -41,14 +80,19 @@ export function SelectorPanel({ step, stepIndex, onUpdateStep }: SelectorPanelPr
     byType.set('current', { sel: activeSel, type: 'current' });
   }
 
+  // Switching to a fallback: the action AND its wait move to it together.
   const handleSelect = (c: { sel: string; type: string }) => {
-    const updated = { ...step };
-    updated.selector = c.sel;
-    updated.waitFor = { ...(updated.waitFor ?? {}), selector: c.sel };
-    onUpdateStep(updated);
+    const moved = setPrimarySelector(step, c.sel);
+    onUpdateStep({ ...moved, waitFor: { ...(moved.waitFor ?? {}), selector: c.sel } });
   };
 
   const handleUpdateCandidate = (type: string, sel: string) => {
+    // The active row IS the selector: editing it edits the step, not a copy.
+    const existing = byType.get(type);
+    if (type === 'current' || (existing && existing.sel === activeSel)) {
+      onUpdateStep(setPrimarySelector(step, sel));
+      return;
+    }
     const updated = { ...step };
     const newCandidates = [...(updated.elementSnapshot?.candidates ?? [])];
     const existingIdx = newCandidates.findIndex((c) => c.type === type);
@@ -69,23 +113,55 @@ export function SelectorPanel({ step, stepIndex, onUpdateStep }: SelectorPanelPr
   };
 
   return (
-    <div className="px-3 py-2 space-y-1.5">
-      <div className="flex items-center justify-between pb-1">
-        <h4 className="text-xs font-medium text-foreground">
-          Selector <span className="font-normal text-muted-foreground">— Step {stepIndex + 1}</span>
-        </h4>
-        {activeSel && activeSel !== 'body' ? (
-          <span className="flex items-center gap-1 text-[9px] text-green-600 dark:text-green-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-            Active
-          </span>
-        ) : (
-          <span className="flex items-center gap-1 text-[9px] text-amber-600 dark:text-amber-400">
-            <AlertTriangle className="h-3 w-3" />
-            None selected
-          </span>
+    <div className="px-6 py-3 space-y-3">
+      <div className="space-y-1.5">
+        <label className="text-[11px] font-medium text-muted-foreground">Selector</label>
+        <VariableInput
+          mono
+          value={step.selector ?? waitSel ?? ''}
+          onChange={(v) => { setNote(null); onUpdateStep(setPrimarySelector(step, v)); }}
+          variableNames={variableNames}
+          onPickVariable={pickVariable}
+          placeholder="//button[contains(., 'Save')]"
+          aria-label="Selector"
+        />
+        <p className="text-[10px] text-muted-foreground leading-relaxed">
+          CSS or XPath. To make it follow a variable, select the recorded value in the box (a name, an id)
+          and choose the variable — it is replaced in the action, its wait and every fallback together.
+        </p>
+        {!activeSel && (
+          <p className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
+            <AlertTriangle className="h-3 w-3" /> No selector — the step has nothing to find.
+          </p>
+        )}
+        {note && <p className="text-[10px] text-green-600 dark:text-green-400">{note}</p>}
+        {staticCount > 0 && (
+          <div className="flex items-start justify-between gap-3 rounded border border-amber-500/30 bg-amber-500/5 px-2.5 py-1.5">
+            <p className="text-[10px] text-amber-700 dark:text-amber-300 leading-relaxed">
+              {staticCount} fallback{staticCount === 1 ? '' : 's'} still point at the recorded element. If the
+              variable selector misses, the engine would use {staticCount === 1 ? 'it' : 'them'} and act on the
+              wrong element.
+            </p>
+            <Button size="sm" variant="outline" className="h-6 shrink-0 px-2 text-[10px]" onClick={dropStatic}>Remove</Button>
+          </div>
         )}
       </div>
+
+      {/* The wait normally watches the same element; say so, and offer to
+          re-join it when someone pointed it elsewhere. */}
+      {waitSel && (
+        <div className="text-[10px] text-muted-foreground">
+          {waitDiffers ? (
+            <div className="flex items-start justify-between gap-3">
+              <span>Waits first for a different element: <code className="font-mono break-all">{waitSel}</code></span>
+              <Button size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-[10px]"
+                onClick={() => onUpdateStep({ ...step, waitFor: { ...(step.waitFor ?? {}), selector: step.selector } })}>
+                Wait for this one
+              </Button>
+            </div>
+          ) : 'Waits for the same element before acting.'}
+        </div>
+      )}
 
       {/* Wait-state dropdown — only meaningful for wait_for steps.
           Default 'visible' keeps the original behavior (tries
@@ -126,13 +202,18 @@ export function SelectorPanel({ step, stepIndex, onUpdateStep }: SelectorPanelPr
         </div>
       )}
 
-      {activeSel && activeSel !== 'body' && (
-        <div className="rounded bg-green-500/5 border border-green-500/20 px-2.5 py-1.5">
-          <span className="text-[9px] text-muted-foreground">Active selector:</span>
-          <p className="text-xs font-mono text-foreground truncate mt-0.5">{activeSel}</p>
-        </div>
+      {candidates.length > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowFallbacks((v) => !v)}
+          className="flex items-center gap-1 text-[11px] font-medium text-muted-foreground hover:text-foreground"
+        >
+          <ChevronRight className={cn('h-3 w-3 transition-transform', showFallbacks && 'rotate-90')} />
+          Fallbacks ({candidates.length})
+          <span className="font-normal">— tried in order when the selector misses</span>
+        </button>
       )}
-
+      {showFallbacks && (
       <div className="space-y-0.5">
         {SELECTOR_TYPES.filter((type) => type !== 'current' || byType.has('current')).map((type) => {
           const existing = byType.get(type);
@@ -175,9 +256,11 @@ export function SelectorPanel({ step, stepIndex, onUpdateStep }: SelectorPanelPr
           );
         })}
       </div>
+      )}
     </div>
   );
 }
+
 
 // ─── URL Extraction Panel ─────────────────────────────────────────
 // Shown instead of the DOM selector panel when the step is a URL extract.

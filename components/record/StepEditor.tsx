@@ -26,7 +26,7 @@ import {
   Layers,
   X,
   Timer,
-  Hourglass, Download, Upload, FileText, GitBranch
+  Hourglass, Download, Upload, FileText, GitBranch, ScanEye
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import type { RecordedStep } from '@/lib/api/scripts';
@@ -68,6 +68,7 @@ export const ACTION_ICONS: Record<ActionType, React.ReactNode> = {
   download:     <Download className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
   upload:       <Upload className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
   save_page:    <FileText className="h-3.5 w-3.5 text-muted-foreground shrink-0" />,
+  analyze_image: <ScanEye className="h-3.5 w-3.5 text-purple-400 shrink-0" />,
   // A group is a fork in the script, not an action performed on the page.
   group:        <GitBranch className="h-3.5 w-3.5 text-amber-400 shrink-0" />,
 };
@@ -469,6 +470,8 @@ const ACTION_LABELS: Record<ActionType, string> = {
   download:     'Download',
   upload:       'Upload',
   save_page:    'Save Page',
+  analyze_image: 'Analyze Image',
+
   group:        'Optional branch',
 };
 

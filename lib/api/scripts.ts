@@ -63,13 +63,29 @@ export interface ExtractConfig {
   network?: { url_contains: string; path?: string };
 }
 
+/** One declared key of an analyze_image step's JSON answer. */
+export interface AnalyzeOutput {
+  key: string;
+  type?: 'string' | 'number' | 'integer' | 'boolean' | 'array' | 'object';
+  description?: string;
+}
+
 export interface RecordedStep {
+
   // Kept in step with ACTION_TYPES in the backend's step-schema.js. 'download'
   // was already missing here while the engine implemented it — a step the UI
   // could not describe in types but happily rendered.
-  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for' | 'wait_for_tab' | 'pause' | 'download' | 'upload' | 'save_page' | 'group';
-  /** upload only — stored-file ids, or {{variables}} holding them. */
+  action: 'navigate' | 'click' | 'fill' | 'select' | 'press_key' | 'extract' | 'switch_tab' | 'close_tab' | 'wait_for' | 'wait_for_tab' | 'pause' | 'download' | 'upload' | 'save_page' | 'analyze_image' | 'group';
+  /** upload / analyze_image — stored-file ids, or {{variables}} holding them. */
   files?: string[];
+  /** analyze_image only — what to ask about the files ({{variables}} allowed). */
+  prompt?: string;
+  /** analyze_image only — any gemini-* / claude-* model id; blank = the default (Gemini Flash-Lite). */
+  model?: string;
+  /** analyze_image only — the JSON answer's keys; each is also {{<field>_<key>}}. */
+  outputs?: AnalyzeOutput[];
+  /** save_page only (png) — capture exactly this rectangle of the viewport, in the click-by-position pixel frame. */
+  clip?: { x: number; y: number; width: number; height: number };
   /** upload only — allowed extensions or MIME types, e.g. ["pdf", "image/tiff"]. */
   accept?: string[];
   /** upload only — total size cap across the files, in bytes. */
@@ -130,6 +146,9 @@ export interface RecordedStep {
   /** For pause steps: how long to sleep before the next step. Capped
    *  worker-side at 5 minutes (300_000ms). Positive integer or omitted. */
   duration_ms?: number;
+  /** pause only — when set, a random wait between duration_ms and this. */
+  duration_max_ms?: number;
+
   /**
    * When the recorded interaction happened inside an iframe, the CSS
    * selector that picks out the iframe in the parent document. At
@@ -996,3 +1015,30 @@ export async function captureStepRunExtract(
 export async function cancelStepRunExtractCapture(orgId: string, runId: string): Promise<void> {
   await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}/capture-extract`).catch(() => {});
 }
+
+export interface CapturedRegion {
+  /** A save_page clip as is: viewport CSS pixels from the top-left. */
+  region: { x: number; y: number; width: number; height: number };
+  viewport: { width: number; height: number };
+  /** JPEG data url of exactly that region, or null when the preview shot failed. */
+  preview: string | null;
+}
+
+/**
+ * Overlay the live browser page so the operator drags a box around an area.
+ * Blocks (up to ~60s) until they finish, or Esc (rejects, 409).
+ */
+export async function captureStepRunRegion(orgId: string, runId: string, signal?: AbortSignal): Promise<CapturedRegion> {
+  const res = await agentClient.post(
+    `/api/admin/${orgId}/step-runs/${runId}/capture-region`,
+    {},
+    { signal, timeout: 70_000 }
+  );
+  return res.data;
+}
+
+/** Cancel an in-progress region capture (removes the overlay from the page). */
+export async function cancelStepRunRegionCapture(orgId: string, runId: string): Promise<void> {
+  await agentClient.delete(`/api/admin/${orgId}/step-runs/${runId}/capture-region`).catch(() => {});
+}
+

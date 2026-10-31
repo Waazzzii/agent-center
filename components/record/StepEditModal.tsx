@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { Code2 } from 'lucide-react';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -11,9 +12,13 @@ import type { RecordedStep } from '@/lib/api/scripts';
 import { SelectorPanel, JsonPanel } from './panels';
 import { ExtractOptionsPanel } from './ExtractOptionsPanel';
 import { FileStepFields } from './FileStepFields';
+import { VariableInput } from './VariableInput';
 import { LOGIN_INDICATOR_BLOCKED, fileStepErrors, fileStepLabel, isFileStep } from '@/lib/file-steps';
 
-type TabId = 'name' | 'extract' | 'file' | 'branch' | 'selector' | 'json';
+type TabId = 'step' | 'action' | 'branch' | 'element' | 'options' | 'json';
+
+/** Steps that find an element on the page — the ones with an Element tab. */
+const LOCATES = new Set(['click', 'fill', 'select', 'wait_for', 'extract', 'download', 'upload']);
 
 interface StepEditModalProps {
   /** Step being edited. The modal is uncontrolled w.r.t. step data — it
@@ -23,7 +28,7 @@ interface StepEditModalProps {
   stepIndex: number;
   open: boolean;
   onClose: () => void;
-  /** Variable names available for the JSON panel's {{insertion}} picker. */
+  /** Variable names offered by every {{variable}} insert menu. */
   variableNames: string[];
   /**
    * The whole step list, used only by the Branch tab so it can show WHICH
@@ -42,14 +47,15 @@ interface StepEditModalProps {
 }
 
 /**
- * Modal that consolidates step-editing affordances into one place:
- *   • Name   — operator-supplied label (overrides the auto stepLabel)
- *   • Selector — DOM / URL-extract picker (same component as before,
- *     just moved out of the bottom panel)
- *   • JSON   — raw payload editor with variable autocomplete
+ * Editing one step, one concern per tab and only the tabs the step has:
+ *   • Step    — its name and what it does (the url, the value, the key…)
+ *   • <its own> — Extract / Download / Upload / Capture / Analyze / Branch
+ *   • Element — where it acts, for steps that find an element
+ *   • Options — when it runs: skip rules, failure, sign-in proof, time limit
  *
- * Opens via the pencil button on a step row. The bottom panel can stay
- * pinned to Variables since selector/JSON live here now.
+ * The raw JSON is not a tab: it is the escape hatch in the footer, for the
+ * rare field no form covers. Everything an operator routinely changes —
+ * including putting a {{variable}} into a value or a selector — has a field.
  */
 export function StepEditModal({
   step, stepIndex, open, onClose, variableNames, allSteps, onSave, showLoginIndicator = true,
@@ -57,7 +63,7 @@ export function StepEditModal({
   const [draft, setDraft] = useState<RecordedStep | null>(step);
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState('');
-  const [tab, setTab] = useState<TabId>('name');
+  const [tab, setTab] = useState<TabId>('step');
   const [saving, setSaving] = useState(false);
 
   /**
@@ -78,103 +84,66 @@ export function StepEditModal({
     return [...found];
   }, [draft]);
 
-  // Seed local state when the modal opens, or when a different step starts
-  // being edited. Crucially we depend on `stepIndex` (a number — stable) and
-  // NOT `step` (a new object reference every time the parent re-renders).
-  //
-  // Why this matters: during save, the parent fires setStepRunState mid-await,
-  // which causes a re-render BEFORE onClose runs. With `step` in the deps,
-  // this effect would re-fire and reset tab/jsonText/draft to whatever the
-  // parent now thinks the step is — visible as the UI "reverting" the edit
-  // for a split second on save, and confusing operators who expect their
-  // edits to persist until they close the modal.
-  // Re-sync the draft from the incoming step whenever it changes (open,
-  // different index, OR the step's content was rewritten under us — e.g. by a
-  // Test & Improve walk). Keying on a JSON fingerprint means an external
-  // rewrite refreshes the JSON tab instead of showing stale content. Local
-  // typing edits jsonText (not the `step` prop), so this never clobbers an
-  // in-progress edit; AI walks lock editing anyway.
+  // Re-seed when the modal opens, a different step is edited, or the step was
+  // rewritten under us (a Test & Improve walk). Keyed on a JSON fingerprint
+  // and the index — NOT the `step` object, which is a new reference on every
+  // parent render and would reset the edit mid-save.
   const stepKey = step ? JSON.stringify(step) : '';
   useEffect(() => {
     if (open) {
       setDraft(step);
-      setJsonText(stepKey ? JSON.stringify(step, null, 2) : '');
       setJsonError('');
-      setTab('name');
+      setTab('step');
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, stepIndex, stepKey]);
 
   if (!step || !draft) return null;
 
-  // Updates from the selector panel come back as a full step replacement;
-  // sync them into the JSON tab so switching between tabs doesn't lose work.
-  const handleSelectorUpdate = (updated: RecordedStep) => {
-    setDraft(updated);
-    setJsonText(JSON.stringify(updated, null, 2));
-    setJsonError('');
-  };
+  const patch = (p: Partial<RecordedStep>) => setDraft((d) => (d ? { ...d, ...p } as RecordedStep : d));
 
-  const handleJsonChange = (next: string) => {
-    setJsonText(next);
-    setJsonError('');
-    // Try to parse so a subsequent tab switch picks up the new shape.
-    // Don't block typing on invalid JSON though — the operator may be
-    // mid-edit. Real validation happens on Save.
+  // JSON is entered from the footer and left the same way; the form is the
+  // source of truth everywhere else.
+  const openJson = () => { setJsonText(JSON.stringify(draft, null, 2)); setJsonError(''); setTab('json'); };
+  const parseJson = (): RecordedStep | null => {
     try {
-      const parsed = JSON.parse(next);
-      if (parsed?.action) setDraft(parsed as RecordedStep);
-    } catch { /* ignore until save */ }
+      const parsed = JSON.parse(jsonText);
+      if (!parsed?.action) { setJsonError('Missing required field: action'); return null; }
+      return parsed as RecordedStep;
+    } catch (err) {
+      setJsonError(err instanceof Error ? err.message : 'Invalid JSON');
+      return null;
+    }
+  };
+  const closeJson = () => {
+    const parsed = parseJson();
+    if (!parsed) return;
+    setDraft(parsed);
+    setTab('step');
   };
 
   const handleNameChange = (next: string) => {
     // A group carries BOTH: `name` is what the editor shows, `label` is what
     // the run log prints. Letting them drift means the operator renames a
     // branch and the logs keep calling it the old thing.
-    const updated: RecordedStep = draft.action === 'group'
-      ? { ...draft, name: next, label: next }
-      : { ...draft, name: next };
-    setDraft(updated);
-    setJsonText(JSON.stringify(updated, null, 2));
+    patch(draft.action === 'group' ? { name: next, label: next } : { name: next });
   };
 
   const handleSave = async () => {
-    // Final JSON validation. If the operator edited JSON last, it might
-    // be invalid — surface the error inline instead of saving stale data.
     let toSave = draft;
     if (tab === 'json') {
-      try {
-        const parsed = JSON.parse(jsonText);
-        if (!parsed?.action) {
-          setJsonError('Missing required field: action');
-          return;
-        }
-        toSave = parsed as RecordedStep;
-      } catch (err) {
-        setJsonError(err instanceof Error ? err.message : 'Invalid JSON');
-        return;
-      }
+      const parsed = parseJson();
+      if (!parsed) return;
+      toSave = parsed;
     }
-    // Mark the step as committed so the executor's auto-lock doesn't
-    // overwrite the operator's deliberate edits on the next run.
-    //
-    // The executor's first-run auto-lock (browser-step-run-worker.service.js,
-    // lines 985-996) rewrites `step.selector` and `step.waitFor.selector`
-    // to whatever candidate just matched — but ONLY when `_tested` is
-    // falsy. That's the right call on an initial recording (lock in the
-    // best selector after one successful run), but it's the WRONG call
-    // after a deliberate modal save: the operator opened JSON, edited a
-    // value, and clicked Save — that's an explicit commit. Without this
-    // line the next Run Step would silently revert the edit, which was
-    // exactly the reported bug.
-    //
-    // The unless-the-operator-explicitly-removed-it caveat is honored:
-    // if the JSON tab's parsed payload sets `_tested: false` (or omits
-    // it after deletion), we respect the explicit choice. This branch
-    // only DEFAULTS to true when the field is missing entirely.
-    if (toSave._tested === undefined) {
-      toSave = { ...toSave, _tested: true };
-    }
+    // A deliberate save is a commit: mark it _tested so the executor's
+    // first-run auto-lock (which rewrites selector / waitFor.selector to
+    // whichever candidate matched, only while _tested is falsy) cannot
+    // silently revert the edit on the next Run Step. An explicit
+    // `_tested: false` from the JSON view is respected.
+    if (toSave._tested === undefined) toSave = { ...toSave, _tested: true };
+    // "Skip when missing" switched on with no element named yet is not a rule.
+    if (toSave.skip_if_missing === '') toSave = { ...toSave, skip_if_missing: false };
     setSaving(true);
     try {
       await onSave(toSave);
@@ -184,28 +153,31 @@ export function StepEditModal({
     }
   };
 
-  // A group has no selector of its own — it has a GUARD and a span — so it
-  // gets Branch where every other step gets Selector.
   const isGroup = draft.action === 'group';
   // The indicator must FAIL when signed out, which means it has to locate an
-  // element. A select waits for its options, a fill for its field, a click for
-  // its target — all as good a proof as a wait_for. Excluded are the ones that
-  // succeed with nothing on the page (navigate, press_key, pause) and download,
-  // which would produce a second file when a failed indicator re-runs the
-  // script. Kept in step with LOGIN_INDICATOR_BLOCKED in step-schema.js.
+  // element. Kept in step with LOGIN_INDICATOR_BLOCKED in step-schema.js.
   const canIndicate = !LOGIN_INDICATOR_BLOCKED.includes(draft.action);
   const isFile = isFileStep(draft);
+  const isUrlExtract = draft.action === 'extract' && draft.selector === '__url__';
+  const pointOnly = draft.action === 'click' && !!draft.point && !draft.selector;
+
+  // The step's own tab, named for what it is rather than "File".
+  const actionLabel =
+    draft.action === 'extract' && !isUrlExtract ? 'Extract'
+    : draft.action === 'download' ? 'Download'
+    : draft.action === 'upload' ? 'Upload'
+    : draft.action === 'save_page' ? (draft.clip ? 'Region' : 'Capture')
+    : draft.action === 'analyze_image' ? 'Analyze'
+    : null;
+  const hasElement = !isGroup && LOCATES.has(draft.action) && !pointOnly;
   const tabs: Array<{ id: TabId; label: string }> = [
-    { id: 'name', label: 'Name' },
-    // What an extract reads, and how — attribute, pattern, list, table,
-    // page data… (ExtractOptionsPanel). Not for a URL extract, which has its
-    // own options on the Selector tab.
-    ...(draft.action === 'extract' && draft.selector !== '__url__' ? [{ id: 'extract' as TabId, label: 'Extract' }] : []),
-    // download / upload / save_page: what file, where it goes, its limits.
-    ...(isFile ? [{ id: 'file' as TabId, label: 'File' }] : []),
-    isGroup ? { id: 'branch', label: 'Branch' } : { id: 'selector', label: 'Selector' },
-    { id: 'json', label: 'JSON' },
+    { id: 'step', label: 'Step' },
+    ...(actionLabel ? [{ id: 'action' as TabId, label: actionLabel }] : []),
+    ...(isGroup ? [{ id: 'branch' as TabId, label: 'Branch' }] : []),
+    ...(hasElement ? [{ id: 'element' as TabId, label: isUrlExtract ? 'URL' : 'Element' }] : []),
+    ...(!isGroup ? [{ id: 'options' as TabId, label: 'Options' }] : []),
   ];
+  const fileErrors = isFile ? fileStepErrors(draft) : [];
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
@@ -213,22 +185,20 @@ export function StepEditModal({
         <DialogHeader>
           <DialogTitle className="text-base font-semibold">
             Edit step {stepIndex + 1}
+            <span className="ml-2 text-xs font-normal text-muted-foreground">{actionName(draft)}</span>
           </DialogTitle>
         </DialogHeader>
 
-        {/* Tab bar */}
         <div className="flex items-center gap-1 border-b -mx-6 px-6">
           {tabs.map((t) => {
             const active = tab === t.id;
             return (
               <button
                 key={t.id}
-                onClick={() => setTab(t.id)}
+                onClick={() => (tab === 'json' ? (() => { const p = parseJson(); if (p) { setDraft(p); setTab(t.id); } })() : setTab(t.id))}
                 className={cn(
                   'px-3 py-1.5 text-xs font-medium border-b-2 -mb-px transition-colors',
-                  active
-                    ? 'border-brand text-foreground'
-                    : 'border-transparent text-muted-foreground hover:text-foreground',
+                  active ? 'border-brand text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground',
                 )}
               >
                 {t.label}
@@ -237,166 +207,110 @@ export function StepEditModal({
           })}
         </div>
 
-        {/* Tab content */}
         <div className="min-h-[280px] max-h-[60vh] overflow-y-auto -mx-6">
-          {tab === 'name' && (
-            <div className="px-6 py-3 space-y-3">
-              <div className="space-y-1.5">
-                <label className="text-[11px] font-medium text-muted-foreground" htmlFor={`step-name-${stepIndex}`}>
-                  Display name
-                </label>
+          {tab === 'step' && (
+            <div className="px-6 py-3 space-y-4">
+              <Field
+                label="Name"
+                htmlFor={`step-name-${stepIndex}`}
+                hint={<>Shown in the step list and the run log. Blank uses <code className="font-mono">{autoLabelHint(draft)}</code></>}
+              >
                 <Input
                   id={`step-name-${stepIndex}`}
                   value={draft.name ?? ''}
                   onChange={(e) => handleNameChange(e.target.value)}
                   placeholder="e.g. Open contract form"
                   autoFocus
+                  className="text-xs"
                 />
-                <p className="text-[10px] text-muted-foreground">
-                  Shown in the step list and timeline. Leave blank to use the auto label:
-                  {' '}
-                  <code className="font-mono">{autoLabelHint(draft)}</code>
-                </p>
-              </div>
+              </Field>
+              <StepFields step={draft} patch={patch} variableNames={variableNames} />
+            </div>
+          )}
 
-              {/* A GROUP does not take these.
-                  
-                  skip_if_empty, skip_if_missing and allow_failure are per-step
-                  answers to "should this one run" — a group answers that for
-                  its whole branch, once, with its guard. Offering both invites
-                  a step that is skipped by two mechanisms disagreeing about
-                  why, and the toggles reference an input and a selector this
-                  step does not have. */}
-              {!isGroup && (<>
-              {/* Conditional behaviour.
-                  Lives on the step, next to its name, because both answer
-                  "when does this step run" — and the step is the only place
-                  that knows which input it fills. */}
-              <div className="border-t pt-3 space-y-3">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <p className="text-[11px] font-medium">Skip when its input is empty</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {gatingParams.length > 0
-                        ? <>Runs only when {gatingParams.map((k, i) => (
-                            <span key={k}>
-                              {i > 0 && ', '}
-                              <code className="font-mono">{`{{${k}}}`}</code>
-                            </span>
-                          ))} {gatingParams.length === 1 ? 'has' : 'all have'} a value.</>
-                        : <>This step references no variables, so there is nothing to gate on.
-                            Use the JSON tab to name one explicitly — useful when this step is
-                            part of a chain for a field it does not itself fill.</>}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={draft.skip_if_empty === true || Array.isArray(draft.skip_if_empty)}
-                    disabled={gatingParams.length === 0 && !Array.isArray(draft.skip_if_empty)}
-                    onCheckedChange={(v) => setDraft((d) => (d ? { ...d, skip_if_empty: v ? true : false } : d))}
-                    aria-label="Skip this step when its input is empty"
+          {tab === 'options' && !isGroup && (
+            <div className="px-6 py-3 space-y-3">
+              <Toggle
+                title="Skip when its input is empty"
+                checked={draft.skip_if_empty === true || Array.isArray(draft.skip_if_empty)}
+                disabled={gatingParams.length === 0 && !Array.isArray(draft.skip_if_empty)}
+                onChange={(v) => patch({ skip_if_empty: v ? true : false })}
+              >
+                {gatingParams.length > 0
+                  ? <>Runs only when {gatingParams.map((k, i) => (
+                      <span key={k}>{i > 0 && ', '}<code className="font-mono">{`{{${k}}}`}</code></span>
+                    ))} {gatingParams.length === 1 ? 'has' : 'all have'} a value.</>
+                  : 'This step uses no variables, so there is nothing to gate on.'}
+              </Toggle>
+
+              <Toggle
+                title="Skip when the element is missing"
+                checked={draft.skip_if_missing === true || typeof draft.skip_if_missing === 'string'}
+                onChange={(v) => patch({ skip_if_missing: v ? (draft.selector ? true : '') : false })}
+              >
+                For an optional part of the flow — a 2FA challenge that only appears on a new device, a banner that
+                shows once. Probes the element first and skips the step if it is not on the page.
+              </Toggle>
+              {(typeof draft.skip_if_missing === 'string' || (draft.skip_if_missing === true && !draft.selector)) && (
+                <Field label="Element to probe" hint="Skip this step when this is not on the page. Blank probes the step's own selector.">
+                  <VariableInput
+                    mono
+                    value={typeof draft.skip_if_missing === 'string' ? draft.skip_if_missing : ''}
+                    onChange={(v) => patch({ skip_if_missing: v.trim() ? v : (draft.selector ? true : '') })}
+                    variableNames={variableNames}
+                    placeholder="#mfa-challenge"
                   />
-                </div>
+                </Field>
+              )}
 
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <p className="text-[11px] font-medium">Skip when the element is missing</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {draft.selector
-                        ? <>Probes <code className="font-mono">{String(draft.selector).slice(0, 44)}{String(draft.selector).length > 44 ? '…' : ''}</code> first
-                            and skips the step if it is not on the page. For an optional part of the
-                            flow — a 2FA challenge that only appears on a new device, a banner that
-                            shows once.</>
-                        : <>This step has no selector to probe. Name one explicitly via the JSON tab.</>}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={draft.skip_if_missing === true || typeof draft.skip_if_missing === 'string'}
-                    disabled={!draft.selector && typeof draft.skip_if_missing !== 'string'}
-                    onCheckedChange={(v) => setDraft((d) => (d ? { ...d, skip_if_missing: v ? true : false } : d))}
-                    aria-label="Skip this step when the element is missing"
-                  />
-                </div>
+              <Toggle
+                title="Continue if this step fails"
+                checked={draft.allow_failure === true}
+                disabled={draft.requires_approval === true}
+                onChange={(v) => patch({ allow_failure: v })}
+              >
+                {draft.requires_approval
+                  ? 'Not available on a step that submits — continuing past a failed submit would report success for work that never happened.'
+                  : 'Logs the error and moves on. If the step is optional because the element may not be there, use "Skip when the element is missing" instead.'}
+              </Toggle>
 
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <p className="text-[11px] font-medium">Continue if this step fails</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {draft.requires_approval
-                        ? 'Not available on a step that submits — continuing past a failed submit would report success for work that never happened.'
-                        : 'Logs the error and moves on instead of failing the run. For a step that may genuinely fail. If the step is optional because the ELEMENT may not be there, use "Skip when the element is missing" instead — it avoids running the step at all.'}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={draft.allow_failure === true}
-                    disabled={draft.requires_approval === true}
-                    onCheckedChange={(v) => setDraft((d) => (d ? { ...d, allow_failure: v } : d))}
-                    aria-label="Continue if this step fails"
-                  />
-                </div>
+              {showLoginIndicator && (
+                <Toggle
+                  title="Proves we are signed in"
+                  checked={draft.login_indicator === true}
+                  disabled={!canIndicate || draft.requires_approval === true}
+                  onChange={(v) => patch({ login_indicator: v })}
+                >
+                  {canIndicate
+                    ? (draft.requires_approval
+                        ? 'Not available on a step that submits: a failed indicator re-runs the script from the start, so the submit would happen twice.'
+                        : 'If it fails, the engine signs in and re-runs the script from the start — so it must come before anything that submits. One per script.')
+                    : 'This step cannot prove a session — it succeeds with nothing on the page.'}
+                </Toggle>
+              )}
 
-                {showLoginIndicator && (
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <p className="text-[11px] font-medium">Proves we are signed in</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      {canIndicate
-                        ? (draft.requires_approval
-                            ? "Not available on a step that submits. A failed indicator makes the engine sign in and re-run this script from the start, so anything already submitted would be submitted twice."
-                            : "Marks this as the step that proves the session is live. If it fails, the engine signs in and re-runs this script from the start — so it has to come before anything that submits. Only one step per script: setting it here clears it elsewhere.")
-                        : "This step cannot prove a session — it succeeds with nothing on the page. Use one that has to find an element: a wait-for, extract, select, fill or click."}
-                    </p>
-                  </div>
-                  <Switch
-                    checked={draft.login_indicator === true}
-                    disabled={!canIndicate || draft.requires_approval === true}
-                    onCheckedChange={(v) => setDraft((d) => (d ? { ...d, login_indicator: v } : d))}
-                    aria-label="This step proves we are signed in"
-                  />
-                </div>
-                )}
-
-                {/* A click recorded by position: where on the page, editable. */}
-                {draft.action === 'click' && draft.point && (
-                <div className="flex items-start justify-between gap-4">
-                  <div className="space-y-0.5">
-                    <p className="text-[11px] font-medium">Click position</p>
-                    <p className="text-[10px] text-muted-foreground">
-                      Where on the page this clicks, in pixels from the top-left of the browser
-                      window's page area (1279 × 812). No element is looked up.
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5 shrink-0">
-                    {(['x', 'y'] as const).map((axis) => (
-                      <Input
-                        key={axis}
-                        type="number"
-                        min={0}
-                        className="h-7 w-16 text-xs"
-                        placeholder={axis.toUpperCase()}
-                        aria-label={`Click position ${axis.toUpperCase()}`}
-                        value={draft.point?.[axis] ?? ''}
-                        onChange={(e) => {
-                          const n = Math.max(0, Math.round(Number(e.target.value) || 0));
-                          setDraft((d) => (d?.point ? { ...d, point: { ...d.point, [axis]: n } } : d));
-                        }}
-                      />
-                    ))}
-                  </div>
-                </div>
-                )}
-              </div>
-              </>)}
+              <Field label="Time limit (ms)" hint="Blank uses the default (about 15 s for most steps).">
+                <Input
+                  type="number"
+                  min={500}
+                  max={300000}
+                  className="w-32 text-xs"
+                  placeholder="15000"
+                  value={draft.timeout ?? ''}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    patch({ timeout: Number.isFinite(n) && n > 0 ? n : undefined });
+                  }}
+                />
+              </Field>
             </div>
           )}
 
           {tab === 'branch' && (() => {
             const g = (draft as { guard?: { selector?: string; timeout?: number; expect?: 'present' | 'absent' } }).guard ?? {};
             const span = (draft as { span?: number }).span ?? 1;
-            const patch = (next: Partial<{ guard: typeof g; span: number }>) => {
-              const updated = { ...draft, ...next } as RecordedStep;
-              setDraft(updated);
-              setJsonText(JSON.stringify(updated, null, 2));
-            };
+            const patchGroup = (next: Partial<{ guard: typeof g; span: number }>) =>
+              setDraft((d) => (d ? { ...d, ...next } as RecordedStep : d));
             // The steps this group currently owns, named. Counting rows by eye
             // is exactly how a span ends up one short or one long.
             const owned = (allSteps ?? []).slice(stepIndex + 1, stepIndex + 1 + span);
@@ -413,7 +327,7 @@ export function StepEditModal({
                   <label className="text-[11px] font-medium text-muted-foreground">Run this branch when</label>
                   <Select
                     value={g.expect ?? 'present'}
-                    onValueChange={(v) => patch({ guard: { ...g, expect: v as 'present' | 'absent' } })}
+                    onValueChange={(v) => patchGroup({ guard: { ...g, expect: v as 'present' | 'absent' } })}
                   >
                     <SelectTrigger size="sm" className="w-full text-xs">
                       <SelectValue />
@@ -427,11 +341,12 @@ export function StepEditModal({
 
                 <div className="space-y-1.5">
                   <label className="text-[11px] font-medium text-muted-foreground">Guard selector</label>
-                  <Input
+                  <VariableInput
+                    mono
                     value={g.selector ?? ''}
-                    onChange={(e) => patch({ guard: { ...g, selector: e.target.value } })}
+                    onChange={(v) => patchGroup({ guard: { ...g, selector: v } })}
+                    variableNames={variableNames}
                     placeholder="//div[@aria-label='Secure your account']"
-                    className="font-mono text-xs"
                   />
                   {!g.selector?.trim() && (
                     <p className="text-[10px] text-destructive">
@@ -447,7 +362,7 @@ export function StepEditModal({
                   <Input
                     type="number"
                     value={g.timeout ?? 8000}
-                    onChange={(e) => patch({ guard: { ...g, timeout: Number(e.target.value) || 8000 } })}
+                    onChange={(e) => patchGroup({ guard: { ...g, timeout: Number(e.target.value) || 8000 } })}
                     className="text-xs"
                   />
                   <p className="text-[10px] text-muted-foreground">
@@ -462,7 +377,7 @@ export function StepEditModal({
                     type="number"
                     min={1}
                     value={span}
-                    onChange={(e) => patch({ span: Math.max(1, Number(e.target.value) || 1) })}
+                    onChange={(e) => patchGroup({ span: Math.max(1, Number(e.target.value) || 1) })}
                     className="text-xs w-24"
                   />
                   {overrun && (
@@ -486,22 +401,24 @@ export function StepEditModal({
             );
           })()}
 
-          {tab === 'file' && (
+          {tab === 'action' && isFile && (
             <div className="px-6 py-3">
-              <FileStepFields step={draft} onChange={handleSelectorUpdate} />
+              <FileStepFields
+                step={draft}
+                onChange={setDraft}
+                hideSelector={hasElement}
+                priorSteps={(allSteps ?? []).slice(0, stepIndex)}
+                variableNames={variableNames}
+              />
             </div>
           )}
 
-          {tab === 'extract' && (
-            <ExtractOptionsPanel step={draft} onChange={handleSelectorUpdate} />
+          {tab === 'action' && draft.action === 'extract' && !isUrlExtract && (
+            <ExtractOptionsPanel step={draft} onChange={setDraft} />
           )}
 
-          {tab === 'selector' && (
-            <SelectorPanel
-              step={draft}
-              stepIndex={stepIndex}
-              onUpdateStep={handleSelectorUpdate}
-            />
+          {tab === 'element' && (
+            <SelectorPanel step={draft} stepIndex={stepIndex} onUpdateStep={setDraft} variableNames={variableNames} />
           )}
 
           {tab === 'json' && (
@@ -510,7 +427,7 @@ export function StepEditModal({
                 stepIndex={stepIndex}
                 stepAction={draft.action}
                 editedStep={jsonText}
-                onEditedStepChange={handleJsonChange}
+                onEditedStepChange={(t) => { setJsonText(t); setJsonError(''); }}
                 stepEditError={jsonError}
                 variableNames={variableNames}
               />
@@ -518,25 +435,153 @@ export function StepEditModal({
           )}
         </div>
 
-        <DialogFooter>
-          <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>
-            Cancel
-          </Button>
+        <DialogFooter className="sm:justify-between">
+          {/* The escape hatch, not a tab: for the rare field no form covers. */}
           <Button
+            variant="ghost"
             size="sm"
-            onClick={handleSave}
-            disabled={saving || (isFile && fileStepErrors(draft).length > 0)}
-            title={isFile && fileStepErrors(draft).length > 0 ? 'Fix the problems on the File tab first' : undefined}
+            className="text-xs text-muted-foreground"
+            onClick={tab === 'json' ? closeJson : openJson}
           >
-            {saving ? 'Saving…' : 'Save'}
+            <Code2 className="h-3.5 w-3.5 mr-1" />
+            {tab === 'json' ? 'Back to the form' : 'Edit JSON'}
           </Button>
+          <div className="flex gap-2">
+            <Button variant="ghost" size="sm" onClick={onClose} disabled={saving}>
+              Cancel
+            </Button>
+            <Button
+              size="sm"
+              onClick={handleSave}
+              disabled={saving || fileErrors.length > 0}
+              title={fileErrors.length > 0 ? `Fix the problems on the ${actionLabel} tab first` : undefined}
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </Button>
+          </div>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   );
 }
 
-/** Compact auto label preview for the name-tab hint. */
+// ── Pieces ──────────────────────────────────────────────────────────────────
+
+function Field({ label, hint, htmlFor, children }: { label: string; hint?: React.ReactNode; htmlFor?: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1.5">
+      <label className="text-[11px] font-medium text-muted-foreground" htmlFor={htmlFor}>{label}</label>
+      {children}
+      {hint && <p className="text-[10px] text-muted-foreground leading-relaxed">{hint}</p>}
+    </div>
+  );
+}
+
+function Toggle({ title, checked, disabled, onChange, children }: {
+  title: string; checked: boolean; disabled?: boolean; onChange: (v: boolean) => void; children: React.ReactNode;
+}) {
+  return (
+    <div className="flex items-start justify-between gap-4">
+      <div className="space-y-0.5">
+        <p className="text-[11px] font-medium">{title}</p>
+        <p className="text-[10px] text-muted-foreground leading-relaxed">{children}</p>
+      </div>
+      <Switch checked={checked} disabled={disabled} onCheckedChange={onChange} aria-label={title} />
+    </div>
+  );
+}
+
+/** What the step does, per action — the fields that used to live only in JSON. */
+function StepFields({ step, patch, variableNames }: {
+  step: RecordedStep; patch: (p: Partial<RecordedStep>) => void; variableNames: string[];
+}) {
+  switch (step.action) {
+    case 'navigate':
+      return (
+        <Field label="URL" hint="Where to go. Variables allowed, e.g. …/reservations/{{reservation_id}}.">
+          <VariableInput mono value={step.url ?? ''} onChange={(v) => patch({ url: v })} variableNames={variableNames} placeholder="https://…" />
+        </Field>
+      );
+    case 'fill':
+    case 'select':
+      return (
+        <Field
+          label={step.action === 'fill' ? 'Value to type' : 'Option to choose'}
+          hint={step.action === 'fill'
+            ? <>Use a variable for anything that changes per run. A login{"'"}s stored password is <code className="font-mono">{'{{_password}}'}</code>.</>
+            : 'The option\'s label or value.'}
+        >
+          <VariableInput value={step.value ?? ''} onChange={(v) => patch({ value: v })} variableNames={variableNames} placeholder={step.action === 'fill' ? '{{guest_email}}' : 'Arizona'} />
+        </Field>
+      );
+    case 'press_key':
+      return (
+        <Field label="Key" hint='A key or chord, e.g. "Enter", "Escape", "Control+a".'>
+          <Input className="font-mono text-xs w-48" value={step.key ?? ''} onChange={(e) => patch({ key: e.target.value })} placeholder="Enter" />
+        </Field>
+      );
+    case 'pause':
+      return (
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Wait (ms)">
+            <Input type="number" min={1} max={300000} className="text-xs" value={step.duration_ms ?? ''}
+              onChange={(e) => patch({ duration_ms: Math.max(1, parseInt(e.target.value, 10) || 0) || undefined })} />
+          </Field>
+          <Field label="Up to (ms)" hint="Optional: a random wait between the two.">
+            <Input type="number" min={1} max={300000} className="text-xs" value={step.duration_max_ms ?? ''}
+              onChange={(e) => { const n = parseInt(e.target.value, 10); patch({ duration_max_ms: Number.isFinite(n) && n > 0 ? n : undefined }); }} />
+          </Field>
+        </div>
+      );
+    case 'extract':
+      if (step.selector === '__url__') return null; // named on the URL tab
+      return (
+        <Field
+          label="Output variable"
+          hint={<>Later steps read it as <code className="font-mono">{`{{${step.field_name || 'name'}}}`}</code>. To rename one already used elsewhere, use the Variables panel so the uses follow.</>}
+        >
+          <Input className="font-mono text-xs w-64" value={step.field_name ?? ''} placeholder="reservation_id"
+            onChange={(e) => patch({ field_name: e.target.value.trim() })} />
+        </Field>
+      );
+    case 'click':
+      if (!step.point) return null;
+      return (
+        <Field label="Click position" hint="Pixels from the top-left of the page area (1279 × 812). No element is looked up.">
+          <div className="flex items-center gap-1.5">
+            {(['x', 'y'] as const).map((axis) => (
+              <Input
+                key={axis}
+                type="number"
+                min={0}
+                className="h-8 w-20 text-xs"
+                aria-label={`Click position ${axis.toUpperCase()}`}
+                value={step.point?.[axis] ?? ''}
+                onChange={(e) => {
+                  const n = Math.max(0, Math.round(Number(e.target.value) || 0));
+                  patch({ point: { ...step.point!, [axis]: n } });
+                }}
+              />
+            ))}
+          </div>
+        </Field>
+      );
+    default:
+      return null;
+  }
+}
+
+function actionName(step: RecordedStep): string {
+  const names: Record<string, string> = {
+    navigate: 'Navigate', click: step.point && !step.selector ? 'Click by position' : 'Click', fill: 'Fill', select: 'Select',
+    press_key: 'Press key', wait_for: 'Wait for', pause: 'Pause', extract: 'Extract', download: 'Download',
+    upload: 'Upload', save_page: step.clip ? 'Capture screen region' : 'Save page', analyze_image: 'Analyze image',
+    group: 'Optional branch',
+  };
+  return names[step.action] ?? step.action;
+}
+
+/** Compact auto label preview for the name hint. */
 function autoLabelHint(step: RecordedStep): string {
   switch (step.action) {
     // A group's auto label is the branch it guards, matching the step list.
@@ -550,7 +595,9 @@ function autoLabelHint(step: RecordedStep): string {
     case 'wait_for':   return `Wait: ${step.waitFor?.description ?? step.selector ?? 'element'}`;
     case 'download':
     case 'upload':
-    case 'save_page':  return fileStepLabel(step);
+    case 'save_page':
+    case 'analyze_image': return fileStepLabel(step);
+
     default:           return step.action;
   }
 }

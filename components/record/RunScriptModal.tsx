@@ -18,7 +18,7 @@ import {
   CircleDot, X, XCircle, Save, RotateCcw, Trash2, Plus, Server, Clock, Hourglass, GripVertical, PanelRightClose, PanelRightOpen,
   Variable, MousePointer2, Crosshair, Link2, Clipboard, Pencil, Copy, LogIn, KeyRound, Zap, Square,
   Scissors, ShieldAlert, Undo2, GitBranch, SkipForward, CircleSlash,
-  Download, Upload, FileText,
+  Download, Upload, FileText, ScanEye, Crop,
 } from 'lucide-react';
 import { useBrowserClientId } from '@/lib/hooks/use-browser-client-id';
 import { useProvisioningPoll } from '@/lib/hooks/use-provisioning-poll';
@@ -49,6 +49,8 @@ import {
   cancelStepRunWaitForCapture,
   captureStepRunExtract,
   cancelStepRunExtractCapture,
+  captureStepRunRegion,
+  cancelStepRunRegionCapture,
   runLoginInStepRun,
   getScriptAgentUsage,
   finalizeScript,
@@ -72,7 +74,7 @@ import { VariablesPanel } from './panels/VariablesPanel';
 import { StepEditModal } from './StepEditModal';
 import { FileStepFields } from './FileStepFields';
 import {
-  LOGIN_INDICATOR_BLOCKED, fileStepErrors, fileStepLabel, fileStepOutputs, type FileStepAction,
+  LOGIN_INDICATOR_BLOCKED, analysisFieldFor, fileStepErrors, fileStepLabel, fileStepOutputs, isFileStep, latestCaptureRef, type FileStepAction,
 } from '@/lib/file-steps';
 import { ProvisioningNotice } from '@/components/hitl/ProvisioningNotice';
 import { AGENT_BACKEND_URL as agentApiUrl } from '@/lib/config';
@@ -183,7 +185,8 @@ function autoStepLabel(step: RecordedStep): string {
     case 'pause':        return `Pause ${typeof step.duration_ms === 'number' ? `${step.duration_ms}ms` : ''}`.trim();
     case 'download':
     case 'upload':
-    case 'save_page':    return fileStepLabel(step);
+    case 'save_page':
+    case 'analyze_image': return fileStepLabel(step);
     // A group is named after the BRANCH, not its selector. "Two-factor
     // challenge" tells you what is optional here; an XPath does not.
     case 'group':      return (step as { label?: string }).label?.trim() || 'Optional branch';
@@ -430,6 +433,12 @@ export function RunScriptModal({
   // ── Extract capture ───────────────────────────────────────────
   const [isCapturingExtract, setIsCapturingExtract] = useState(false);
   const captureExtractAbortRef = useRef<AbortController | null>(null);
+
+  // ── Screen-region capture (drag a box → save_page clip) ───────
+  const [isCapturingRegion, setIsCapturingRegion] = useState(false);
+  const captureRegionAbortRef = useRef<AbortController | null>(null);
+  /** What the dragged region looks like, shown in the Save Page dialog it opens. */
+  const [regionPreview, setRegionPreview] = useState<string | null>(null);
 
   // ── VNC iframe ref + recording state sync ──────────────────────
   const vncIframeRef = useRef<HTMLIFrameElement | null>(null);
@@ -1081,7 +1090,7 @@ export function RunScriptModal({
       // A file step's output (evidence_file, read by a later upload) is
       // produced by this script, not supplied by the caller — same rule as
       // the backend's finalize pass.
-      if (info.sources.some((src) => src.action === 'download' || src.action === 'upload' || src.action === 'save_page')) continue;
+      if (info.sources.some((src) => isFileStep({ action: src.action as RecordedStep['action'] }))) continue;
       result[name] = '';
     }
     return result;
@@ -2320,7 +2329,7 @@ export function RunScriptModal({
     toast.success(`Pause step added (${parsed}ms)`);
   };
 
-  // ── Add a file step — download, upload or save_page ──
+  // ── Add a file step — download, upload, save_page or analyze_image ──
   // Opens a small dialog (FileStepFields) rather than a picker: an upload's
   // input is often hidden and a capture needs no element at all, so the
   // fields are typed. The selector can be refined afterwards on the step's
@@ -2333,9 +2342,40 @@ export function RunScriptModal({
         // Choosing the file IS the submit on most portals — gated by default,
         // so a test run asks before attaching. Agent runs go through.
         ? { action: 'upload', files: [], requires_approval: true }
-        : { action },
+        // Analyze reads what a Save Page just captured, nearly always — prefill
+        // the latest one's file so the common case is one prompt away.
+        : action === 'analyze_image'
+          ? (() => {
+              const prior = (stepRunState.steps ?? []).slice(0, stepRunState.currentIndex + 1);
+              const files = latestCaptureRef(prior, prior.length - 1);
+              return { action, files, field_name: analysisFieldFor(files, prior) } as RecordedStep;
+            })()
+          : { action },
     );
   };
+  // Drag a box on the live page; the overlay runs IN the page, so the box
+  // comes back in the page's own pixels — a save_page clip with nothing to
+  // convert. Opens the Save Page dialog prefilled, with a preview, so the
+  // operator sees what will be captured before the step exists.
+  const handleCaptureRegion = async () => {
+    if (!runId || !orgId || !stepRunState || isCapturingRegion) return;
+    setIsCapturingRegion(true);
+    const controller = new AbortController();
+    captureRegionAbortRef.current = controller;
+    try {
+      const { region, preview } = await captureStepRunRegion(orgId, runId, controller.signal);
+      setRegionPreview(preview);
+      setFileStepDraft({ action: 'save_page', format: 'png', clip: region, field_name: 'region', name: 'Save the screen region' });
+    } catch (err: any) {
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'AbortError' || err?.name === 'CanceledError') return;
+      if (err?.response?.status === 409) return; // Esc in the live view
+      toast.error(err?.response?.data?.error || err?.message || 'Region capture failed');
+    } finally {
+      captureRegionAbortRef.current = null;
+      setIsCapturingRegion(false);
+    }
+  };
+
   const handleConfirmFileStep = async () => {
     const step = fileStepDraft;
     if (!step || !runId || !orgId || !stepRunState) return;
@@ -2348,6 +2388,7 @@ export function RunScriptModal({
     setNewStepIndices((prev) => new Set([...prev, idx]));
     setHasChanges(true);
     setFileStepDraft(null);
+    setRegionPreview(null);
     await syncStepRunSteps(orgId, runId, newSteps).catch(() => {});
     toast.success(`${fileStepLabel(step)} — added as step ${idx + 1}`);
   };
@@ -3662,7 +3703,7 @@ export function RunScriptModal({
               kept reaching. Hidden outside Test: there is nothing to run while
               recording or extracting, and a live Stop belongs to the mode
               button that started it. */}
-          {runId && !isRecording && !isCapturingWaitFor && !isCapturingExtract && (
+          {runId && !isRecording && !isCapturingWaitFor && !isCapturingExtract && !isCapturingRegion && (
             isExecuting ? (
               <Button
                 size="sm"
@@ -3710,7 +3751,7 @@ export function RunScriptModal({
                   onClick={() => runAuto
                     ? (browserMode.headless && script?.id ? handleRunConfigured() : handleRunAgentMode())
                     : handleExecuteStep()}
-                  disabled={isRecording || isCapturingWaitFor || isCapturingExtract || !hasSteps || !!stepRunState?.done}
+                  disabled={isRecording || isCapturingWaitFor || isCapturingExtract || isCapturingRegion || !hasSteps || !!stepRunState?.done}
                   title={
                     stepRunState?.done ? 'Run complete — click any step to re-run from there.'
                     : runAuto
@@ -3737,6 +3778,7 @@ export function RunScriptModal({
               isRecording={isRecording}
               isCapturingWaitFor={isCapturingWaitFor}
               isCapturingExtract={isCapturingExtract}
+              isCapturingRegion={isCapturingRegion}
               isExecuting={isExecuting}
               disabled={starting}
               onStartRecording={() => handleToggleRecording(false)}
@@ -3752,6 +3794,13 @@ export function RunScriptModal({
               }}
               onSelectAddPause={handleAddPauseStep}
               onSelectAddFileStep={handleAddFileStep}
+              onSelectCaptureRegion={handleCaptureRegion}
+              onCancelRegion={() => {
+                captureRegionAbortRef.current?.abort();
+                captureRegionAbortRef.current = null;
+                cancelStepRunRegionCapture(orgId!, runId!).catch(() => {});
+                setIsCapturingRegion(false);
+              }}
               onSelectExtractElement={handleAddExtractStep}
               onCancelExtract={() => {
                 captureExtractAbortRef.current?.abort();
@@ -4794,27 +4843,59 @@ export function RunScriptModal({
       />
 
       {/* Add a file step (Record menu → Add Download / Add Upload / Save Page As File). */}
-      <Dialog open={fileStepDraft != null} onOpenChange={(o) => { if (!o) setFileStepDraft(null); }}>
+      <Dialog open={fileStepDraft != null} onOpenChange={(o) => { if (!o) { setFileStepDraft(null); setRegionPreview(null); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
               {fileStepDraft?.action === 'upload' ? 'Add upload step'
                 : fileStepDraft?.action === 'download' ? 'Add download step'
+                : fileStepDraft?.action === 'analyze_image' ? 'Analyze image'
+                : fileStepDraft?.clip ? 'Capture screen region'
                 : 'Save page as file'}
             </DialogTitle>
             <DialogDescription>
               {fileStepDraft?.action === 'upload'
                 ? 'Attaches stored files by id. Test it by setting the file variable in Variables, or with a download or saved page earlier in this script.'
-                : 'The file is kept in storage and its id is an output, so an upload step — in this script or another agent — can attach it.'}
+                : fileStepDraft?.action === 'analyze_image'
+                  ? 'Asks a vision model about a stored file — usually a Save Page (PNG, or a screen region) just before this — and keeps its JSON answer as variables.'
+                  : 'The file is kept in storage and its id is an output, so an upload step — in this script or another agent — can attach it.'}
             </DialogDescription>
           </DialogHeader>
           {fileStepDraft && (
-            <div className="max-h-[60vh] overflow-y-auto pr-1">
-              <FileStepFields step={fileStepDraft} onChange={setFileStepDraft} />
+            <div className="max-h-[60vh] overflow-y-auto pr-1 space-y-4">
+              {/* What the dragged box captured, as the page looked a moment ago.
+                  Only while the numbers still match it — editing them makes the
+                  picture stale, so it goes. */}
+              {regionPreview && fileStepDraft.clip && (
+                <figure className="space-y-1">
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={regionPreview}
+                    alt="Preview of the selected screen region"
+                    className="max-h-48 max-w-full rounded border bg-muted object-contain"
+                  />
+                  <figcaption className="text-[10px] text-muted-foreground">
+                    {fileStepDraft.clip.width} × {fileStepDraft.clip.height} at {fileStepDraft.clip.x}, {fileStepDraft.clip.y}
+                  </figcaption>
+                </figure>
+              )}
+              <FileStepFields
+                step={fileStepDraft}
+                // Inserted after the cursor, so everything up to it comes before.
+                priorSteps={(stepRunState?.steps ?? []).slice(0, (stepRunState?.currentIndex ?? -1) + 1)}
+                variableNames={editModalVarNames}
+
+                onChange={(next) => {
+                  const c0 = fileStepDraft.clip, c1 = next.clip;
+                  if (!c1 || !c0 || c0.x !== c1.x || c0.y !== c1.y || c0.width !== c1.width || c0.height !== c1.height) setRegionPreview(null);
+                  setFileStepDraft(next);
+                }}
+              />
             </div>
           )}
           <DialogFooter>
-            <Button variant="ghost" size="sm" onClick={() => setFileStepDraft(null)}>Cancel</Button>
+            <Button variant="ghost" size="sm" onClick={() => { setFileStepDraft(null); setRegionPreview(null); }}>Cancel</Button>
+
             <Button
               size="sm"
               onClick={handleConfirmFileStep}
@@ -4943,6 +5024,7 @@ interface ModeActionPickerProps {
   isRecording: boolean;
   isCapturingWaitFor: boolean;
   isCapturingExtract: boolean;
+  isCapturingRegion: boolean;
   isExecuting: boolean;
   disabled: boolean;
   onStartRecording: () => void;
@@ -4954,6 +5036,8 @@ interface ModeActionPickerProps {
   onCancelWait: () => void;
   onSelectAddPause: () => void;
   onSelectAddFileStep: (action: FileStepAction) => void;
+  onSelectCaptureRegion: () => void;
+  onCancelRegion: () => void;
   onSelectExtractElement: () => void;
   onCancelExtract: () => void;
   onSelectExtractUrl: () => void | Promise<void>;
@@ -4977,9 +5061,10 @@ const MODE_META: { key: ToolMode; label: string; icon: React.ComponentType<{ cla
 ];
 
 function ModeActionPicker({
-  toolMode, setToolMode, runMode, isRecording, isCapturingWaitFor, isCapturingExtract, isExecuting, disabled,
+  toolMode, setToolMode, runMode, isRecording, isCapturingWaitFor, isCapturingExtract, isCapturingRegion, isExecuting, disabled,
   onStartRecording, onStartRecordingByPoint, recordByPoint, onStopRecording, onSelectRecordWait, onCancelWait,
-  onSelectAddPause, onSelectAddFileStep, onSelectExtractElement, onCancelExtract, onSelectExtractUrl, onSelectCopyPage,
+  onSelectAddPause, onSelectAddFileStep, onSelectCaptureRegion, onCancelRegion,
+  onSelectExtractElement, onCancelExtract, onSelectExtractUrl, onSelectCopyPage,
 }: ModeActionPickerProps) {
   // Remember the action last chosen per mode so the left chip can show it.
   // Test derives from runMode (Manual=step, Auto=agent); Record / Extract
@@ -4996,6 +5081,7 @@ function ModeActionPicker({
     isRecording        ? { label: recordByPoint ? 'Recording positions…' : 'Recording…',       stopIcon: Square, stopTitle: 'Stop recording', onStop: onStopRecording, mode: 'record' as ToolMode } :
     isCapturingWaitFor ? { label: 'Waiting for click', stopIcon: X,      stopTitle: 'Cancel wait',     onStop: onCancelWait,     mode: 'record' as ToolMode } :
     isCapturingExtract ? { label: 'Click to extract',  stopIcon: X,      stopTitle: 'Cancel extract',  onStop: onCancelExtract,  mode: 'extract' as ToolMode } :
+    isCapturingRegion  ? { label: 'Drag a box',        stopIcon: X,      stopTitle: 'Cancel region',   onStop: onCancelRegion,   mode: 'record' as ToolMode } :
     null;
   const locked = disabled || !!activeStatus || isExecuting;
 
@@ -5013,7 +5099,11 @@ function ModeActionPicker({
       { label: 'Add Pause', desc: 'Fixed-duration delay before the next step (no element required)', icon: Hourglass, onClick: onSelectAddPause },
       { label: 'Add Download', desc: 'Click something that produces a file and keep the file', icon: Download, onClick: () => onSelectAddFileStep('download') },
       { label: 'Add Upload', desc: 'Attach a stored file to a file input on the page', icon: Upload, onClick: () => onSelectAddFileStep('upload') },
-      { label: 'Save Page As File', desc: 'Capture this page (or one element) as a PDF or PNG', icon: FileText, onClick: () => onSelectAddFileStep('save_page') },
+      { label: 'Save Page As File', desc: 'Capture this page or one element as a PDF or PNG', icon: FileText, onClick: () => onSelectAddFileStep('save_page') },
+      { label: 'Capture Screen Region', desc: 'Drag a box on the page — saves exactly that area as a PNG', icon: Crop, onClick: onSelectCaptureRegion },
+
+      { label: 'Analyze Image', desc: 'Ask a vision model (Gemini, Claude) about a saved page or file — JSON back', icon: ScanEye, onClick: () => onSelectAddFileStep('analyze_image') },
+
     ],
     extract: [
       { label: 'Extract From Element', desc: 'Click any element on the page', icon: MousePointer2, onClick: onSelectExtractElement },

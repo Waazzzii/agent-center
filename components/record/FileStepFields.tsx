@@ -1,25 +1,52 @@
 'use client';
 
 /**
- * Fields for the three file steps — download, upload, save_page.
+ * Fields for the file steps — download, upload, save_page, analyze_image.
  *
  * Shared by the "Add …" dialog in the editor's Record menu and the File tab of
  * StepEditModal, so the two cannot disagree about what a step needs. Pure: it
  * edits a step and hands it back; the caller persists.
  */
 
+import { useState } from 'react';
+import { Plus, X } from 'lucide-react';
+import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { Textarea } from '@/components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import type { RecordedStep } from '@/lib/api/scripts';
-import { fileStepErrors, fileStepField, fileStepOutputs } from '@/lib/file-steps';
+import type { AnalyzeOutput, RecordedStep } from '@/lib/api/scripts';
+import {
+  DEFAULT_VISION_MODEL, analysisFieldFor, fileRefOptions, fileStepErrors, fileStepField, fileStepOutputs,
+} from '@/lib/file-steps';
+import { setPrimarySelector } from '@/lib/step-locator';
 
 interface FileStepFieldsProps {
   step: RecordedStep;
   onChange: (next: RecordedStep) => void;
+  /**
+   * Hide the download / upload element field: the step editor shows it on its
+   * Element tab (with fallbacks and variables), and two boxes for one value is
+   * how they end up disagreeing.
+   */
+  hideSelector?: boolean;
+  /**
+   * The steps BEFORE this one: what an Analyze step can read (its file picker)
+   * and which output names are taken. Omitted = nothing to offer.
+   */
+  priorSteps?: RecordedStep[];
+  /** Script inputs, for *_file inputs in the Analyze file picker. */
+  variableNames?: string[];
 }
 
+const CUSTOM = '__custom';
+
 const MB = 1024 * 1024;
+
+/** A region to start from when the operator turns "Screen region" on. */
+const DEFAULT_CLIP = { x: 0, y: 0, width: 600, height: 400 };
+
+const OUTPUT_TYPES: NonNullable<AnalyzeOutput['type']>[] = ['string', 'number', 'integer', 'boolean', 'array', 'object'];
 
 function Field({ label, hint, children }: { label: string; hint?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -39,7 +66,23 @@ function textToList(text: string): string[] {
   return text.split(',').map((s) => s.trim()).filter(Boolean);
 }
 
-export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
+export function FileStepFields({ step, onChange, hideSelector = false, priorSteps = [], variableNames = [] }: FileStepFieldsProps) {
+  // ── analyze_image: pick a file, the output name follows it ──
+  const fileOptions = step.action === 'analyze_image' ? fileRefOptions(priorSteps, variableNames) : [];
+  const files = step.files ?? [];
+  const pickedOption = files.length === 1 && fileOptions.some((o) => o.ref === files[0]);
+  const [customFiles, setCustomFiles] = useState(files.length > 0 && !pickedOption);
+  const autoName = analysisFieldFor(files, priorSteps);
+  // The name is "automatic" while it is what the rule gives for the current
+  // file (or unset); a name someone typed is theirs and stays put.
+  const nameIsAuto = !step.field_name || step.field_name === autoName;
+  const [editingName, setEditingName] = useState(!nameIsAuto);
+  const setFiles = (next: string[]) => {
+    const follow = nameIsAuto && !editingName;
+    onChange({ ...step, files: next, ...(follow ? { field_name: analysisFieldFor(next, priorSteps) } : {}) });
+  };
+  // Through the shared helper, so a recorded step's wait and fallbacks follow.
+  const setSelector = (v: string) => onChange(setPrimarySelector(step, v));
   const set = (patch: Partial<RecordedStep>) => {
     const next = { ...step, ...patch } as RecordedStep;
     // Drop empty optionals rather than saving "" — the backend validates a
@@ -53,6 +96,19 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
   const outputs = fileStepOutputs(step);
   const fileOut = `{{${fileStepField(step)}_file}}`;
   const errors = fileStepErrors(step);
+  const declared = step.outputs ?? [];
+  const setOutput = (i: number, patch: Partial<AnalyzeOutput>) =>
+    set({ outputs: declared.map((o, j) => {
+      if (j !== i) return o;
+      const next = { ...o, ...patch };
+      if (!next.description) delete next.description;
+      if (!next.type || next.type === 'string') delete next.type;
+      return next;
+    }) });
+  const setClip = (k: 'x' | 'y' | 'width' | 'height', raw: string) => {
+    const n = parseInt(raw, 10);
+    set({ clip: { ...(step.clip ?? DEFAULT_CLIP), [k]: Number.isFinite(n) ? n : 0 } });
+  };
 
   return (
     <div className="space-y-4">
@@ -72,6 +128,7 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
               onChange={(e) => set({ files: textToList(e.target.value) })}
             />
           </Field>
+          {!hideSelector && (
           <Field
             label={step.upload_via === 'chooser' ? "Page's upload button (selector)" : "Page's file field (selector)"}
             hint={step.upload_via === 'chooser'
@@ -82,9 +139,10 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
               className="font-mono text-xs"
               placeholder='input[type="file"]'
               value={step.selector ?? ''}
-              onChange={(e) => set({ selector: e.target.value })}
+              onChange={(e) => setSelector(e.target.value)}
             />
           </Field>
+          )}
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-0.5">
               <p className="text-[11px] font-medium">Use the file picker</p>
@@ -139,16 +197,124 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
         </>
       )}
 
+      {step.action === 'analyze_image' && (
+        <>
+          <Field
+            label="File"
+            hint={customFiles
+              ? <>Stored file ids, or <code className="font-mono">{'{{variables}}'}</code> holding them — comma-separated for several. PNG, JPEG, WebP, GIF or PDF, up to 20 MB in total.</>
+              : fileOptions.length === 0
+                ? 'No step before this one captures a file. Add a Save Page or Capture Screen Region first, or choose Other.'
+                : 'A capture from earlier in this script — the most recent is the default.'}
+          >
+            <Select
+              value={customFiles ? CUSTOM : (pickedOption ? files[0] : '')}
+              onValueChange={(v) => {
+                if (v === CUSTOM) { setCustomFiles(true); return; }
+                setCustomFiles(false);
+                setFiles([v]);
+              }}
+            >
+              <SelectTrigger size="sm" className="w-full text-xs"><SelectValue placeholder="Choose a file" /></SelectTrigger>
+              <SelectContent position="popper" align="start">
+                {fileOptions.map((o) => (
+                  <SelectItem key={o.ref} value={o.ref}>
+                    <span className="font-mono">{o.ref}</span>
+                    <span className="ml-2 text-muted-foreground">{o.source}</span>
+                  </SelectItem>
+                ))}
+                <SelectItem value={CUSTOM}>Other — a file id or input…</SelectItem>
+              </SelectContent>
+            </Select>
+            {customFiles && (
+              <Input
+                className="font-mono text-xs"
+                placeholder="{{packet_file}}"
+                defaultValue={listToText(step.files)}
+                onChange={(e) => setFiles(textToList(e.target.value))}
+              />
+            )}
+          </Field>
+          <Field label="Prompt" hint="What to ask about the file. {{variables}} allowed. The answer is always JSON.">
+            <Textarea
+              className="text-xs min-h-20"
+              placeholder="What is the balance due shown on this statement?"
+              value={step.prompt ?? ''}
+              onChange={(e) => set({ prompt: e.target.value })}
+            />
+          </Field>
+          <Field label="Model" hint={<>Any <code className="font-mono">gemini-*</code> or <code className="font-mono">claude-*</code> model id. Blank uses the default.</>}>
+            <Input
+              className="font-mono text-xs"
+              placeholder={DEFAULT_VISION_MODEL}
+              value={step.model ?? ''}
+              onChange={(e) => set({ model: e.target.value.trim() })}
+            />
+          </Field>
+          <Field
+            label="Outputs"
+            hint="Fixes the answer's shape: an object with exactly these keys (null where the file does not say). Each key is also its own variable. None = free-form JSON."
+          >
+            <div className="space-y-2">
+              {declared.map((o, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <Input
+                    className="font-mono text-xs w-32 shrink-0"
+                    placeholder="total"
+                    value={o.key}
+                    onChange={(e) => setOutput(i, { key: e.target.value.trim() })}
+                    aria-label="Output key"
+                  />
+                  <Select value={o.type ?? 'string'} onValueChange={(v) => setOutput(i, { type: v as AnalyzeOutput['type'] })}>
+                    <SelectTrigger size="sm" className="w-24 shrink-0 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent position="popper" align="start">
+                      {OUTPUT_TYPES.map((t) => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Input
+                    className="text-xs min-w-0"
+                    placeholder="Description (optional)"
+                    value={o.description ?? ''}
+                    onChange={(e) => setOutput(i, { description: e.target.value })}
+                    aria-label="Output description"
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-7 w-7 shrink-0"
+                    onClick={() => set({ outputs: declared.filter((_, j) => j !== i) })}
+                    aria-label="Remove output"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              ))}
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => set({ outputs: [...declared, { key: '' }] })}
+              >
+                <Plus className="h-3.5 w-3.5 mr-1" /> Add output
+              </Button>
+            </div>
+          </Field>
+        </>
+      )}
+
       {step.action === 'download' && (
         <>
+          {!hideSelector && (
           <Field label="Download button or link" hint="What to click. The step listens for the file before clicking.">
             <Input
               className="font-mono text-xs"
               placeholder="//button[contains(., 'Export')]"
               value={step.selector ?? ''}
-              onChange={(e) => set({ selector: e.target.value })}
+              onChange={(e) => setSelector(e.target.value)}
             />
           </Field>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <Field label="File type" hint="Leave blank for CSV.">
               <Input
@@ -179,14 +345,15 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
                 onValueChange={(v) => set(
                   v === 'html'
                     // html stores the DOM as rendered: no unrolling, no print styles.
-                    ? { format: 'html', expand: undefined, expand_selector: undefined, media: undefined }
-                    : { format: v === 'png' ? 'png' : undefined },
+                    ? { format: 'html', expand: undefined, expand_selector: undefined, media: undefined, clip: undefined }
+                    // A screen region is a picture: it only exists for png.
+                    : { format: v === 'png' ? 'png' : undefined, ...(v === 'png' ? {} : { clip: undefined }) },
                 )}
               >
                 <SelectTrigger size="sm" className="w-full text-xs"><SelectValue /></SelectTrigger>
                 <SelectContent position="popper" align="start">
                   <SelectItem value="pdf">PDF — selectable text</SelectItem>
-                  <SelectItem value="png">PNG — full-length screenshot</SelectItem>
+                  <SelectItem value="png">PNG — screenshot</SelectItem>
                   <SelectItem value="html">HTML — the page&apos;s markup, for parsing</SelectItem>
                 </SelectContent>
               </Select>
@@ -200,6 +367,40 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
               />
             </Field>
           </div>
+          {step.format === 'png' && (
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-0.5">
+                <p className="text-[11px] font-medium">Capture a screen region</p>
+                <p className="text-[10px] text-muted-foreground">
+                  Exactly this rectangle of what is on screen, in the same pixels as Record Clicks By Position — for a
+                  chart, canvas or map no selector describes. It depends on the window size and layout.
+                </p>
+              </div>
+              <Switch
+                checked={step.clip != null}
+                onCheckedChange={(v) => set(v
+                  ? { clip: DEFAULT_CLIP, selector: undefined, expand: undefined, expand_selector: undefined }
+                  : { clip: undefined })}
+                aria-label="Capture a screen region"
+              />
+            </div>
+          )}
+          {step.clip && (
+            <div className="grid grid-cols-4 gap-3">
+              {(['x', 'y', 'width', 'height'] as const).map((k) => (
+                <Field key={k} label={k === 'x' ? 'Left (x)' : k === 'y' ? 'Top (y)' : k === 'width' ? 'Width' : 'Height'}>
+                  <Input
+                    type="number"
+                    min={k === 'x' || k === 'y' ? 0 : 1}
+                    className="text-xs tabular-nums"
+                    value={String(step.clip?.[k] ?? '')}
+                    onChange={(e) => setClip(k, e.target.value)}
+                  />
+                </Field>
+              ))}
+            </div>
+          )}
+          {!step.clip && (
           <Field label="Capture only this element" hint="Blank captures the whole page.">
             <Input
               className="font-mono text-xs"
@@ -208,7 +409,8 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
               onChange={(e) => set({ selector: e.target.value })}
             />
           </Field>
-          {step.format !== 'html' && (
+          )}
+          {step.format !== 'html' && !step.clip && (
           <div className="flex items-start justify-between gap-4">
             <div className="space-y-0.5">
               <p className="text-[11px] font-medium">Unroll scrolling panes</p>
@@ -224,7 +426,7 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
             />
           </div>
           )}
-          {step.format !== 'html' && step.expand !== false && (
+          {step.format !== 'html' && !step.clip && step.expand !== false && (
             <Field label="Pane to unroll" hint="Blank auto-detects every clipped pane. Name one if it unrolls the wrong thing.">
               <Input
                 className="font-mono text-xs"
@@ -268,19 +470,45 @@ export function FileStepFields({ step, onChange }: FileStepFieldsProps) {
         </Field>
       )}
 
+      {step.action === 'analyze_image' && !editingName ? (
+        // Named for the file it reads; override only if you care.
+        <div className="flex items-start justify-between gap-3">
+          <p className="text-[10px] text-muted-foreground leading-relaxed">
+            Answer saved as <code className="font-mono text-foreground">{`{{${fileStepField(step)}}}`}</code>, each key
+            as <code className="font-mono">{`{{${fileStepField(step)}_<key>}}`}</code>
+            {(step.outputs?.length ?? 0) > 0 && <> — e.g. <code className="font-mono">{`{{${fileStepField(step)}_${step.outputs![0].key || 'key'}}}`}</code></>}.
+            Named after the file automatically.
+          </p>
+          <Button variant="ghost" size="sm" className="h-6 shrink-0 px-2 text-[10px]" onClick={() => setEditingName(true)}>Change</Button>
+        </div>
+      ) : (
       <Field
         label="Output name"
         hint={<>Prefix for what this step produces: {outputs.slice(0, 4).map((o, i) => (
           <span key={o}>{i > 0 && ', '}<code className="font-mono">{`{{${o}}}`}</code></span>
-        ))}. {step.action !== 'upload' && <>Pass <code className="font-mono">{fileOut}</code> to an upload step — here or in another agent.</>}</>}
+        ))}. {step.action === 'analyze_image'
+          ? <>The whole JSON answer is <code className="font-mono">{`{{${fileStepField(step)}}}`}</code>; each key is <code className="font-mono">{`{{${fileStepField(step)}_<key>}}`}</code>.</>
+          : step.action !== 'upload' && <>Pass <code className="font-mono">{fileOut}</code> to an upload step — here or in another agent.</>}</>}
       >
         <Input
           className="font-mono text-xs"
-          placeholder={step.action === 'save_page' ? 'page' : step.action}
+          placeholder={step.action === 'save_page' ? 'page' : step.action === 'analyze_image' ? 'analysis' : step.action}
+
           value={step.field_name ?? ''}
           onChange={(e) => set({ field_name: e.target.value.trim() })}
         />
+        {step.action === 'analyze_image' && (
+          <button
+            type="button"
+            className="text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+            onClick={() => { set({ field_name: autoName }); setEditingName(false); }}
+          >
+            Use the automatic name ({autoName})
+          </button>
+        )}
       </Field>
+      )}
+
 
       {errors.length > 0 && (
         <ul className="space-y-0.5">
