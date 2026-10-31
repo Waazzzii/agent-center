@@ -74,7 +74,7 @@ import { VariablesPanel } from './panels/VariablesPanel';
 import { StepEditModal } from './StepEditModal';
 import { FileStepFields } from './FileStepFields';
 import {
-  LOGIN_INDICATOR_BLOCKED, analysisFieldFor, fileStepErrors, fileStepLabel, fileStepOutputs, isFileStep, latestCaptureRef, type FileStepAction,
+  LOGIN_INDICATOR_BLOCKED, analysisFieldFor, fileStepErrors, fileStepField, fileStepLabel, fileStepOutputs, isFileStep, latestCaptureRef, type FileStepAction,
 } from '@/lib/file-steps';
 import { ProvisioningNotice } from '@/components/hitl/ProvisioningNotice';
 import { AGENT_BACKEND_URL as agentApiUrl } from '@/lib/config';
@@ -1020,6 +1020,12 @@ export function RunScriptModal({
       // An upload's file refs ({{packet_file}}) and a capture's filename template.
       if (Array.isArray(s.files)) fields.push(...s.files.map(String));
       if (s.filename)       fields.push(s.filename);
+      // An analyze step's prompt and model, a named skip probe, and the
+      // fallbacks — the worker substitutes all of them.
+      if (s.prompt)         fields.push(s.prompt);
+      if (s.model)          fields.push(s.model);
+      if (typeof s.skip_if_missing === 'string') fields.push(s.skip_if_missing);
+      for (const c of s.elementSnapshot?.candidates ?? []) if (c?.sel) fields.push(c.sel);
       return fields;
     };
     steps.forEach((s, i) => {
@@ -1041,6 +1047,15 @@ export function RunScriptModal({
       for (const out of fileStepOutputs(s)) {
         const v = vars.get(out);
         if (v && v.consumers.length > 0) v.sources.push({ index: i, action: s.action });
+      }
+      // An Analyze answer's UNDECLARED keys are written too ({{<field>_<key>}}
+      // for every top-level key), so a use of one is that step's output, not
+      // a script input. Same rule as analyzeProduces in step-schema.js.
+      if (s.action === 'analyze_image') {
+        const base = fileStepField(s);
+        for (const [name, v] of vars) {
+          if (v.sources.length === 0 && name.startsWith(`${base}_`)) v.sources.push({ index: i, action: s.action });
+        }
       }
     });
     return vars;
@@ -2187,11 +2202,14 @@ export function RunScriptModal({
       const out = await renameScriptVariable(orgId, { steps: stepRunState?.steps ?? [], from: oldName, to: safeName });
       if (out.renamed.length === 0) return;
       setStepRunState((s) => s ? { ...s, steps: out.steps } : s);
-      // Test values follow their names.
+      // Test values follow their names — except on a connect, where the input
+      // is gone: its value now comes from the step that writes it.
       setParams((p) => {
         const next = { ...p };
         for (const [from, to] of out.renamed) {
-          if (from in next) { next[to] = next[from] ?? ''; delete next[from]; }
+          if (!(from in next)) continue;
+          if (out.kind !== 'connect') next[to] = next[from] ?? '';
+          delete next[from];
         }
         return next;
       });
@@ -2200,8 +2218,11 @@ export function RunScriptModal({
       toast.success(
         out.kind === 'group'
           ? `Renamed ${oldName} → ${safeName} (${out.renamed.length} fields) in every step`
-          : `Renamed ${oldName} → ${safeName} in every step`,
+          : out.kind === 'connect'
+            ? `{{${oldName}}} now uses {{${safeName}}} — the value an earlier step produces`
+            : `Renamed ${oldName} → ${safeName} in every step`,
       );
+
     } catch (err: any) {
       toast.error(err?.response?.data?.error || err?.message || 'Could not rename');
     }

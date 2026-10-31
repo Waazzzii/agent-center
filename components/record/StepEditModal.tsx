@@ -13,7 +13,7 @@ import { SelectorPanel, JsonPanel } from './panels';
 import { ExtractOptionsPanel } from './ExtractOptionsPanel';
 import { FileStepFields } from './FileStepFields';
 import { VariableInput } from './VariableInput';
-import { LOGIN_INDICATOR_BLOCKED, fileStepErrors, fileStepLabel, isFileStep } from '@/lib/file-steps';
+import { LOGIN_INDICATOR_BLOCKED, fileStepErrors, fileStepLabel, isFileStep, stepOutputNames } from '@/lib/file-steps';
 
 type TabId = 'step' | 'action' | 'branch' | 'element' | 'options' | 'json';
 
@@ -58,8 +58,16 @@ interface StepEditModalProps {
  * including putting a {{variable}} into a value or a selector — has a field.
  */
 export function StepEditModal({
-  step, stepIndex, open, onClose, variableNames, allSteps, onSave, showLoginIndicator = true,
+  step, stepIndex, open, onClose, variableNames: inputNames, allSteps, onSave, showLoginIndicator = true,
 }: StepEditModalProps) {
+  // What every {{variable}} menu in this step offers: the script's variables
+  // plus everything an EARLIER step writes (an Analyze answer, an extract, a
+  // file id) — even before anything uses it, so it can be picked to begin with.
+  const variableNames = useMemo(
+    () => [...new Set([...inputNames, ...stepOutputNames((allSteps ?? []).slice(0, stepIndex))])],
+    [inputNames, allSteps, stepIndex],
+  );
+
   const [draft, setDraft] = useState<RecordedStep | null>(step);
   const [jsonText, setJsonText] = useState('');
   const [jsonError, setJsonError] = useState('');

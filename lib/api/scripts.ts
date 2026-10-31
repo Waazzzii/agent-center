@@ -546,8 +546,8 @@ export async function renameScriptVariable(orgId: string, body: {
   steps: RecordedStep[];
   from: string;
   to: string;
-}): Promise<{ steps: RecordedStep[]; renamed: Array<[string, string]>; kind: 'group' | 'extract' | 'input' }> {
-  const res = await agentClient.post<{ steps: RecordedStep[]; renamed: Array<[string, string]>; kind: 'group' | 'extract' | 'input' }>(
+}): Promise<{ steps: RecordedStep[]; renamed: Array<[string, string]>; kind: 'group' | 'extract' | 'input' | 'connect' }> {
+  const res = await agentClient.post<{ steps: RecordedStep[]; renamed: Array<[string, string]>; kind: 'group' | 'extract' | 'input' | 'connect' }>(
     `/api/admin/${orgId}/scripts/rename-variable`, body);
   return res.data;
 }

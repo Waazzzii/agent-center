@@ -72,6 +72,23 @@ export function uploadFileRefs(step: RecordedStep): string[] {
   return out;
 }
 
+/**
+ * The variables these steps WRITE that a later step would reference: extract
+ * results, file ids and names, and every Analyze answer and key. What the
+ * {{variable}} menus offer from earlier steps — whether or not anything uses
+ * them yet, which is the point: picking one is how it gets its first use.
+ */
+export function stepOutputNames(steps: RecordedStep[]): string[] {
+  const out: string[] = [];
+  for (const s of steps) {
+    if (s?.action === 'extract' && s.field_name) out.push(s.field_name);
+    else if (s?.action === 'analyze_image') out.push(...fileStepOutputs(s));
+    else if (s?.action === 'save_page' || s?.action === 'download') out.push(`${fileStepField(s)}_file`, `${fileStepField(s)}_filename`);
+    else if (s?.action === 'upload') out.push(`${fileStepField(s)}_file`);
+  }
+  return [...new Set(out)];
+}
+
 /** A file an Analyze step can read, as offered by its picker. */
 export interface FileRefOption {
   /** What goes in `files`, e.g. "{{region_file}}". */
