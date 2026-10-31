@@ -2180,7 +2180,8 @@ export function RunScriptModal({
   // and the MCP rename exactly the same things. A clash or an invalid name comes
   // back as an error and nothing changes.
   const handleRenameVariable = async (oldName: string, newName: string) => {
-    const safeName = newName.trim().replace(/s+/g, '_').replace(/W/g, '');
+    // Spaces → underscores, then anything that cannot be in a {{variable}} goes.
+    const safeName = newName.trim().replace(/\s+/g, '_').replace(/\W/g, '');
     if (!safeName || safeName === oldName || !orgId) return;
     try {
       const out = await renameScriptVariable(orgId, { steps: stepRunState?.steps ?? [], from: oldName, to: safeName });
