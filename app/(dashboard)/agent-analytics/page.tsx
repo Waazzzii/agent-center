@@ -22,10 +22,11 @@ import {
   type FailureHotspot,
 } from '@/lib/api/agents';
 import {
-  getAgentCapacity, getCapacityEvents, getPodMetrics, getQueueWaits,
-  type AgentCapacity, type CapacityWorker, type CapacityEvent, type PodMetrics, type QueueWaits,
+  getAgentCapacity, getCapacityEvents, getPodMetrics, getQueueWaits, getProxyIpStats,
+  type AgentCapacity, type CapacityWorker, type CapacityEvent, type PodMetrics, type QueueWaits, type ProxyIpStats,
 } from '@/lib/api/ai-agent';
 import { PodResourcesCard, QueueWaitsCard } from '@/components/analytics/capacity-telemetry';
+import { ProxyIpsCard } from '@/components/analytics/proxy-ips-card';
 import { chartTooltipProps, CHART_GRID_STROKE } from '@/components/analytics/chart-theme';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -112,6 +113,7 @@ export default function AnalyticsPage() {
   const [capacityEvents, setCapacityEvents] = useState<CapacityEvent[]>([]);
   const [podMetrics, setPodMetrics] = useState<PodMetrics | null>(null);
   const [queueWaits, setQueueWaits] = useState<QueueWaits | null>(null);
+  const [proxyIps, setProxyIps] = useState<ProxyIpStats | null>(null);
   const [loading, setLoading] = useState(true);
 
   const isCustom = ANALYTICS_RANGES[rangeIdx]?.label === 'Custom';
@@ -126,13 +128,14 @@ export default function AnalyticsPage() {
       const exact = !isCustom ? ANALYTICS_RANGES[rangeIdx]?.getWindow?.() : undefined;
       const fromIso = exact?.fromIso ?? new Date(range.from + 'T00:00:00').toISOString();
       const toIso   = exact?.toIso   ?? new Date(range.to + 'T23:59:59').toISOString();
-      const [analytics, cap, events, pods, waits, kit] = await Promise.all([
+      const [analytics, cap, events, pods, waits, kit, ips] = await Promise.all([
         getExecutionAnalytics(selectedOrgId, { from: fromIso, to: toIso, compare: true }),
         getAgentCapacity(selectedOrgId).catch(() => null),
         getCapacityEvents(selectedOrgId, { from: fromIso, to: toIso }).catch(() => []),
         getPodMetrics(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
         getQueueWaits(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
         getKitAnalytics(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
+        getProxyIpStats(selectedOrgId, { from: fromIso, to: toIso }).catch(() => null),
       ]);
       setData(analytics);
       setKitUsage(kit);
@@ -140,6 +143,7 @@ export default function AnalyticsPage() {
       setCapacityEvents(events);
       setPodMetrics(pods);
       setQueueWaits(waits);
+      setProxyIps(ips);
     } catch {
       toast.error('Failed to load analytics');
     } finally {
@@ -210,6 +214,9 @@ export default function AnalyticsPage() {
           {/* Pod history (worker and runner apart) + how long runs waited */}
           <PodResourcesCard metrics={podMetrics} />
           <QueueWaitsCard waits={queueWaits} />
+
+          {/* The org's proxy IPs: failure share per IP, rotations (migration 449) */}
+          <ProxyIpsCard stats={proxyIps} />
 
           {/* Stat cards */}
           <SummaryCards data={data} />

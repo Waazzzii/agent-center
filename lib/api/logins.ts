@@ -128,6 +128,12 @@ export interface Login {
    */
   proxy_enabled: boolean;
   proxy_ip_id: string | null;
+  /** Login-level (read off the pool parent): an agent run moves a browser to
+   *  another IP once it has held its IP this many minutes, signing it in fresh
+   *  there (migration 448). null = each browser keeps its IP. */
+  proxy_rotate_minutes: number | null;
+  /** When this browser was given its current IP. */
+  proxy_ip_assigned_at: string | null;
   /** Pool parent: how runs pick a browser. 'warm' = browsers already in use
    *  first, a new one only when every one is busy; 'spread' = the one used
    *  longest ago. Read off the parent; ignored on a member. */
@@ -418,6 +424,9 @@ export interface LoginProxyPatch {
   enabled?: boolean;
   /** Move the browser named to another of the org's IPs, picked automatically. */
   change_ip?: boolean;
+  /** Rotate each browser's IP after this many minutes on one (5–10080), or
+   *  null to keep it. Login-level (the pool parent); signs nobody out by itself. */
+  rotate_minutes?: number | null;
 }
 
 /**

@@ -145,6 +145,45 @@ export interface QueueWaits {
   waiting_now?: Array<{ id: string; agent_name: string | null; reason: string | null; since: string; waited_s: number }>;
 }
 
+// ─── Proxy IPs (failure share per IP, rotations) ──────────────────────────────
+
+export interface ProxyIpStat {
+  id: string;
+  ip: string;
+  port: number;
+  city: string | null;
+  region: string | null;
+  available: boolean;
+  /** Script runs that went through this IP in the range, and how many failed. */
+  runs: number;
+  failures: number;
+  /** failures / runs, 0..1; null with no runs. */
+  failure_rate: number | null;
+  /** Distinct browsers that ran through it in the range. */
+  browsers_used: number;
+  /** Browsers on it right now. */
+  browsers_now: number;
+  /** Browsers rotated onto it in the range. */
+  rotations_in: number;
+  last_used_at: string | null;
+  last_failure: string | null;
+}
+
+export interface ProxyIpStats {
+  from: string;
+  to: string;
+  /** Rotations across all of the org's IPs in the range. */
+  rotations: number;
+  ips: ProxyIpStat[];
+}
+
+/** Each of the org's proxy IPs over the range (migration 449). */
+export async function getProxyIpStats(orgId: string, range: { from: string; to: string }): Promise<ProxyIpStats> {
+  const qs = new URLSearchParams(range).toString();
+  const response = await apiClient.get<ProxyIpStats>(`/admin/organizations/${orgId}/ai-agent/proxy-ips?${qs}`);
+  return response.data;
+}
+
 /** How long the org's runs waited to start, and why. */
 export async function getQueueWaits(orgId: string, range: { from: string; to: string }): Promise<QueueWaits> {
   const qs = new URLSearchParams(range).toString();

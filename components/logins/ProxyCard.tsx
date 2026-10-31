@@ -24,6 +24,11 @@
  * issued to the old IP, and bot protection treats a session that reappears on
  * another IP as stolen or scripted, so the backend wipes the profile of every
  * browser whose route changed, exactly like Log Out. Each change asks first.
+ *
+ * ROTATION (migration 448) is the login's choice on Setup: keep each browser's
+ * IP, or move it to another of the org's IPs every N minutes. Setting it signs
+ * nobody out; each rotation, when an agent run launches the browser, wipes that
+ * browser's profile the same way and the run signs it in fresh.
  */
 
 import { useEffect, useState } from 'react';
@@ -36,7 +41,18 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { InfoBubble } from '@/components/actions/login-fields';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { cn } from '@/lib/utils';
+
+/** Rotation choices; a value saved through the API that is not here is listed too. */
+const ROTATE_PRESETS = [15, 30, 60, 120, 240, 720, 1440];
+
+/** 15 → "15 minutes", 60 → "1 hour", 1440 → "1 day". */
+function every(minutes: number): string {
+  if (minutes % 1440 === 0) return minutes === 1440 ? '1 day' : `${minutes / 1440} days`;
+  if (minutes % 60 === 0) return minutes === 60 ? '1 hour' : `${minutes / 60} hours`;
+  return `${minutes} minutes`;
+}
 
 function apiError(err: unknown): string | undefined {
   return (err as { response?: { data?: { error?: string } } } | null)?.response?.data?.error;
@@ -103,6 +119,7 @@ export function ProxyCard({
   orgId,
   login,
   pooled,
+  rotateMinutes,
   onSaved,
   className,
 }: {
@@ -111,6 +128,8 @@ export function ProxyCard({
   /** The browser whose page this is. */
   login: Login;
   pooled: boolean;
+  /** The login's rotation (the pool parent's for a pool); null = keep the IP. */
+  rotateMinutes: number | null;
   onSaved: () => void | Promise<void>;
   className?: string;
 }) {
@@ -118,7 +137,7 @@ export function ProxyCard({
     () => accountCache.get(orgId) ?? null,
   );
   // WHICH control is saving, so the spinner sits in that control's place.
-  const [busy, setBusy] = useState<'toggle' | 'ip' | null>(null);
+  const [busy, setBusy] = useState<'toggle' | 'ip' | 'rotate' | null>(null);
   const { confirm } = useConfirmDialog();
 
   const loadAccount = () =>
@@ -180,6 +199,31 @@ export function ProxyCard({
   const myIp = ips.find((i) => i.id === login.proxy_ip_id) ?? null;
   const changeIp = () => save('ip', { change_ip: true }, 'IP changed — signed out; the next run starts fresh on the new IP');
 
+  // Rotation signs nobody out when it is set, so it saves without asking.
+  const setRotation = async (value: string) => {
+    const minutes = value === 'never' ? null : Number(value);
+    if (minutes === rotateMinutes) return;
+    setBusy('rotate');
+    try {
+      await setLoginProxy(orgId, login.id, { rotate_minutes: minutes });
+      await onSaved();
+      toast.success(minutes ? `Each browser moves to another IP every ${every(minutes)}` : 'Each browser keeps its IP');
+    } catch (err) {
+      toast.error(apiError(err) || 'Failed to change IP rotation');
+    } finally {
+      setBusy(null);
+    }
+  };
+  const rotateOptions = rotateMinutes && !ROTATE_PRESETS.includes(rotateMinutes)
+    ? [...ROTATE_PRESETS, rotateMinutes].sort((a, b) => a - b)
+    : ROTATE_PRESETS;
+  const rotationLine = rotateMinutes ? (
+    <p className="text-xs text-muted-foreground">
+      Moves to another IP every {every(rotateMinutes)}
+      {login.proxy_ip_assigned_at ? ` · on this IP since ${new Date(login.proxy_ip_assigned_at).toLocaleString()}` : ''}
+    </p>
+  ) : null;
+
   // ── Credentials tab: this browser's IP, in a pool ──
   if (mode === 'browser') {
     if (!pooled || !login.proxy_enabled) return null;
@@ -196,6 +240,7 @@ export function ProxyCard({
             </InfoBubble>
           </span>
           <IpLine ip={myIp} assigned={!!login.proxy_ip_id} busy={busy !== null} onChange={changeIp} />
+          {rotationLine}
         </CardContent>
       </Card>
     );
@@ -261,8 +306,44 @@ export function ProxyCard({
                 <strong className="font-medium text-foreground"> Credentials</strong> tab.
               </p>
             ) : (
-              <IpLine ip={myIp} assigned={!!login.proxy_ip_id} busy={busy !== null} onChange={changeIp} />
+              <>
+                <IpLine ip={myIp} assigned={!!login.proxy_ip_id} busy={busy !== null} onChange={changeIp} />
+                {rotationLine}
+              </>
             )}
+          </div>
+        )}
+
+        {login.proxy_enabled && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t pt-4">
+            <span className="flex items-center gap-1.5 text-sm font-medium">
+              Rotate IP
+              <InfoBubble>
+                Spreads load over the organisation&apos;s IPs: a site that sees one IP all day starts
+                throttling it after a few hours. When an agent run starts a browser that has held its IP
+                this long, the browser moves to the next IP and is signed out (its saved session wiped,
+                since the cookies belong to the old IP); the run signs it in fresh. A bot check on the new
+                IP goes to a person as usual. A person signing in or editing is never moved.
+              </InfoBubble>
+            </span>
+            <span className="flex items-center gap-2">
+              {busy === 'rotate' && <Loader2 className="size-4 animate-spin text-muted-foreground" />}
+              <Select
+                value={rotateMinutes ? String(rotateMinutes) : 'never'}
+                onValueChange={setRotation}
+                disabled={busy !== null}
+              >
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="never">Never — keep its IP</SelectItem>
+                  {rotateOptions.map((m) => (
+                    <SelectItem key={m} value={String(m)}>Every {every(m)}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </span>
           </div>
         )}
       </CardContent>

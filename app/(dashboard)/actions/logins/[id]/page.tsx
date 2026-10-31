@@ -1586,6 +1586,7 @@ export default function EditLoginPage() {
           orgId={selectedOrgId}
           login={login}
           pooled={pooled}
+          rotateMinutes={(poolParent ?? login).proxy_rotate_minutes ?? null}
           onSaved={() => load(true)}
         />
       )}
@@ -2225,6 +2226,7 @@ Agents sign in unattended when the script and its values are set.
           orgId={selectedOrgId}
           login={login}
           pooled={pooled}
+          rotateMinutes={(poolParent ?? login).proxy_rotate_minutes ?? null}
           onSaved={() => load(true)}
         />
       )}
