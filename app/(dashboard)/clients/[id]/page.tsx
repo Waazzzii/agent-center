@@ -187,7 +187,7 @@ export default function ClientDetailPage() {
       ) : (
         <div className="space-y-2">
           {assigned.map((a) => (
-            <Card key={a.id}>
+            <Card key={a.id} className="py-0">
               <CardContent className="flex items-center justify-between gap-3 p-4">
                 <button
                   onClick={() => router.push(`/agents/${a.id}`)}

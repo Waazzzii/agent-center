@@ -71,6 +71,16 @@ export function needsReview(job: FactoryJob): boolean {
   return !!t && taskState(latestAttempt(job, t.key)) === 'review';
 }
 
+/**
+ * What to show for a job with no ticket: a discover-mode job gets its ticket
+ * only once its first task plans work — and never, when it found nothing.
+ */
+export function noTicket(job: Pick<FactoryJob, 'status'>): string {
+  if (job.status === 'done') return 'No ticket — nothing to do';
+  if (job.status === 'canceled') return 'No ticket';
+  return 'No ticket yet — finding the work';
+}
+
 /** The PR a job's Build produced, if any. */
 export function jobPrUrl(job: Pick<FactoryJob, 'prior_results'>): string | null {
   for (const r of Object.values(job.prior_results ?? {})) {

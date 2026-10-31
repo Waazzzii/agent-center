@@ -20,6 +20,7 @@ import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { getCrews, type CrewSummary } from '@/lib/api/factory';
 import { ago } from '@/components/factory/job-state';
+import { scheduleLabel } from '@/components/factory/CrewForm';
 
 const TRACKER_NAMES: Record<string, string> = { linear: 'Linear' };
 
@@ -44,7 +45,7 @@ export default function CrewsPage() {
       <PageHeader
         icon={Users}
         title="Crews"
-        description="A crew takes tickets from your tracker as jobs and works each one through its template's tasks, with an agent in every role."
+        description="A crew takes tickets from your tracker as jobs and works each one through its template's tasks, with an agent for each task."
         actions={canEdit ? (
           <Button onClick={() => router.push('/factory/crews/new')}><Plus className="h-4 w-4" />New crew</Button>
         ) : undefined}
@@ -53,12 +54,12 @@ export default function CrewsPage() {
       {loading ? (
         <div className="flex h-48 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
       ) : crews.length === 0 ? (
-        <Card>
+        <Card className="py-0">
           <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
             <LayoutTemplate className="h-8 w-8 text-muted-foreground" />
             <div>
               <p className="font-medium">No crews yet</p>
-              <p className="mt-1 text-sm text-muted-foreground">Start one from a template — pick a tracker, a label, and an agent for each task.</p>
+              <p className="mt-1 text-sm text-muted-foreground">Start one from a template — say what a run does and when, and pick an agent for each task.</p>
             </div>
             <Button variant="outline" onClick={() => router.push('/factory/templates')}>Browse templates</Button>
           </CardContent>
@@ -67,7 +68,7 @@ export default function CrewsPage() {
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {crews.map((c) => (
             <Link key={c.id} href={`/factory/crews/${c.id}`} className="group">
-              <Card className="h-full transition-colors group-hover:border-brand/40">
+              <Card className="h-full py-0 transition-colors group-hover:border-brand/40">
                 <CardContent className="flex h-full flex-col gap-4 p-5">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -86,11 +87,13 @@ export default function CrewsPage() {
                   <div className="mt-auto space-y-1 text-xs text-muted-foreground">
                     <div className="truncate">
                       {TRACKER_NAMES[c.tracker_connector_key] ?? c.tracker_connector_key}
-                      {c.intake?.team ? ` · ${c.intake.team}` : ''} · <code>{c.intake?.label ?? '—'}</code>
+                      {c.intake?.team ? ` · ${c.intake.team}` : ''}
+                      {c.start_mode === 'discover' ? ' · finds its own work' : <> · <code>{c.intake?.label ?? '—'}</code></>}
                     </div>
+                    <div className="truncate">{scheduleLabel(c.schedule_cron)}</div>
                     <div className="flex items-center justify-between">
                       <span className={c.roles_assigned < c.task_count ? 'text-warning' : ''}>
-                        {c.roles_assigned < c.task_count ? `${c.task_count - c.roles_assigned} role(s) unassigned` : `${c.task_count} roles filled`}
+                        {c.roles_assigned < c.task_count ? `${c.task_count - c.roles_assigned} task(s) without an agent` : `${c.task_count} tasks assigned`}
                       </span>
                       <span className="inline-flex items-center gap-1">
                         {c.last_activity_at ? `Active ${ago(c.last_activity_at)}` : 'No jobs yet'}

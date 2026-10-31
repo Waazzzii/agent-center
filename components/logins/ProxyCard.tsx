@@ -36,6 +36,7 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Checkbox } from '@/components/ui/checkbox';
 import { InfoBubble } from '@/components/actions/login-fields';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog';
+import { cn } from '@/lib/utils';
 
 function apiError(err: unknown): string | undefined {
   return (err as { response?: { data?: { error?: string } } } | null)?.response?.data?.error;
@@ -183,7 +184,7 @@ export function ProxyCard({
   if (mode === 'browser') {
     if (!pooled || !login.proxy_enabled) return null;
     return (
-      <Card className={className}>
+      <Card className={cn('py-0', className)}>
         <CardContent className="p-5 space-y-3">
           <span className="flex items-center gap-1.5 text-sm font-medium">
             <Globe2 className="h-3.5 w-3.5 text-muted-foreground" />
@@ -203,7 +204,7 @@ export function ProxyCard({
   // ── Setup tab: the switch, and the IP when the login has one browser ──
   const canEnable = account?.configured === true && selectable.length > 0;
   return (
-    <Card className={className}>
+    <Card className={cn('py-0', className)}>
       <CardContent className="p-5 space-y-4">
         <div className="flex items-center justify-between gap-3">
           <label className={`flex items-center gap-3 ${canEnable || login.proxy_enabled ? 'cursor-pointer' : 'cursor-not-allowed opacity-70'}`}>

@@ -7,12 +7,14 @@ import { toast } from 'sonner';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
 import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { getAgents, type Agent } from '@/lib/api/agents';
 import { createCrew, getFactoryTemplates, getFactoryTrackers, type FactoryTemplate, type FactoryTracker } from '@/lib/api/factory';
 import {
-  CrewBasicsSection, CrewIntakeSection, CrewRolesSection, emptyCrewForm, formToInput, type CrewFormValue,
+  CrewBasicsSection, CrewIntakeSection, CrewRolesSection, CrewScheduleSection, crewFormValid, emptyCrewForm, formToInput,
+  type CrewFormValue,
 } from '@/components/factory/CrewForm';
 
 export default function NewCrewPage() {
@@ -61,25 +63,28 @@ export default function NewCrewPage() {
   };
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-[900px] mx-auto">
+    <div className="flex flex-col gap-5 p-6 max-w-[900px] mx-auto">
       <PageHeader
         icon={Users}
         title="New crew"
         breadcrumbs={[{ label: 'Crews', href: '/factory/crews' }, { label: 'New crew' }]}
-        description="Pick a template, say which tickets it takes, and put an agent in each role. A new crew starts switched off."
+        description="Pick a template, say where its jobs come from and when they start, and choose the agent for each task. A new crew starts switched off."
       />
       {loading ? (
         <div className="flex h-48 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
       ) : (
-        <>
-          <CrewBasicsSection value={form} onChange={setForm} templates={templates} />
-          <CrewIntakeSection value={form} onChange={setForm} trackers={trackers} />
-          <CrewRolesSection value={form} onChange={setForm} tasks={tasks} agents={agents} />
-          <div className="flex justify-end gap-2">
-            <Button variant="ghost" onClick={() => router.push('/factory/crews')}>Cancel</Button>
-            <Button onClick={save} disabled={saving}>{saving ? 'Creating…' : 'Create crew'}</Button>
-          </div>
-        </>
+        <Card className="py-0">
+          <CardContent className="p-5">
+            <CrewBasicsSection value={form} onChange={setForm} templates={templates} />
+            <CrewIntakeSection value={form} onChange={setForm} trackers={trackers} />
+            <CrewScheduleSection value={form} onChange={setForm} />
+            <CrewRolesSection value={form} onChange={setForm} tasks={tasks} agents={agents} />
+            <div className="mt-5 flex justify-end gap-2 border-t pt-4">
+              <Button variant="ghost" onClick={() => router.push('/factory/crews')}>Cancel</Button>
+              <Button onClick={save} disabled={saving || !crewFormValid(form)}>{saving ? 'Creating…' : 'Create crew'}</Button>
+            </div>
+          </CardContent>
+        </Card>
       )}
     </div>
   );

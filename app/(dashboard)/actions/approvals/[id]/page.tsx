@@ -132,7 +132,7 @@ export default function EditApprovalStepPage() {
         </div>
       </div>
 
-      <Card>
+      <Card className="py-0">
         <CardContent className="p-5 space-y-4">
           <div className="space-y-1">
             <Label>Name <span className="text-destructive">*</span></Label>

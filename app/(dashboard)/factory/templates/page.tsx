@@ -33,7 +33,7 @@ export default function TemplatesPage() {
       <PageHeader
         icon={LayoutTemplate}
         title="Templates"
-        description="A template is an ordered list of tasks. A crew uses one, with an agent of your choosing in each role."
+        description="A template is an ordered list of tasks. A crew uses one, with an agent of your choosing for each task."
       />
       {loading ? (
         <div className="flex h-48 items-center justify-center"><Loader2 className="h-6 w-6 animate-spin text-muted-foreground" /></div>
@@ -42,7 +42,7 @@ export default function TemplatesPage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
           {templates.map((t) => (
-            <Card key={t.id}>
+            <Card key={t.id} className="py-0">
               <CardContent className="flex h-full flex-col gap-4 p-5">
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">

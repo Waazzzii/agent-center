@@ -112,7 +112,7 @@ export function PodResourcesCard({ metrics }: { metrics: PodMetrics | null }) {
   const bucket = metrics?.bucket_seconds ?? 300;
 
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="mb-3 flex flex-wrap items-start justify-between gap-2">
           <div>
@@ -183,7 +183,7 @@ export function QueueWaitsCard({ waits }: { waits: QueueWaits | null }) {
     : 1;
 
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="mb-3">
           <h3 className="flex items-center gap-1.5 text-sm font-semibold">

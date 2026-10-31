@@ -3,17 +3,19 @@
 /**
  * One crew.
  *
- *   Jobs      every job this crew has taken on; a row opens the job page
- *   Roles     the agent in each task's role
- *   Settings  name, template, intake, and deleting the crew
+ *   Tasks     the agent that performs each of the template's tasks
+ *   Settings  name, template, where its jobs come from, when they start, and
+ *             deleting the crew
  *
- * The header carries the On/Off switch and Run now (runs the coordinator for
- * this crew immediately, instead of waiting for its schedule).
+ * Its jobs are on the Jobs page, with every other crew's.
+ *
+ * The header carries the On/Off switch and Start now — what its schedule or
+ * the API would do.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
-import { Briefcase, CalendarClock, Loader2, Play, Plus, RefreshCw, Settings2, Trash2, UserCog, Users } from 'lucide-react';
+import { ListChecks, Loader2, Play, Settings2, Trash2, Users } from 'lucide-react';
 import { toast } from 'sonner';
 import { PageHeader } from '@/components/layout/PageHeader';
 import { NoPermissionContent } from '@/components/layout/no-permission-content';
@@ -21,24 +23,22 @@ import { Tabs, TabsList, TabsTrigger, TabsPanel, TabsContent, TabsCount } from '
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
-import { Card, CardContent } from '@/components/ui/card';
+import { InfoHint } from '@/components/ui/info-hint';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { cn } from '@/lib/utils';
 import { useAdminViewStore } from '@/stores/admin-view.store';
 import { useRequirePermission } from '@/lib/hooks/use-require-permission';
 import { getAgents, type Agent } from '@/lib/api/agents';
 import {
-  deleteCrew, getCrew, getFactoryTemplates, getFactoryTrackers, getJobs, runCrewNow, updateCrew,
-  type CrewDetail, type FactoryJob, type FactoryTemplate, type FactoryTracker,
+  deleteCrew, getCrew, getFactoryTemplates, getFactoryTrackers, startCrewJobs, updateCrew,
+  type CrewDetail, type FactoryTemplate, type FactoryTracker,
 } from '@/lib/api/factory';
 import {
-  CrewBasicsSection, CrewIntakeSection, CrewRolesSection, crewToForm, formToInput, type CrewFormValue,
+  CrewBasicsSection, CrewIntakeSection, CrewRolesSection, CrewScheduleSection, crewFormValid, crewToForm, scheduleLabel,
+  formToInput, type CrewFormValue,
 } from '@/components/factory/CrewForm';
-import { JobsTable } from '@/components/factory/JobsTable';
-import { rangeParams } from '@/lib/time-range';
-import { CrewTriggers, StartJobDialog } from '@/components/factory/CrewTriggers';
 
-type Tab = 'jobs' | 'triggers' | 'roles' | 'settings';
+type Tab = 'tasks' | 'settings';
 const TRACKER_NAMES: Record<string, string> = { linear: 'Linear' };
 
 export default function CrewPage() {
@@ -49,66 +49,39 @@ export default function CrewPage() {
   const canView = useRequirePermission(['agent_center_user', 'agent_center_manager']);
   const canEdit = useRequirePermission('agent_center_manager');
 
-  const initialTab = (['jobs', 'triggers', 'roles', 'settings'] as Tab[]).find((t) => t === params.get('tab')) ?? 'jobs';
+  const initialTab = (['tasks', 'settings'] as Tab[]).find((t) => t === params.get('tab')) ?? 'tasks';
   const [tab, setTab] = useState<Tab>(initialTab);
   const [crew, setCrew] = useState<CrewDetail | null>(null);
-  const [jobs, setJobs] = useState<FactoryJob[]>([]);
   const [templates, setTemplates] = useState<FactoryTemplate[]>([]);
   const [trackers, setTrackers] = useState<FactoryTracker[]>([]);
   const [agents, setAgents] = useState<Agent[]>([]);
   const [form, setForm] = useState<CrewFormValue | null>(null);
   const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
-  const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
   const [toggling, setToggling] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [startOpen, setStartOpen] = useState(false);
-  // When this crew's jobs started; Any time by default (see the Jobs page).
-  const [range, setRange] = useState({ from: '', to: '' });
 
   const changeTab = (t: Tab) => {
     setTab(t);
-    router.replace(`/factory/crews/${id}${t === 'jobs' ? '' : `?tab=${t}`}`, { scroll: false });
+    router.replace(`/factory/crews/${id}${t === 'tasks' ? '' : `?tab=${t}`}`, { scroll: false });
   };
-
-  const loadJobs = useCallback(async () => {
-    if (!selectedOrgId) return;
-    setRefreshing(true);
-    try { setJobs(await getJobs(selectedOrgId, { crewId: id, ...rangeParams(range.from, range.to) })); } catch { /* keep the last list */ }
-    finally { setRefreshing(false); }
-  }, [selectedOrgId, id, range]);
-
-  // A new window reloads the list (the initial load below covers the first one).
-  const firstRange = useRef(true);
-  useEffect(() => {
-    if (firstRange.current) { firstRange.current = false; return; }
-    loadJobs();
-  }, [range]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedOrgId || !canView) return;
     setLoading(true);
     Promise.all([
       getCrew(selectedOrgId, id),
-      getJobs(selectedOrgId, { crewId: id }),
       getFactoryTemplates(selectedOrgId),
       getFactoryTrackers(selectedOrgId),
       getAgents(selectedOrgId),
     ])
-      .then(([c, j, t, tr, a]) => {
-        setCrew(c); setJobs(j); setTemplates(t); setTrackers(tr); setAgents(a.agents); setForm(crewToForm(c));
+      .then(([c, t, tr, a]) => {
+        setCrew(c); setTemplates(t); setTrackers(tr); setAgents(a.agents); setForm(crewToForm(c));
       })
       .catch(() => toast.error('Failed to load the crew'))
       .finally(() => setLoading(false));
   }, [selectedOrgId, canView, id]);
-
-  // Keep the jobs current while someone is watching them.
-  useEffect(() => {
-    if (tab !== 'jobs' || !crew?.enabled) return;
-    const t = setInterval(loadJobs, 30_000);
-    return () => clearInterval(t);
-  }, [tab, crew?.enabled, loadJobs]);
 
   const unassigned = useMemo(() => (crew ? crew.tasks.filter((t) => !crew.roles[t.key]).length : 0), [crew]);
   const dirty = useMemo(() => !!crew && !!form && JSON.stringify(formToInput(form)) !== JSON.stringify(formToInput(crewToForm(crew))), [crew, form]);
@@ -120,24 +93,26 @@ export default function CrewPage() {
     setToggling(true);
     try {
       setCrew(await updateCrew(selectedOrgId, id, { enabled }));
-      toast.success(enabled ? 'Crew on — it picks up jobs on its next run.' : 'Crew off.');
+      toast.success(enabled ? 'Crew on.' : 'Crew off.');
     } catch (err: any) {
       toast.error(err?.response?.data?.message || 'Failed to update');
     } finally { setToggling(false); }
   };
 
-  const runNow = async () => {
+  const startNow = async () => {
     if (!selectedOrgId) return;
-    setRunning(true);
+    setStarting(true);
     try {
-      const r = await runCrewNow(selectedOrgId, id);
-      if (r.skipped) toast.info('A run is already in progress.');
-      else if (r.errors?.length) toast.error(r.errors[0]!.error);
-      else toast.success(`Picked up ${r.claimed} · started ${r.started} · finished ${r.finished}`);
-      await loadJobs();
+      const r = await startCrewJobs(selectedOrgId, id);
+      if (r.started) toast.success(r.result);
+      else if (r.result.startsWith('Failed')) toast.error(r.result);
+      else toast.info(r.result);
+      // A single new job: open it. Otherwise refresh (the Last line).
+      if (r.job_ids.length === 1) router.push(`/factory/jobs/${r.job_ids[0]}`);
+      else setCrew(await getCrew(selectedOrgId, id));
     } catch (err: any) {
-      toast.error(err?.response?.data?.message || 'Failed to run');
-    } finally { setRunning(false); }
+      toast.error(err?.response?.data?.message || 'Failed to start jobs');
+    } finally { setStarting(false); }
   };
 
   const save = async () => {
@@ -169,10 +144,10 @@ export default function CrewPage() {
   }
 
   const saveBar = canEdit && (
-    <div className={cn('flex items-center justify-end gap-2', !dirty && 'opacity-60')}>
+    <div className={cn('mt-5 flex items-center justify-end gap-2 border-t pt-4', !dirty && 'opacity-60')}>
       {dirty && <span className="mr-auto text-sm text-muted-foreground">Unsaved changes</span>}
       {dirty && <Button variant="ghost" onClick={() => setForm(crewToForm(crew))}>Discard</Button>}
-      <Button onClick={save} disabled={saving || !dirty}>{saving ? 'Saving…' : 'Save'}</Button>
+      <Button onClick={save} disabled={saving || !dirty || !crewFormValid(form)}>{saving ? 'Saving…' : 'Save'}</Button>
     </div>
   );
 
@@ -187,7 +162,11 @@ export default function CrewPage() {
         meta={(
           <span className="text-xs text-muted-foreground">
             {crew.template_name} · {TRACKER_NAMES[crew.tracker_connector_key] ?? crew.tracker_connector_key}
-            {crew.intake?.team ? ` · ${crew.intake.team}` : ''} · takes <code>{crew.intake?.label}</code> · up to {crew.max_active_jobs} at once
+            {crew.intake?.team ? ` · ${crew.intake.team}` : ''}
+            {crew.start_mode === 'discover'
+              ? ` · ${crew.tasks[0]?.name ?? 'Discover'} creates the ticket`
+              : <> · picks up <code>{crew.intake?.label}</code></>}
+            {' · '}{scheduleLabel(crew.schedule_cron)} · up to {crew.max_active_jobs} at once
           </span>
         )}
         actions={canEdit ? (
@@ -196,11 +175,9 @@ export default function CrewPage() {
               {crew.enabled ? 'On' : 'Off'}
               <Switch checked={crew.enabled} disabled={toggling} onCheckedChange={toggle} />
             </label>
-            <Button onClick={() => setStartOpen(true)} disabled={!crew.enabled} title={crew.enabled ? 'Start a job by hand' : 'Turn the crew on first'}>
-              <Plus className="h-4 w-4" />Start job
-            </Button>
-            <Button variant="outline" onClick={runNow} disabled={running || !crew.enabled}>
-              {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}Run now
+            <Button variant="outline" onClick={startNow} disabled={starting || !crew.enabled}
+              title={crew.enabled ? 'What its schedule or the API would do, now' : 'Turn the crew on first'}>
+              {starting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}Start now
             </Button>
           </div>
         ) : undefined}
@@ -208,70 +185,37 @@ export default function CrewPage() {
 
       <Tabs value={tab} onValueChange={(v) => changeTab(v as Tab)}>
         <TabsList>
-          <TabsTrigger value="jobs"><Briefcase className="h-3.5 w-3.5" /> Jobs<TabsCount>{jobs.length}</TabsCount></TabsTrigger>
-          <TabsTrigger value="triggers"><CalendarClock className="h-3.5 w-3.5" /> Triggers</TabsTrigger>
-          <TabsTrigger value="roles">
-            <UserCog className="h-3.5 w-3.5" /> Roles
+          <TabsTrigger value="tasks">
+            <ListChecks className="h-3.5 w-3.5" /> Tasks
             {unassigned > 0 && <TabsCount>{unassigned}</TabsCount>}
           </TabsTrigger>
           <TabsTrigger value="settings"><Settings2 className="h-3.5 w-3.5" /> Settings</TabsTrigger>
         </TabsList>
-        <TabsPanel className="p-4">
-          <TabsContent value="jobs" className="mt-0">
-            <JobsTable
-              jobs={jobs}
-              showCrew={false}
-              range={{ ...range, onApply: (from, to) => setRange({ from, to }) }}
-              toolbarRight={(
-                <Button variant="ghost" size="sm" onClick={loadJobs} disabled={refreshing}>
-                  <RefreshCw className={cn('h-3.5 w-3.5', refreshing && 'animate-spin')} />Refresh
-                </Button>
-              )}
-              emptyMessage={crew.enabled
-                ? `No jobs yet. Add the label "${crew.intake?.label}" to a parent ticket${crew.intake?.team ? ` in ${crew.intake.team}` : ''} — it becomes a job on the next run.`
-                : 'No jobs yet. Turn the crew on to start picking them up.'}
-            />
-          </TabsContent>
-
-          <TabsContent value="triggers" className="mt-0">
-            {selectedOrgId && <CrewTriggers orgId={selectedOrgId} crew={crew} canEdit={canEdit} />}
-          </TabsContent>
-
-          <TabsContent value="roles" className="mt-0 space-y-4">
+        <TabsPanel className="p-5">
+          <TabsContent value="tasks" className="mt-0">
             <CrewRolesSection value={form} onChange={setForm} tasks={crew.tasks} agents={agents} readOnly={!canEdit} />
             {saveBar}
           </TabsContent>
 
-          <TabsContent value="settings" className="mt-0 space-y-4">
+          <TabsContent value="settings" className="mt-0">
             <CrewBasicsSection value={form} onChange={setForm} templates={templates} lockTemplate readOnly={!canEdit} />
             <CrewIntakeSection value={form} onChange={setForm} trackers={trackers} readOnly={!canEdit} />
+            <CrewScheduleSection value={form} onChange={setForm} crew={crew} readOnly={!canEdit} />
             {saveBar}
             {canEdit && (
-              <Card className="border-danger/30">
-                <CardContent className="flex flex-wrap items-center justify-between gap-3 p-6">
-                  <div>
-                    <h2 className="text-base font-semibold">Delete this crew</h2>
-                    <p className="mt-1 text-sm text-muted-foreground">Its job history goes with it. Tickets and pull requests in your tracker and repositories are not touched.</p>
-                  </div>
-                  <Button variant="outline" className="text-danger" onClick={() => setConfirmDelete(true)}>
-                    <Trash2 className="h-4 w-4" />Delete crew
-                  </Button>
-                </CardContent>
-              </Card>
+              <div className="mt-6 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-danger/30 px-4 py-3">
+                <div className="flex items-center gap-1.5 text-sm">
+                  <span className="font-medium">Delete this crew</span>
+                  <InfoHint>Its job history goes with it. Tickets and pull requests in your tracker and repositories are not touched.</InfoHint>
+                </div>
+                <Button variant="outline" size="sm" className="text-danger" onClick={() => setConfirmDelete(true)}>
+                  <Trash2 className="h-3.5 w-3.5" />Delete crew
+                </Button>
+              </div>
             )}
           </TabsContent>
         </TabsPanel>
       </Tabs>
-
-      {selectedOrgId && (
-        <StartJobDialog
-          open={startOpen}
-          onOpenChange={setStartOpen}
-          orgId={selectedOrgId}
-          crew={crew}
-          onStarted={(jobId) => { if (jobId) router.push(`/factory/jobs/${jobId}`); else loadJobs(); }}
-        />
-      )}
 
       <ConfirmDialog
         open={confirmDelete}

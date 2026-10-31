@@ -152,7 +152,7 @@ export default function EditAiStepPage() {
       </div>
 
       {/* Form */}
-      <Card>
+      <Card className="py-0">
         <CardContent className="p-5">
           <AiStepFormBody
             form={form}

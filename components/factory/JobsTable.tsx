@@ -18,7 +18,7 @@ import { ColumnSelectFilter } from '@/components/ui/column-select-filter';
 import { TimeRangePicker } from '@/components/execution/TimeRangePicker';
 import { cn } from '@/lib/utils';
 import type { FactoryJob } from '@/lib/api/factory';
-import { JOB_STATUS, TaskPills, ago, jobNow, needsReview } from './job-state';
+import { JOB_STATUS, TaskPills, ago, jobNow, needsReview, noTicket } from './job-state';
 
 type Bucket = 'active' | 'review' | 'stopped' | 'done';
 
@@ -93,7 +93,7 @@ export function JobsTable({ jobs, loading, showCrew = true, emptyMessage, toolba
             render: (j) => (
               <div className="min-w-0">
                 <div className="truncate font-medium text-foreground">{j.title ?? '—'}</div>
-                <div className="truncate text-xs text-muted-foreground">{j.tracker_identifier}</div>
+                <div className="truncate text-xs text-muted-foreground">{j.tracker_identifier ?? noTicket(j)}</div>
               </div>
             ),
           },

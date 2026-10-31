@@ -5,11 +5,17 @@ import apiClient from './client';
  *
  *   Template → Crew → Job → Task → Attempt → (agent) Execution
  *
- * A CREW is a template set up for an org (tracker, intake label, an agent per
- * task). Every parent ticket it picks up is a JOB; a job moves through the
- * template's TASKS; each task may take a few ATTEMPTS, each one agent
- * EXECUTION. The coordinator is wazzi-backend's factory tick.
+ * A CREW is a template set up for an org (tracker, an agent per task). A RUN
+ * of the crew — its schedule, the API, or Start now — starts JOBS, one ticket
+ * each; a job moves through the template's TASKS; each task may take a few
+ * ATTEMPTS, each one agent EXECUTION. What a run does is the crew's start_mode:
+ *   tickets   pick up the next waiting tickets in its bucket (team + label)
+ *   discover  start one job whose Discover task finds the work and creates
+ *             the ticket (none when there is nothing to do)
+ * The coordinator is wazzi-backend's factory tick.
  */
+
+export type StartMode = 'tickets' | 'discover';
 
 export type NormalizedState = 'not_started' | 'in_progress' | 'done' | 'canceled';
 
@@ -47,6 +53,11 @@ export interface CrewSummary {
   tracker_connector_key: string;
   intake: { team?: string; label?: string };
   max_active_jobs: number;
+  start_mode: StartMode;
+  schedule_cron: string | null;
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_result: string | null;
   template_name: string;
   task_count: number;
   roles_assigned: number;
@@ -72,6 +83,11 @@ export interface CrewDetail {
   state_map: Partial<Record<NormalizedState, string>>;
   notify_channel_id: string | null;
   max_active_jobs: number;
+  start_mode: StartMode;
+  schedule_cron: string | null;   // 5-field cron, UTC; null = no schedule
+  next_run_at: string | null;
+  last_run_at: string | null;
+  last_run_result: string | null;
   active_jobs: number;
   stopped_jobs: number;
   done_jobs: number;
@@ -84,9 +100,11 @@ export interface CrewInput {
   description?: string | null;
   template_id?: string;
   tracker_connector_key?: string;
-  intake?: { team?: string; label: string };
+  intake?: { team?: string; label?: string };
   state_map?: Partial<Record<NormalizedState, string>>;
   max_active_jobs?: number;
+  start_mode?: StartMode;
+  schedule_cron?: string | null;
   enabled?: boolean;
   roles?: Record<string, string>;
 }
@@ -119,7 +137,7 @@ export interface FactoryJob {
   id: string;
   crew_id: string;
   crew_name: string;
-  tracker_item_id: string;
+  tracker_item_id: string | null;    // null until a discover-mode job's Discover plans work
   tracker_identifier: string | null;
   tracker_url: string | null;
   title: string | null;
@@ -129,6 +147,7 @@ export interface FactoryJob {
   base_branch: string | null;
   branch: string | null;
   prior_results: Record<string, Record<string, unknown>>;
+  started_by: string | null;         // 'schedule' | 'manual:<email>' | 'api:<client>'
   created_at: string;
   updated_at: string;
   finished_at: string | null;
@@ -176,10 +195,9 @@ export async function deleteCrew(orgId: string, id: string) {
   await apiClient.delete(`${base(orgId)}/crews/${id}`);
 }
 
-export async function runCrewNow(orgId: string, id: string) {
-  const r = await apiClient.post<{ claimed: number; started: number; finished: number; errors: { crew: string; error: string }[]; skipped?: string }>(
-    `${base(orgId)}/crews/${id}/tick`,
-  );
+/** Start now — what its schedule or the API would do. `result` says what happened. */
+export async function startCrewJobs(orgId: string, id: string) {
+  const r = await apiClient.post<{ started: number; result: string; job_ids: string[] }>(`${base(orgId)}/crews/${id}/start`);
   return r.data;
 }
 
@@ -198,75 +216,6 @@ export async function getJobs(orgId: string, opts?: { crewId?: string; status?: 
     },
   });
   return r.data.jobs;
-}
-
-// ── Starting jobs + schedules ────────────────────────────────────────────────
-
-export interface MonitoringErrorsSource {
-  type: 'monitoring_errors';
-  since_hours?: number;
-  min_count?: number;
-  max_groups?: number;
-  services?: string[];
-}
-
-export interface CrewTrigger {
-  id: string;
-  crew_id: string;
-  type: 'cron';
-  name: string;
-  enabled: boolean;
-  cron_expr: string;
-  job_title: string;
-  job_brief: string | null;
-  source: MonitoringErrorsSource | null;
-  skip_if_active: boolean;
-  next_fire_at: string | null;
-  last_fired_at: string | null;
-  last_result: string | null;
-  last_job_id: string | null;
-}
-
-export interface CrewTriggerInput {
-  name?: string;
-  enabled?: boolean;
-  cron_expr?: string;
-  job_title?: string;
-  job_brief?: string | null;
-  source?: MonitoringErrorsSource | null;
-  skip_if_active?: boolean;
-}
-
-/** Start a job now: creates the parent ticket in the crew's tracker and claims it. */
-export async function startCrewJob(orgId: string, crewId: string, input: { title: string; description: string }) {
-  const r = await apiClient.post<{ ticket: { id: string; identifier: string; url: string }; job_id: string | null }>(
-    `${base(orgId)}/crews/${crewId}/jobs`, input);
-  return r.data;
-}
-
-export async function getCrewTriggers(orgId: string, crewId: string) {
-  const r = await apiClient.get<{ triggers: CrewTrigger[] }>(`${base(orgId)}/crews/${crewId}/triggers`);
-  return r.data.triggers;
-}
-
-export async function createCrewTrigger(orgId: string, crewId: string, input: CrewTriggerInput) {
-  const r = await apiClient.post<{ trigger: CrewTrigger }>(`${base(orgId)}/crews/${crewId}/triggers`, input);
-  return r.data.trigger;
-}
-
-export async function updateCrewTrigger(orgId: string, crewId: string, id: string, input: CrewTriggerInput) {
-  const r = await apiClient.patch<{ trigger: CrewTrigger }>(`${base(orgId)}/crews/${crewId}/triggers/${id}`, input);
-  return r.data.trigger;
-}
-
-export async function deleteCrewTrigger(orgId: string, crewId: string, id: string) {
-  await apiClient.delete(`${base(orgId)}/crews/${crewId}/triggers/${id}`);
-}
-
-/** Run a schedule now (its source included); when it next fires is unchanged. */
-export async function fireCrewTrigger(orgId: string, crewId: string, id: string) {
-  const r = await apiClient.post<{ result: string }>(`${base(orgId)}/crews/${crewId}/triggers/${id}/fire`);
-  return r.data.result;
 }
 
 /** Kill a job: aborts what's running, cancels its open sub-tasks and the parent ticket. */

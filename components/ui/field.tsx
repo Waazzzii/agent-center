@@ -19,13 +19,16 @@
 
 import * as React from 'react';
 import { Label } from '@/components/ui/label';
+import { InfoHint } from '@/components/ui/info-hint';
 import { cn } from '@/lib/utils';
 
 export function FieldGroup({
-  title, description, children, className, actions,
+  title, description, info, children, className, actions,
 }: {
   title?: React.ReactNode;
   description?: React.ReactNode;
+  /** An explanation behind an info icon beside the title, instead of a description line. */
+  info?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
   /** Right-aligned beside the title — an "Add" button, a toggle. */
@@ -36,7 +39,11 @@ export function FieldGroup({
       {(title || actions) && (
         <div className="flex items-start justify-between gap-3">
           <div className="min-w-0">
-            {title && <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{title}</h3>}
+            {title && (
+              <h3 className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                {title}{info && <InfoHint className="normal-case tracking-normal">{info}</InfoHint>}
+              </h3>
+            )}
             {description && <p className="mt-1 text-xs text-muted-foreground/80">{description}</p>}
           </div>
           {actions && <div className="shrink-0">{actions}</div>}
@@ -52,11 +59,13 @@ export function FieldRow({ children, className }: { children: React.ReactNode; c
 }
 
 export function Field({
-  label, hint, required, htmlFor, children, className, trailing,
+  label, hint, info, required, htmlFor, children, className, trailing,
 }: {
   label: React.ReactNode;
   /** One line under the control. Keep it to what changes the user's decision. */
   hint?: React.ReactNode;
+  /** An explanation behind an info icon beside the label — keeps dense forms tight. */
+  info?: React.ReactNode;
   required?: boolean;
   htmlFor?: string;
   children: React.ReactNode;
@@ -67,10 +76,13 @@ export function Field({
   return (
     <div className={cn('space-y-1.5', className)}>
       <div className="flex items-center justify-between gap-2">
-        <Label htmlFor={htmlFor} className="text-[13px] text-foreground/90">
-          {label}
-          {required && <span aria-hidden className="text-danger">*</span>}
-        </Label>
+        <span className="flex min-w-0 items-center gap-1.5">
+          <Label htmlFor={htmlFor} className="text-[13px] text-foreground/90">
+            {label}
+            {required && <span aria-hidden className="text-danger">*</span>}
+          </Label>
+          {info && <InfoHint>{info}</InfoHint>}
+        </span>
         {trailing && <span className="text-xs text-muted-foreground">{trailing}</span>}
       </div>
       {children}

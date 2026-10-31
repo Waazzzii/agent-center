@@ -427,7 +427,7 @@ function AvailabilityCard({ events, periodKey }: { events: CapacityEvent[]; peri
   }
 
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
@@ -713,7 +713,7 @@ function RunsOverTimeCard({ data, onBarClick }: {
   })), [data.daily]);
 
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
@@ -775,7 +775,7 @@ function StatusMixCard({ data }: { data: ExecutionAnalytics }) {
   ].filter((p) => p.value > 0);
 
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="mb-3">
           <h3 className="text-sm font-semibold">Status mix</h3>
@@ -807,7 +807,7 @@ function TopAgentsCard({ data, onRowClick }: {
 }) {
   const rows = (data.perAgent ?? []).slice(0, 8);
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
@@ -877,7 +877,7 @@ function FailureHotspotsCard({ data, onRowClick }: {
 }) {
   const rows = (data.hotspots ?? []).slice(0, 8);
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
@@ -936,7 +936,7 @@ function ActionTypeBreakdownCard({ data }: { data: ExecutionAnalytics }) {
   const rows = (data.actionTypes ?? []).sort((a, b) => toNum(b.total) - toNum(a.total));
   const totalAll = rows.reduce((s, r) => s + toNum(r.total), 0);
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="mb-3">
           <h3 className="text-sm font-semibold">Action type breakdown</h3>
@@ -980,7 +980,7 @@ function TriggerBreakdownCard({ data }: { data: ExecutionAnalytics }) {
   const total = rows.reduce((s, r) => s + toNum(r.count), 0);
   const colors = ['hsl(217 91% 60%)', 'hsl(262 83% 58%)', 'hsl(142 71% 45%)', 'hsl(30 80% 55%)', 'hsl(0 72% 51%)'];
   return (
-    <Card>
+    <Card className="py-0">
       <CardContent className="p-4">
         <div className="mb-3">
           <h3 className="text-sm font-semibold">Trigger breakdown</h3>

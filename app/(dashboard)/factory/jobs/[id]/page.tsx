@@ -24,8 +24,7 @@ import { cancelJob, getJob, type FactoryAttempt, type FactoryJobDetail, type Fac
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import { toast } from 'sonner';
 import { Ban } from 'lucide-react';
-import { JOB_STATUS, TASK_STATE, ago, attemptsOf, currentTask, jobPrUrl, latestAttempt, taskState } from '@/components/factory/job-state';
-import { SimpleMarkdown } from '@/components/factory/SimpleMarkdown';
+import { JOB_STATUS, TASK_STATE, ago, attemptsOf, currentTask, jobPrUrl, latestAttempt, noTicket, taskState } from '@/components/factory/job-state';
 
 export default function JobPage() {
   const { id } = useParams<{ id: string }>();
@@ -89,11 +88,13 @@ export default function JobPage() {
       <PageHeader
         icon={Briefcase}
         title={job.title ?? job.tracker_identifier ?? 'Job'}
-        breadcrumbs={[{ label: 'Jobs', href: '/factory/jobs' }, { label: job.tracker_identifier ?? 'Job' }]}
+        breadcrumbs={[{ label: 'Jobs', href: '/factory/jobs' }, { label: job.tracker_identifier ?? job.title ?? 'Job' }]}
         badge={<Badge variant={JOB_STATUS[job.status].variant}>{JOB_STATUS[job.status].label}</Badge>}
         meta={(
           <span className="text-xs text-muted-foreground">
-            {job.tracker_identifier} · <Link href={`/factory/crews/${job.crew_id}`} className="hover:text-foreground hover:underline">{job.crew_name}</Link> · started {ago(job.created_at)}
+            {job.tracker_url
+              ? <a href={job.tracker_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 hover:text-foreground hover:underline">{job.tracker_identifier} <ExternalLink className="h-3 w-3" /></a>
+              : noTicket(job)} · <Link href={`/factory/crews/${job.crew_id}`} className="hover:text-foreground hover:underline">{job.crew_name}</Link> · started {ago(job.created_at)}
           </span>
         )}
         actions={(
@@ -130,7 +131,9 @@ export default function JobPage() {
       )}
       {job.status === 'stopped' && (
         <Callout tone="danger" icon={TriangleAlert}>
-          <span><strong>Stopped:</strong> {job.stop_reason} In the tracker, move the task&apos;s sub-task back to Todo to try again, mark it Done to skip it, or cancel it to cancel the job.</span>
+          <span><strong>Stopped:</strong> {job.stop_reason} {job.tracker_item_id
+            ? <>In the tracker, move the task&apos;s sub-task back to Todo to try again, mark it Done to skip it, or cancel it to cancel the job.</>
+            : <>It has no ticket yet, so cancel it and run the crew again.</>}</span>
         </Callout>
       )}
       {job.status === 'canceled' && (
@@ -149,19 +152,20 @@ export default function JobPage() {
               agentName={job.roles[t.key] ? agentName.get(job.roles[t.key]!) : undefined}
               agentId={job.roles[t.key]}
               isCurrent={current?.key === t.key}
+              ended={job.status === 'done' || job.status === 'canceled'}
               last={i === job.tasks.length - 1}
             />
           ))}
         </ol>
 
         <aside className="space-y-4">
-          <Card>
+          <Card className="py-0">
             <CardContent className="space-y-4 p-5 text-sm">
               <Fact label="Crew"><Link href={`/factory/crews/${job.crew_id}`} className="text-brand hover:underline">{job.crew_name}</Link></Fact>
               <Fact label="Ticket">
                 {job.tracker_url
                   ? <a href={job.tracker_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-brand hover:underline">{job.tracker_identifier} <ExternalLink className="h-3 w-3" /></a>
-                  : job.tracker_identifier}
+                  : <span className="text-muted-foreground">{job.tracker_identifier ?? noTicket(job)}</span>}
               </Fact>
               {job.repo && <Fact label="Repository">{job.repo}</Fact>}
               {(job.base_branch || job.branch) && (
@@ -208,12 +212,14 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
   );
 }
 
-function TaskCard({ task, attempts, agentName, agentId, isCurrent, last }: {
+function TaskCard({ task, attempts, agentName, agentId, isCurrent, ended, last }: {
   task: FactoryTask;
   attempts: FactoryAttempt[];
   agentName?: string;
   agentId?: string;
   isCurrent: boolean;
+  /** The job is over: a task that never ran never will. */
+  ended: boolean;
   last: boolean;
 }) {
   const latest = attempts[attempts.length - 1];
@@ -228,7 +234,7 @@ function TaskCard({ task, attempts, agentName, agentId, isCurrent, last }: {
       <span className={cn('relative z-[1] grid h-8 w-8 shrink-0 place-items-center rounded-full border text-xs font-semibold', TASK_STATE[state].className)}>
         {task.position}
       </span>
-      <Card className={cn('min-w-0 flex-1', isCurrent && 'border-brand/40')}>
+      <Card className={cn('min-w-0 flex-1 py-0', isCurrent && 'border-brand/40')}>
         <CardContent className="space-y-3 p-4">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="min-w-0">
@@ -240,12 +246,15 @@ function TaskCard({ task, attempts, agentName, agentId, isCurrent, last }: {
               )}
             </div>
             <span className={cn('rounded-full border px-2 py-0.5 text-xs font-medium', TASK_STATE[state].className)}>
-              {TASK_STATE[state].label}{attempts.length > 1 ? ` · attempt ${latest?.attempt}` : ''}
+              {!latest && ended ? 'Not needed' : TASK_STATE[state].label}{attempts.length > 1 ? ` · attempt ${latest?.attempt}` : ''}
             </span>
           </div>
 
           {!latest ? (
-            <p className="text-sm text-muted-foreground">Not started yet.</p>
+            <div className="space-y-2">
+              <div className="text-xs text-muted-foreground">No attempts</div>
+              <p className="h-[3.75rem] text-sm text-muted-foreground">{ended ? 'The job ended before this task.' : 'Not started yet.'}</p>
+            </div>
           ) : (
             <AttemptBody attempt={latest} />
           )}
@@ -291,12 +300,44 @@ function AttemptBody({ attempt, compact }: { attempt: FactoryAttempt; compact?: 
         {attempt.desk_id && <Link href={`/interactions/decisions/${attempt.desk_id}`} className="text-brand hover:underline">Decision</Link>}
       </div>
       {attempt.feedback && (
-        <div className="rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-sm text-warning">
+        <p className="truncate rounded-md border border-warning/30 bg-warning-soft px-3 py-1.5 text-sm text-warning" title={attempt.feedback}>
           <span className="font-medium">Reviewer:</span> {attempt.feedback}
-        </div>
+        </p>
       )}
-      {attempt.error && <p className="text-sm text-danger">{attempt.error}</p>}
-      {attempt.summary && <SimpleMarkdown text={attempt.summary} className="space-y-2 text-sm text-foreground/90" />}
+      <AttemptPreview attempt={attempt} />
     </div>
   );
+}
+
+/**
+ * Every card the same size: the first three lines of what the attempt said
+ * (its error, else its summary), as plain text. The whole output is one click
+ * away — the execution page, where the run's full result lives.
+ */
+function AttemptPreview({ attempt }: { attempt: FactoryAttempt }) {
+  const text = plainText(attempt.error ?? attempt.summary ?? '');
+  const body = (
+    <p className={cn('line-clamp-3 h-[3.75rem] text-sm', attempt.error ? 'text-danger' : 'text-foreground/90', !text && 'text-muted-foreground')}>
+      {text || (attempt.status === 'running' ? 'Working…' : attempt.status === 'queued' ? 'Waiting to start.' : 'No summary.')}
+    </p>
+  );
+  if (!attempt.execution_log_id || !text) return body;
+  return (
+    <Link href={`/agent-history/${attempt.execution_log_id}`} title="Open the execution for the full output"
+      className="block rounded-md transition-colors hover:bg-surface-2/60">
+      {body}
+    </Link>
+  );
+}
+
+/** Markdown → one paragraph of plain text, for the clamped preview. */
+function plainText(md: string): string {
+  return md
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/`([^`]*)`/g, '$1')
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/^\s{0,3}(#{1,6}|[-*+]|\d+\.)\s+/gm, '')
+    .replace(/[*_~>]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
